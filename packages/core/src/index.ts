@@ -13,3 +13,6 @@ export {
   type PolicyIr,
   type Statement,
 } from "./policy.ts";
+export { checkCall, parsePlan, type ParsePlanResult, type PlanCheck } from "./intent.ts";
+export { checkBuiltin, type BuiltinContext } from "./builtin-rules.ts";
+export { decide, type DecideInput } from "./decide.ts";

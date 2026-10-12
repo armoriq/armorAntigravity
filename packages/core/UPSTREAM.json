@@ -10,6 +10,12 @@
     {"upstream": "src/core/linear-regex.ts", "local": "packages/core/src/linear-regex.ts", "blob": "232e240c2aa8254755c15f1171988dc2b2e6d11f"},
     {"upstream": "test/core/linear-regex.test.ts", "local": "packages/core/test/linear-regex.test.ts", "blob": "e85024e6cb31e0ffdc8a5e08f10c910443218b7c"},
     {"upstream": "src/core/policy.ts", "local": "packages/core/src/policy.ts", "blob": "aad837ce40a8df96895bbc6ef7b1b8a14b9b9f1a"},
-    {"upstream": "test/core/policy.test.ts", "local": "packages/core/test/policy.test.ts", "blob": "b3caad1fd75ea54b7fa907f7e9b7e4f52e4a76f9"}
+    {"upstream": "test/core/policy.test.ts", "local": "packages/core/test/policy.test.ts", "blob": "b3caad1fd75ea54b7fa907f7e9b7e4f52e4a76f9"},
+    {"upstream": "src/core/intent.ts", "local": "packages/core/src/intent.ts", "blob": "ed0e2065e62f09b905715109dae4ea515b267a4e"},
+    {"upstream": "test/core/intent.test.ts", "local": "packages/core/test/intent.test.ts", "blob": "d1f084b9954dccafb603a7b125c52aadcd6089e4"},
+    {"upstream": "src/core/builtin-rules.ts", "local": "packages/core/src/builtin-rules.ts", "blob": "897bfa74a98fe3339820ca713f5706f96bedff24"},
+    {"upstream": "test/core/builtin-rules.test.ts", "local": "packages/core/test/builtin-rules.test.ts", "blob": "12af9f97f481f29891336d9e7087eacb3308df4f"},
+    {"upstream": "src/core/decide.ts", "local": "packages/core/src/decide.ts", "blob": "ffffadac8cae942b0e3086c1e779dc44a7fe2c3b"},
+    {"upstream": "test/core/decide.test.ts", "local": "packages/core/test/decide.test.ts", "blob": "cb3d2d0b5b85f69c05e21568ae6fbbae39d70a04"}
   ]
 }
