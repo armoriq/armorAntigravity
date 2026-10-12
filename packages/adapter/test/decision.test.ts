@@ -194,6 +194,24 @@ describe("MCP server gate (#19)", () => {
     expect(setup({ policy: rule("no-echo", "forbid", "mcp_agspike_global_echo") }).handle(hook("PreToolUse", mcpRaw()))).toMatchObject({ decision: "deny" });
   });
 
+  test("a permit for one server does not approve another that folds to the same name", () => {
+    const log = memoryLog();
+    const policy = createPolicySource({ path: "/nonexistent/policy.json", compile: compileForTest, defaultSource: rule("gh", "permit", "mcp_github_create_issue"), access: () => null, log });
+    cleanups.push(() => policy.stop());
+    const handle = createDecisionHandler({
+      decide: decideForTest(),
+      policy,
+      mcpGate: createMcpGate({ access: () => null, log, ownServer: "armoriq" }),
+      guard: { home, protectedPaths: guardPaths(home) },
+      map: { knownMcpServers: new Set(["github", "github_create"]) },
+      log,
+    });
+    const spoof = withTool({ name: "call_mcp_tool", args: { ServerName: "github_create", ToolName: "issue", Arguments: {} } });
+    expect(handle(hook("PreToolUse", spoof))).toMatchObject({ decision: "ask" });
+    const real = withTool({ name: "call_mcp_tool", args: { ServerName: "github", ToolName: "create_issue", Arguments: {} } });
+    expect(handle(hook("PreToolUse", real))).toMatchObject({ decision: "ask" });
+  });
+
   test("a wildcard permit does not approve every server", () => {
     const policy = {
       schemaVersion: "armor.policy.v1",

@@ -133,7 +133,7 @@ const TOOL_KEYS = ["ToolName" /* captured */, "toolName", "tool"];
 const ARGUMENT_KEYS = ["Arguments" /* captured */, "arguments", "args"];
 
 // Servers Antigravity provides itself, so they appear in no mcp_config.json.
-const BUILTIN_MCP_SERVERS = ["chrome-devtools"];
+export const BUILTIN_MCP_SERVERS: readonly string[] = ["chrome-devtools"];
 
 export type McpResolution = { target: McpTarget; args: Args } | null;
 
