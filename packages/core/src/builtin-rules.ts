@@ -63,19 +63,16 @@ export function checkBuiltin(call: ToolCall, ctx: BuiltinContext, tools: ToolVoc
     };
   }
 
-  let values: readonly string[];
+  const values: string[] = [];
   const fields = tools.pathFields.get(call.tool);
-  const editPaths = fields ? null : tools.multiFileEdit(call);
   if (fields) {
-    const named: string[] = [];
     for (const field of fields) {
       const v = call.args[field];
-      if (typeof v === "string") named.push(v);
+      if (typeof v === "string") values.push(v);
     }
-    values = named;
-  } else if (editPaths) {
-    values = editPaths;
-  } else return null;
+  } else {
+    values.push(...(tools.multiFileEdit(call) ?? []));
+  }
 
   const dir = trimTrailingSlashes(ctx.armoriqDir).toLowerCase();
   if (values.some((v) => touchesDir(v, dir))) return protectedDeny(call, ctx);

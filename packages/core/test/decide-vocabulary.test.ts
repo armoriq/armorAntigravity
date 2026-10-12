@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { decide } from "../src/decide.ts";
 import { parsePlan } from "../src/intent.ts";
 import { compilePolicy, DEFAULT_POLICY_SOURCE } from "../src/policy.ts";
-import type { Plan, Session, SessionID } from "../src/types.ts";
+import type { Plan, Session, SessionID, ToolCall } from "../src/types.ts";
 import { EXAMPLE_HOST } from "./support/example-host.ts";
 
 const NOW = 1_800_000_000_000;
@@ -63,5 +63,22 @@ describe("decide with a non-OpenCode vocabulary", () => {
     expect(run("open_file", { Target: "/home/dev/.armoriq/credentials.json" })).toMatchObject({ kind: "deny", code: "builtin_protected" });
     expect(run("multi_patch", { Targets: ["a.ts", "/home/dev/.armoriq/x"] })).toMatchObject({ kind: "deny", code: "builtin_protected" });
     expect(run("patch_file", { Target: "notes.md", Content: "see ~/.armoriq" })).toMatchObject({ kind: "allow" });
+  });
+
+  test("a search root is checked even for a tool with no path fields", () => {
+    const tools = { ...EXAMPLE_HOST, searchRoot: (call: ToolCall) => (call.tool === "search_dir" && typeof call.args.Root === "string" ? call.args.Root : null) };
+    const root = session();
+    const at = (Root: string) =>
+      decide({
+        policy,
+        session: root,
+        root,
+        call: { sessionId: root.id, callId: "c", tool: "search_dir", args: { Root } },
+        now: NOW,
+        builtin: { armoriqDir: "/home/dev/.armoriq", ownTools: new Set(), shadowedTools: new Set() },
+        tools,
+      });
+    expect(at("/home/dev")).toMatchObject({ kind: "deny", code: "builtin_protected" });
+    expect(at("/home/dev/project")).toMatchObject({ kind: "deny", code: "intent_drift" });
   });
 });
