@@ -135,8 +135,8 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
     const span = {
       kind: "tool" as const,
       call,
-      ok: payload.error === undefined,
-      output: payload.error ?? "",
+      ok: payload.error === "",
+      output: payload.error,
       durationMs: begun === undefined ? null : Math.max(0, hook.receivedAt - begun),
       at: hook.receivedAt,
     };

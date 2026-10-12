@@ -6,6 +6,7 @@ import {
   type DaemonResponse,
   type HookEvent,
   type HookResponse,
+  type McpOutcomeResponse,
   type Mode,
 } from "@armorantigravity/protocol";
 import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -16,7 +17,7 @@ import { readConfig } from "./config.ts";
 import { acquireInstanceLock } from "./lock.ts";
 import { fileLog, type Log } from "./log.ts";
 import { resolvePaths, type Env, type Paths } from "./paths.ts";
-import type { DaemonEvent, DaemonPlugin, DecisionHandler, EventObserver, HookContext, Pump } from "./plugin.ts";
+import type { DaemonEvent, DaemonPlugin, DecisionHandler, EventObserver, HookContext, McpOutcomeHandler, Pump } from "./plugin.ts";
 import { createSessionStore, type SessionStore } from "./sessions.ts";
 import { stubDecide } from "./stub.ts";
 import { surfaceFromTranscriptPath } from "./surface.ts";
@@ -61,6 +62,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   };
 
   let decide: DecisionHandler | null = null;
+  let mcpOutcome: McpOutcomeHandler | null = null;
   const observers: EventObserver[] = [];
   const ctx = { log, paths, auth, sessions };
   try {
@@ -70,6 +72,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
       if (reg.decide) {
         if (decide) throw new Error(`plugin ${plugin.name} registers a second decision handler`);
         decide = reg.decide;
+      }
+      if (reg.mcpOutcome) {
+        if (mcpOutcome) throw new Error(`plugin ${plugin.name} registers a second MCP outcome handler`);
+        mcpOutcome = reg.mcpOutcome;
       }
       if (reg.observe) observers.push(reg.observe);
       log.info("plugin registered", { plugin: plugin.name, decide: !!reg.decide, observe: !!reg.observe, pumps: (reg.pumps ?? []).map((p) => p.name) });
@@ -139,19 +145,24 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     });
   }
 
-  async function handleLine(line: string): Promise<{ reply: DaemonResponse; event: DaemonEvent | null }> {
+  async function handleLine(line: string): Promise<{ reply: DaemonResponse | McpOutcomeResponse; event: DaemonEvent | null }> {
     const mode = auth.mode();
     let raw: unknown;
     try {
       raw = JSON.parse(line);
     } catch {
       log.warn("unparseable request line");
-      return { reply: { v: PROTOCOL_VERSION, id: "", response: {} }, event: null };
+      return { reply: { v: PROTOCOL_VERSION, id: "", response: null }, event: null };
+    }
+    const outcome = parseMcpOutcome(raw);
+    if (outcome) {
+      const text = mcpOutcome ? await mcpOutcome(outcome.tool, outcome.args, outcome.waitMs).catch(() => null) : null;
+      return { reply: { v: PROTOCOL_VERSION, id: outcome.id, text }, event: null };
     }
     const envelope = parseEnvelope(raw);
     if (!envelope.ok) {
       log.warn("rejected request", { reason: envelope.reason, id: envelope.id });
-      const response = envelope.event ? fallbackResponse(envelope.event, mode, "protocol_mismatch", envelope.reason) : {};
+      const response = envelope.event ? fallbackResponse(envelope.event, mode, "protocol_mismatch", envelope.reason) : null;
       return { reply: { v: PROTOCOL_VERSION, id: envelope.id, response }, event: null };
     }
     const { id, event, receivedAt } = envelope;
@@ -228,6 +239,15 @@ function parseEnvelope(raw: unknown): Envelope {
   if (!id || !event) return { ok: false, id, event, reason: "request needs an id and a known event" };
   const receivedAt = "receivedAt" in raw && typeof raw.receivedAt === "number" ? raw.receivedAt : Date.now();
   return { ok: true, id, receivedAt, event, payload: "payload" in raw ? raw.payload : undefined };
+}
+
+const MAX_OUTCOME_WAIT_MS = 10_000;
+
+function parseMcpOutcome(raw: unknown): { id: string; tool: string; args: unknown; waitMs: number } | null {
+  if (typeof raw !== "object" || raw === null || !("kind" in raw) || raw.kind !== "mcp_outcome") return null;
+  if (!("v" in raw) || raw.v !== PROTOCOL_VERSION || !("id" in raw) || typeof raw.id !== "string" || !("tool" in raw) || typeof raw.tool !== "string") return null;
+  const waitMs = "waitMs" in raw && typeof raw.waitMs === "number" && raw.waitMs > 0 ? Math.min(raw.waitMs, MAX_OUTCOME_WAIT_MS) : 0;
+  return { id: raw.id, tool: raw.tool, args: "args" in raw ? raw.args : undefined, waitMs };
 }
 
 // The instance lock is held, so any socket file left here belongs to a dead daemon.

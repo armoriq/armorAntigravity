@@ -30,6 +30,10 @@
         "armoriq-agd": "./src/main.ts",
       },
       "dependencies": {
+        "@armorantigravity/adapter": "workspace:*",
+        "@armorantigravity/core": "workspace:*",
+        "@armorantigravity/evidence": "workspace:*",
+        "@armorantigravity/intent": "workspace:*",
         "@armorantigravity/protocol": "workspace:*",
         "@armoriq/sdk-dev": "^0.8.17",
       },
