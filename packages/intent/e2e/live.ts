@@ -39,11 +39,13 @@ const proxy = Bun.serve({
   port: 0,
   async fetch(req) {
     const url = new URL(req.url);
-    const text = await req.text();
-    const res = await fetch(upstream + url.pathname + url.search, { method: req.method, headers: req.headers, body: text || undefined });
+    const raw = await req.arrayBuffer();
+    const res = await fetch(upstream + url.pathname + url.search, { method: req.method, headers: req.headers, body: raw.byteLength ? raw : null });
     const out = await res.arrayBuffer();
     const headers = Object.fromEntries([...req.headers].filter(([k]) => /^(x-api-key|authorization|x-armoriq-client|idempotency-key|content-type)$/i.test(k)).map(([k, v]) => [k, redact(k, v)]));
-    wire.push({ method: req.method, path: url.pathname, headers, body: text ? JSON.parse(text) : null, status: res.status });
+    const isJson = (req.headers.get("content-type") ?? "").includes("json");
+    const body: unknown = !raw.byteLength ? null : isJson ? JSON.parse(new TextDecoder().decode(raw)) : `<${raw.byteLength} bytes ${req.headers.get("content-type")}>`;
+    wire.push({ method: req.method, path: url.pathname, headers, body, status: res.status });
     return new Response(out, { status: res.status, headers: res.headers });
   },
 });
@@ -78,7 +80,23 @@ if (verdict.kind !== "deny") throw new Error("expected intent_drift");
 show("hook reason", denyReason(verdict, { plan: registry.root(key)?.plan ?? null, tool: "write_to_file", args }));
 const root = registry.root(key)!;
 audit.push(intentAuditRow({ verdict, conversation: root, root, tool: "write_to_file", input: args, userId: login.userId, at: Date.now() }));
-show("policy span result", policySpanResult(verdict));
+const span = policySpanResult(verdict);
+show("policy span result", span);
+const sdk = await import("@armoriq/sdk-dev");
+const telemetry = new sdk.ArmorIQTelemetryRuntime({
+  backendEndpoint: login.backend,
+  apiKey: login.apiKey,
+  client: { product: "armorantigravity", version: "0.0.0-dev" },
+  sdkVersion: sdk.VERSION,
+  options: { serviceName: "armorantigravity" },
+});
+const turn = new sdk.OtelSession(telemetry, { sessionId: conversationId, userId: login.userId });
+await turn.refreshPolicy();
+await turn.beginRoot({ input: "e2e drift turn" });
+await turn.recordPolicy({ toolName: "write_to_file", toolCallId: "e2e-drift-1", arguments: args }, span, { endTime: new Date() });
+await turn.close({ status: "ok", endTime: new Date() });
+await telemetry.forceFlush();
+await telemetry.close();
 
 show("revision", await tools.handle(ref, "register_intent_plan", { goal: "Run tests and fix a file", steps: [{ action: "run_command" }, { action: "write_to_file" }], reason: "the test needs a fixture file" }));
 await tools.settled();
