@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@armorantigravity/protocol": "workspace:*"
+    "@armorantigravity/protocol": "workspace:*",
+    "@armoriq/sdk-dev": "^0.8.17"
   }
 }
