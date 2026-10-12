@@ -15,6 +15,18 @@
     },
     {
       "path": "packages/evidence"
+    },
+    {
+      "path": "packages/intent"
+    },
+    {
+      "path": "packages/mcp"
+    },
+    {
+      "path": "packages/daemon"
+    },
+    {
+      "path": "packages/hook"
     }
   ]
 }
