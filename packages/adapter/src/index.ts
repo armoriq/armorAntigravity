@@ -29,3 +29,14 @@ export {
   type RefreshOutcome,
 } from "./policy-source.ts";
 export { segmentedPolicy } from "./shell-policy.ts";
+export { createMcpGate, parseServerList, type McpGate, type McpGateOptions, type McpServerStatus, type McpVerdict, type SyncOutcome } from "./mcp-gate.ts";
+export {
+  createDecisionHandler,
+  toHookResponse,
+  type AdapterDecision,
+  type AuditStatus,
+  type DecideFn,
+  type DecisionHandlerOptions,
+  type DecisionRecord,
+  type HookInput,
+} from "./decision.ts";
