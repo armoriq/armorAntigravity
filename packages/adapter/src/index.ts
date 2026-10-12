@@ -28,3 +28,4 @@ export {
   type PolicySourceOptions,
   type RefreshOutcome,
 } from "./policy-source.ts";
+export { segmentedPolicy } from "./shell-policy.ts";
