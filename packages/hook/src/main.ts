@@ -22,7 +22,7 @@ const socketPath = resolveSocket();
 
 async function main(): Promise<HookResponse> {
   const event = process.argv[2];
-  if (!isHookEvent(event)) return {};
+  if (!isHookEvent(event)) return null;
   const stdin = await Bun.stdin.text();
   const request: DaemonRequest = { v: PROTOCOL_VERSION, id: crypto.randomUUID(), receivedAt: Date.now(), event, payload: parseJson(stdin) };
   const line = `${JSON.stringify(request)}\n`;
@@ -31,7 +31,7 @@ async function main(): Promise<HookResponse> {
   for (;;) {
     try {
       const response = parseResponse(await exchange(line), request.id);
-      if (response) return response;
+      if (response !== undefined) return response;
       return fallbackResponse(event, await cachedMode(), "daemon_unavailable", "armoriq-agd sent an unreadable response");
     } catch (error) {
       if (!(error instanceof ConnectFailed) || Date.now() >= deadline) {
@@ -99,9 +99,9 @@ async function cachedMode(): Promise<Mode> {
   }
 }
 
-function parseResponse(line: string, id: string): HookResponse | null {
+function parseResponse(line: string, id: string): HookResponse | undefined {
   const raw = parseJson(line);
-  if (typeof raw !== "object" || raw === null || !("id" in raw) || raw.id !== id || !("response" in raw)) return null;
+  if (typeof raw !== "object" || raw === null || !("id" in raw) || raw.id !== id || !("response" in raw)) return undefined;
   return parseHookResponse(raw.response);
 }
 
@@ -123,7 +123,7 @@ function resolveSocket(): string {
 
 main().then(
   (response) => {
-    process.stdout.write(`${JSON.stringify(response)}\n`);
+    if (response !== null) process.stdout.write(`${JSON.stringify(response)}\n`);
     process.exit(0);
   },
   () => process.exit(0),

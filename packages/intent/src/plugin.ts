@@ -49,7 +49,7 @@ export function intentRegistration(runtime: IntentRuntime): IntentRegistration {
 }
 
 function stepsOf(response: HookResponse): readonly InjectedStep[] | null {
-  return "injectSteps" in response ? response.injectSteps : null;
+  return response !== null && "injectSteps" in response ? response.injectSteps : null;
 }
 
 function withSteps(response: HookResponse, directive: HookResponse): HookResponse {
@@ -57,5 +57,5 @@ function withSteps(response: HookResponse, directive: HookResponse): HookRespons
   if (!extra) return response;
   const own = stepsOf(response);
   if (own) return { injectSteps: [...own, ...extra] };
-  return Object.keys(response).length === 0 ? directive : response;
+  return response === null ? directive : response;
 }

@@ -48,7 +48,7 @@ export type DecisionHandlerOptions = {
   readonly onDecision?: (record: DecisionRecord) => void;
 };
 
-const NO_OPINION: HookResponse = {};
+const NO_OPINION: HookResponse = null;
 // A server and tool no policy can name, to tell a rule about this server from a wildcard.
 const PROBE = { server: "armoriq-unnamed-probe-server", tool: "armoriq_unnamed_probe_tool" };
 

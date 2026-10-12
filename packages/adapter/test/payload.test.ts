@@ -37,21 +37,27 @@ describe("parseHookPayload on captured agy payloads", () => {
     expect(failedParsed.ok && failedParsed.payload.event === "PostToolUse" && failedParsed.payload.error).toStartWith("Could not connect to Chrome");
   });
 
-  test("Stop and invocation extras (fullyIdle, invocationNum) are ignored", () => {
+  test("Stop keeps the captured termination fields", () => {
     const c = captured("stop");
     const r = parseHookPayload(c.event, c.stdin);
-    if (!r.ok) throw new Error(r.error);
-    expect("fullyIdle" in r.payload).toBe(false);
-    expect("terminationReason" in r.payload).toBe(false);
+    if (!r.ok || r.payload.event !== "Stop") throw new Error("expected Stop");
+    expect(r.payload).toMatchObject({ executionNum: 0, terminationReason: "NO_TOOL_CALL", error: "" });
+    expect(typeof r.payload.fullyIdle).toBe("boolean");
   });
 });
 
 describe("parseHookPayload", () => {
-  test("optional fields that are absent stay absent rather than undefined", () => {
+  test("a payload missing modelName, artifactDirectoryPath or the Stop fields is rejected", () => {
     const r = parseHookPayload("Stop", fixture("documented/stop-minimal.json"));
-    if (!r.ok) throw new Error(r.error);
-    expect("modelName" in r.payload).toBe(false);
-    expect("artifactDirectoryPath" in r.payload).toBe(false);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toContain("modelName");
+      expect(r.error).toContain("artifactDirectoryPath");
+    }
+    const { modelName: _m, ...noModel } = stdinOf("stop") as Record<string, unknown>;
+    const { artifactDirectoryPath: _a, ...noArtifacts } = stdinOf("stop") as Record<string, unknown>;
+    expect(parseHookPayload("Stop", noModel).ok).toBe(false);
+    expect(parseHookPayload("Stop", noArtifacts).ok).toBe(false);
   });
 
   test("a turn event ignores tool fields and unknown fields", () => {

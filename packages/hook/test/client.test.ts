@@ -20,27 +20,35 @@ afterEach(async () => {
 
 const quiet = { info() {}, warn() {}, error() {} };
 const dataDir = () => path.join(sandbox.home, ".armoriq", "armorantigravity");
-const payload = (id: string) => ({ conversationId: id, workspacePaths: ["/w"], transcriptPath: `${sandbox.home}/.gemini/antigravity-ide/brain/${id}/t.jsonl` });
-const toolPayload = (id: string) => ({ ...payload(id), toolCall: { name: "write_to_file", args: { TargetFile: "/w/a" } }, stepIdx: 2 });
+const base = (id: string) => ({
+  conversationId: id,
+  workspacePaths: ["/w"],
+  transcriptPath: `${sandbox.home}/.gemini/antigravity-ide/brain/${id}/t.jsonl`,
+  artifactDirectoryPath: `${sandbox.home}/.gemini/antigravity-ide/brain/${id}`,
+  modelName: "gemini-3.8-flash-high",
+});
+const payload = (id: string) => ({ ...base(id), invocationNum: 0, initialNumSteps: 0 });
+const stopPayload = (id: string) => ({ ...base(id), executionNum: 0, fullyIdle: true, terminationReason: "NO_TOOL_CALL", error: "" });
+const toolPayload = (id: string) => ({ ...base(id), toolCall: { name: "write_to_file", args: { TargetFile: "/w/a" } }, stepIdx: 2 });
 
 async function hook(args: string[], stdin: string, env: Record<string, string> = {}): Promise<unknown> {
   const proc = Bun.spawn(["bun", CLIENT, ...args], { stdin: new TextEncoder().encode(stdin), stdout: "pipe", env: { ...process.env, ...env } });
   const out = await new Response(proc.stdout).text();
   expect(await proc.exited).toBe(0);
-  return JSON.parse(out);
+  return out === "" ? null : JSON.parse(out);
 }
 
 test("forwards stdin to the daemon and prints the decision", async () => {
   daemon = await startDaemon({ env: {}, plugins: [], log: quiet });
   expect(await hook(["PreToolUse"], JSON.stringify(toolPayload("c1")))).toEqual({ decision: "allow" });
-  expect(await hook(["PostInvocation"], JSON.stringify(payload("c1")))).toEqual({});
+  expect(await hook(["PostInvocation"], JSON.stringify(payload("c1")))).toBeNull();
   await daemon.stop();
   expect(readdirSync(path.join(dataDir(), "sessions"))).toEqual(["ide-c1.json"]);
 });
 
 test("an unknown event prints an empty response without contacting the daemon", async () => {
-  expect(await hook(["SessionStart"], "{}")).toEqual({});
-  expect(await hook([], "")).toEqual({});
+  expect(await hook(["SessionStart"], "{}")).toBeNull();
+  expect(await hook([], "")).toBeNull();
 });
 
 test("unparseable stdin reaches the daemon, which applies the mode", async () => {
@@ -59,7 +67,7 @@ test("with no daemon reachable it follows the cached mode within the start budge
   mkdirSync(dataDir(), { recursive: true });
   writeFileSync(path.join(dataDir(), "mode"), "monitor\n");
   expect(await run("PreToolUse", toolPayload("c"))).toEqual({ decision: "allow" });
-  expect(await run("Stop", payload("c"))).toEqual({});
+  expect(await run("Stop", stopPayload("c"))).toBeNull();
 
   writeFileSync(path.join(dataDir(), "mode"), "enforce\n");
   expect(await run("PreToolUse", toolPayload("c"))).toMatchObject({ decision: "deny" });

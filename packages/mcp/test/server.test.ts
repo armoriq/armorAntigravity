@@ -87,6 +87,8 @@ describe("intent MCP server over stdio", () => {
       conversationId: "conv-mcp",
       workspacePaths: [],
       transcriptPath: "",
+      artifactDirectoryPath: "/tmp/agy/artifacts/conv-mcp",
+      modelName: "gemini-3.8-flash-high",
       toolCall: { name: "mcp_armoriq_register_intent_plan", args: { ...plan, toolAction: "Registering plan", toolSummary: "Plan" } },
       stepIdx: 2,
     };

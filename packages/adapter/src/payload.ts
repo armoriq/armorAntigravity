@@ -7,14 +7,16 @@ const base = z.object({
   conversationId: z.string().min(1),
   workspacePaths: z.array(z.string()).readonly(),
   transcriptPath: z.string(),
-  artifactDirectoryPath: z.string().optional(),
-  modelName: z.string().optional(),
+  artifactDirectoryPath: z.string(),
+  modelName: z.string(),
 });
 
 const toolCall = z.object({ name: z.string().min(1), args: z.unknown() });
 
 const preToolUse = base.extend({ toolCall, stepIdx: z.number().int() });
-const postToolUse = preToolUse.extend({ error: z.string().optional() });
+const postToolUse = preToolUse.extend({ error: z.string() });
+const invocation = base.extend({ invocationNum: z.number().int(), initialNumSteps: z.number().int() });
+const stop = base.extend({ executionNum: z.number().int(), fullyIdle: z.boolean(), terminationReason: z.string(), error: z.string() });
 
 export type ParseResult = { ok: true; payload: HookPayload } | { ok: false; error: string };
 
@@ -34,14 +36,13 @@ function describe(error: z.ZodError): string {
   return error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
 }
 
-// exactOptionalPropertyTypes rejects `key: undefined` where the protocol says `key?:`.
 function baseFields(d: z.infer<typeof base>) {
   return {
     conversationId: d.conversationId,
     workspacePaths: d.workspacePaths,
     transcriptPath: d.transcriptPath,
-    ...(d.artifactDirectoryPath === undefined ? {} : { artifactDirectoryPath: d.artifactDirectoryPath }),
-    ...(d.modelName === undefined ? {} : { modelName: d.modelName }),
+    artifactDirectoryPath: d.artifactDirectoryPath,
+    modelName: d.modelName,
   };
 }
 
@@ -66,15 +67,22 @@ export function parseHookPayload(event: HookEvent, raw: unknown): ParseResult {
           ...baseFields(r.data),
           toolCall: { name: t.name, args: t.args },
           stepIdx,
-          ...(error === undefined ? {} : { error }),
+          error,
         },
       };
     }
     case "PreInvocation":
-    case "PostInvocation":
+    case "PostInvocation": {
+      const r = invocation.safeParse(raw);
+      if (!r.success) return { ok: false, error: describe(r.error) };
+      const { invocationNum, initialNumSteps } = r.data;
+      return { ok: true, payload: { event, ...baseFields(r.data), invocationNum, initialNumSteps } };
+    }
     case "Stop": {
-      const r = base.safeParse(raw);
-      return r.success ? { ok: true, payload: { event, ...baseFields(r.data) } } : { ok: false, error: describe(r.error) };
+      const r = stop.safeParse(raw);
+      if (!r.success) return { ok: false, error: describe(r.error) };
+      const { executionNum, fullyIdle, terminationReason, error } = r.data;
+      return { ok: true, payload: { event, ...baseFields(r.data), executionNum, fullyIdle, terminationReason, error } };
     }
   }
 }

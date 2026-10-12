@@ -16,7 +16,7 @@ const ROOT = "conv-root";
 const CHILD = "conv-child";
 const step = (key: string, at: number): SourceStep => ({ key, model: "gemini-3.8-flash", at, inputTokens: 10, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 });
 const session = (conversationId: string) => ({ surface: "cli" as const, conversationId });
-const pre = (conversationId: string, stepIdx: number): HookPayload => ({ event: "PreToolUse", conversationId, stepIdx, toolCall: { name: "run_command", args: {} }, workspacePaths: ["/repo"], transcriptPath: `/brain/${conversationId}/transcript.jsonl` });
+const pre = (conversationId: string, stepIdx: number): HookPayload => ({ event: "PreToolUse", conversationId, stepIdx, toolCall: { name: "run_command", args: {} }, workspacePaths: ["/repo"], transcriptPath: `/brain/${conversationId}/transcript.jsonl`, artifactDirectoryPath: `/brain/${conversationId}`, modelName: "gemini-3.8-flash-high" });
 
 // The trace and latency pumps are replaced by recorders, so the test sees exactly what the
 // plugin hands them and in what order; nothing is started or sent.

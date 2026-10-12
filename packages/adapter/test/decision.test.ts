@@ -64,7 +64,7 @@ const runCommand = (CommandLine: string) => withTool({ name: "run_command", args
 const writeFile = () => stdinOf("pre-write_to_file");
 
 const ALLOW = { decision: "allow" } as const;
-const NONE = {};
+const NONE = null;
 
 const rule = (id: string, effect: string, tool: string) => ({
   schemaVersion: "armor.policy.v1",
@@ -94,7 +94,7 @@ describe("built-in guard (#16)", () => {
       const { handle, records } = setup();
       const res = handle(hook("PreToolUse", raw, mode));
       expect(res).toMatchObject({ decision: "deny" });
-      expect("reason" in res && res.reason).toStartWith("ArmorIQ blocked this call [builtin_protected]: write_to_file may not modify");
+      expect(res && "reason" in res && res.reason).toStartWith("ArmorIQ blocked this call [builtin_protected]: write_to_file may not modify");
       expect(records[0]).toMatchObject({ status: "blocked", decision: { code: "builtin_protected", ruleId: "builtin:guard_files" } });
     }
   });
@@ -173,7 +173,7 @@ describe("MCP server gate (#19)", () => {
     const { handle, records } = setup({ policy: rule("other", "permit", "view_file") });
     const res = handle(hook("PreToolUse", mcpRaw()));
     expect(res).toMatchObject({ decision: "ask" });
-    expect("reason" in res && res.reason).toContain('MCP server "agspike-global" is not approved');
+    expect(res && "reason" in res && res.reason).toContain('MCP server "agspike-global" is not approved');
     expect(records[0]).toMatchObject({ status: "held", decision: { kind: "ask", code: "mcp_server_unapproved", server: "agspike-global" } });
   });
 
@@ -234,7 +234,7 @@ describe("MCP server gate (#19)", () => {
   test("the per-tool shape (captured chrome-devtools call) is gated the same way", () => {
     const res = setup().handle(hook("PreToolUse", stdinOf("pre-mcp_chrome_devtools_navigate_page")));
     expect(res).toMatchObject({ decision: "ask" });
-    expect("reason" in res && res.reason).toContain('MCP server "chrome-devtools"');
+    expect(res && "reason" in res && res.reason).toContain('MCP server "chrome-devtools"');
   });
 
   test("ArmorIQ's own tools are never gated", () => {
@@ -271,13 +271,13 @@ describe("check order with the real core (PRD 4a)", () => {
   test("a tool outside the plan is intent_drift", () => {
     const res = setup({ decide: decideWith(undefined, ["view_file"]) }).handle(hook("PreToolUse", runCommand("npm test")));
     expect(res).toMatchObject({ decision: "deny" });
-    expect("reason" in res && res.reason).toStartWith("ArmorIQ blocked this call [intent_drift]: run_command not in plan.");
+    expect(res && "reason" in res && res.reason).toStartWith("ArmorIQ blocked this call [intent_drift]: run_command not in plan.");
   });
 
   test("no plan is intent_plan_missing, but read-only tools pass", () => {
     const { handle } = setup({ decide: decideWith(undefined, null) });
     const res = handle(hook("PreToolUse", writeFile()));
-    expect("reason" in res && res.reason).toStartWith("ArmorIQ blocked this call [intent_plan_missing]");
+    expect(res && "reason" in res && res.reason).toStartWith("ArmorIQ blocked this call [intent_plan_missing]");
     expect(handle(hook("PreToolUse", stdinOf("pre-view_file")))).toEqual(ALLOW);
   });
 
@@ -292,7 +292,7 @@ describe("check order with the real core (PRD 4a)", () => {
 
   test("reading ~/.armoriq is the core's built-in deny", () => {
     const res = setup().handle(hook("PreToolUse", withTool({ name: "view_file", args: { AbsolutePath: `${home}/.armoriq/credentials.json` } })));
-    expect("reason" in res && res.reason).toStartWith("ArmorIQ blocked this call [builtin_protected]");
+    expect(res && "reason" in res && res.reason).toStartWith("ArmorIQ blocked this call [builtin_protected]");
   });
 
   test("ArmorIQ's own register_intent_plan passes with no plan", () => {

@@ -30,8 +30,16 @@ const start = async (plugins: DaemonPlugin[], env: Record<string, string> = {}) 
 const login = () => saveLoginProfile({ backend: STAGING, product: "armorantigravity", apiKey: "ak_test", email: "dev@example.com", userId: "user-1", orgId: "org-1" });
 
 const transcript = (dir: string, id: string) => `${sandbox.home}/.gemini/${dir}/brain/${id}/.system_generated/logs/transcript.jsonl`;
-const payload = (id: string, dir = "antigravity-cli") => ({ conversationId: id, workspacePaths: ["/w"], transcriptPath: transcript(dir, id) });
-const toolPayload = (id: string, dir?: string) => ({ ...payload(id, dir), toolCall: { name: "run_command", args: { CommandLine: "ls" } }, stepIdx: 0 });
+const base = (id: string, dir = "antigravity-cli") => ({
+  conversationId: id,
+  workspacePaths: ["/w"],
+  transcriptPath: transcript(dir, id),
+  artifactDirectoryPath: `${sandbox.home}/.gemini/${dir}/brain/${id}`,
+  modelName: "gemini-3.8-flash-high",
+});
+const payload = (id: string, dir?: string) => ({ ...base(id, dir), invocationNum: 0, initialNumSteps: 0 });
+const stopPayload = (id: string) => ({ ...base(id), executionNum: 0, fullyIdle: true, terminationReason: "NO_TOOL_CALL", error: "" });
+const toolPayload = (id: string, dir?: string) => ({ ...base(id, dir), toolCall: { name: "run_command", args: { CommandLine: "ls" } }, stepIdx: 0 });
 
 let seq = 0;
 function send(socketPath: string, line: string): Promise<unknown> {
@@ -95,8 +103,8 @@ test("a hook request gets a decision and the session is keyed by surface", async
 test("PreInvocation opens a turn and Stop closes it and kicks the pumps", async () => {
   const rec = recorder();
   await start([rec.plugin]);
-  expect(await hook("PreInvocation", payload("conv-2"))).toEqual({});
-  expect(await hook("Stop", payload("conv-2"))).toEqual({});
+  expect(await hook("PreInvocation", payload("conv-2"))).toBeNull();
+  expect(await hook("Stop", stopPayload("conv-2"))).toBeNull();
   await settle();
   expect(rec.events.map((e) => e.kind)).toEqual(["session_start", "turn_start", "hook", "turn_end", "hook"]);
   expect(rec.kicks).toEqual(["audit"]);
@@ -122,7 +130,7 @@ test("a second daemon is refused while the first holds the lock, and starts once
 
 test("a plugin setup failure releases the lock and flushes earlier pumps", async () => {
   const rec = recorder();
-  const twoDeciders: DaemonPlugin[] = [rec.plugin, { name: "a", setup: () => ({ decide: () => ({}) }) }, { name: "b", setup: () => ({ decide: () => ({}) }) }];
+  const twoDeciders: DaemonPlugin[] = [rec.plugin, { name: "a", setup: () => ({ decide: () => null }) }, { name: "b", setup: () => ({ decide: () => null }) }];
   await expect(startDaemon({ env: {}, plugins: twoDeciders, log: quiet })).rejects.toThrow("second decision handler");
   expect(rec.flushed).toEqual(["audit"]);
   await start([]);
@@ -143,7 +151,7 @@ test("enforce mode fails closed on a bad payload or a handler error; monitor fai
     reason: "ArmorIQ blocked this call [malformed_payload]: the hook payload is missing required fields",
   });
   expect(await hook("PreToolUse", toolPayload("conv-4"))).toEqual({ decision: "deny", reason: "ArmorIQ blocked this call [internal_error]: guard error" });
-  expect(await hook("PostToolUse", { conversationId: "x" })).toEqual({});
+  expect(await hook("PostToolUse", { conversationId: "x" })).toBeNull();
 });
 
 test("a request with another protocol version gets the fallback for its event", async () => {
@@ -171,10 +179,10 @@ test("one connection can carry several requests and each answer keeps its id", a
     });
     s.on("error", reject);
     const req = (id: string, event: HookEvent, p: unknown) => JSON.stringify({ v: 1, id, receivedAt: 0, event, payload: p });
-    s.write(`${req("a", "PreToolUse", toolPayload("m"))}\n${req("b", "Stop", payload("m"))}\n`);
+    s.write(`${req("a", "PreToolUse", toolPayload("m"))}\n${req("b", "Stop", stopPayload("m"))}\n`);
   });
   expect(replies).toContainEqual({ v: 1, id: "a", response: { decision: "allow" } });
-  expect(replies).toContainEqual({ v: 1, id: "b", response: {} });
+  expect(replies).toContainEqual({ v: 1, id: "b", response: null });
 });
 
 test("stop does not wait on a client that connected and never sent a line", async () => {
