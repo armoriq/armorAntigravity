@@ -20,6 +20,12 @@
     {"upstream": "src/core/audit.ts", "local": "packages/core/src/audit.ts", "blob": "7056202fd4cf6dfc05d8a739a3a50ed06a7b4564"},
     {"upstream": "test/core/audit.test.ts", "local": "packages/core/test/audit.test.ts", "blob": "f4ef00b9046b319a47ca81cd1969ab10b7ce76f6"},
     {"upstream": "src/core/usage.ts", "local": "packages/core/src/usage.ts", "blob": "1db9e0c57df28a3e74f6048faef62a883c50e49e"},
-    {"upstream": "test/core/usage.test.ts", "local": "packages/core/test/usage.test.ts", "blob": "8c63fa501ae90c1108f8d1272e0f0677b32e79fc"}
+    {"upstream": "test/core/usage.test.ts", "local": "packages/core/test/usage.test.ts", "blob": "8c63fa501ae90c1108f8d1272e0f0677b32e79fc"},
+    {"upstream": "src/io/outbox.ts", "local": "packages/core/src/outbox.ts", "blob": "c5f5253f3eca990be000944a58892371313fcc27"},
+    {"upstream": "src/io/shared-lock.ts", "local": "packages/core/src/shared-lock.ts", "blob": "b5f4e9d6c28e970fd6c41bd3b97f57f0e81682de"},
+    {"upstream": "test/io/outbox.test.ts", "local": "packages/core/test/outbox.test.ts", "blob": "54f54cc9b90f887d861d0aca1fe0c00ed117dbc0"},
+    {"upstream": "test/io/shared-lock.test.ts", "local": "packages/core/test/shared-lock.test.ts", "blob": "dd250255b517755f9073694e1e96d6c3d8e9ab7a"},
+    {"upstream": "test/io/helpers/outbox-child.ts", "local": "packages/core/test/helpers/outbox-child.ts", "blob": "96f8b138de99ca0100a55f7862c57d5513691d41"},
+    {"upstream": "test/io/helpers/stub.ts", "local": "packages/core/test/helpers/stub.ts", "blob": "d7f4185e3cf188421659487426c3593a129975ea"}
   ]
 }
