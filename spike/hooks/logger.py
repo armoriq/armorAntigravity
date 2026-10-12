@@ -47,7 +47,7 @@ except (OSError, ValueError):
 
 tool = (payload or {}).get("toolCall", {}).get("name", "") if isinstance(payload, dict) else ""
 rule = ctl.get(f"{event}:{tool}") or ctl.get(event) or {}
-action = rule.get("action", "passthrough")
+action = rule.get("action", "allow" if event == "PreToolUse" else "passthrough")
 
 record = {
     "seq": n,
@@ -71,6 +71,11 @@ if action == "hang":
     time.sleep(rule.get("seconds", 120))
 if action == "invalid":
     sys.stdout.write("this is not json {")
+    sys.exit(0)
+if action == "empty":
+    sys.exit(0)
+if action == "allow":
+    sys.stdout.write('{"decision": "allow"}')
     sys.exit(0)
 if action == "respond":
     sys.stdout.write(json.dumps(rule["response"]))
