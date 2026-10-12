@@ -12,6 +12,9 @@
     },
     {
       "path": "scripts"
+    },
+    {
+      "path": "packages/evidence"
     }
   ]
 }
