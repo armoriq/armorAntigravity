@@ -3,9 +3,11 @@
   "ref": "dev",
   "commit": "29bec8c4d89ee078b724ef3d31b5ce49ea840092",
   "files": [
-    { "upstream": "src/types.ts", "local": "packages/core/src/types.ts", "blob": "83f3f28efcf4632288bef14618d3070a4d4b386b" },
-    { "upstream": "src/core/tools.ts", "local": "packages/core/src/products/opencode.ts", "blob": "95d0a21117c568d990181d7dc98f92c5b8117983" },
-    { "upstream": "src/core/sanitize.ts", "local": "packages/core/src/sanitize.ts", "blob": "702964440ab5bdf2f51f4c05fe7d21b83ac362a4" },
-    { "upstream": "test/core/sanitize.test.ts", "local": "packages/core/test/sanitize.test.ts", "blob": "593cacf228f546e14525939aa109684ab843a4a9" }
+    {"upstream": "src/types.ts", "local": "packages/core/src/types.ts", "blob": "83f3f28efcf4632288bef14618d3070a4d4b386b"},
+    {"upstream": "src/core/tools.ts", "local": "packages/core/src/products/opencode.ts", "blob": "95d0a21117c568d990181d7dc98f92c5b8117983"},
+    {"upstream": "src/core/sanitize.ts", "local": "packages/core/src/sanitize.ts", "blob": "702964440ab5bdf2f51f4c05fe7d21b83ac362a4"},
+    {"upstream": "test/core/sanitize.test.ts", "local": "packages/core/test/sanitize.test.ts", "blob": "593cacf228f546e14525939aa109684ab843a4a9"},
+    {"upstream": "src/core/linear-regex.ts", "local": "packages/core/src/linear-regex.ts", "blob": "232e240c2aa8254755c15f1171988dc2b2e6d11f"},
+    {"upstream": "test/core/linear-regex.test.ts", "local": "packages/core/test/linear-regex.test.ts", "blob": "e85024e6cb31e0ffdc8a5e08f10c910443218b7c"}
   ]
 }
