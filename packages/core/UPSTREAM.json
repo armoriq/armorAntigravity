@@ -8,6 +8,8 @@
     {"upstream": "src/core/sanitize.ts", "local": "packages/core/src/sanitize.ts", "blob": "702964440ab5bdf2f51f4c05fe7d21b83ac362a4"},
     {"upstream": "test/core/sanitize.test.ts", "local": "packages/core/test/sanitize.test.ts", "blob": "593cacf228f546e14525939aa109684ab843a4a9"},
     {"upstream": "src/core/linear-regex.ts", "local": "packages/core/src/linear-regex.ts", "blob": "232e240c2aa8254755c15f1171988dc2b2e6d11f"},
-    {"upstream": "test/core/linear-regex.test.ts", "local": "packages/core/test/linear-regex.test.ts", "blob": "e85024e6cb31e0ffdc8a5e08f10c910443218b7c"}
+    {"upstream": "test/core/linear-regex.test.ts", "local": "packages/core/test/linear-regex.test.ts", "blob": "e85024e6cb31e0ffdc8a5e08f10c910443218b7c"},
+    {"upstream": "src/core/policy.ts", "local": "packages/core/src/policy.ts", "blob": "aad837ce40a8df96895bbc6ef7b1b8a14b9b9f1a"},
+    {"upstream": "test/core/policy.test.ts", "local": "packages/core/test/policy.test.ts", "blob": "b3caad1fd75ea54b7fa907f7e9b7e4f52e4a76f9"}
   ]
 }
