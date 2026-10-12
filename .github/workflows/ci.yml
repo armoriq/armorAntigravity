@@ -71,6 +71,11 @@ jobs:
         with:
           languages: javascript-typescript
           queries: security-extended
+          # Tests hold hostile fixtures on purpose, such as the backtracking
+          # patterns the linear regex engine is checked against.
+          config: |
+            paths-ignore:
+              - "**/test/**"
 
       - uses: github/codeql-action/analyze@v3
         with:
