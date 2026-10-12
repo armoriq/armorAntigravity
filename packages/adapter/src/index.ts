@@ -16,3 +16,5 @@ export {
   type ToolCategory,
 } from "./tools.ts";
 export { backendToolLists, type BackendToolLists } from "./backend-lists.ts";
+export { parseShell, segmentText, type ShellParse, type ShellSegment } from "./shell.ts";
+export { checkGuard, guardPaths, shellWritesGuard, type GuardContext, type GuardViolation } from "./guard.ts";
