@@ -4,7 +4,7 @@ import { checkGuard } from "./guard.ts";
 import type { McpGate } from "./mcp-gate.ts";
 import type { PolicySource } from "./policy-source.ts";
 import { segmentedPolicy } from "./shell-policy.ts";
-import { mapToolCall, type MapOptions, type MappedCall } from "./tools.ts";
+import { mapToolCall, mcpToolName, type MapOptions, type MappedCall } from "./tools.ts";
 
 // The part of the daemon's HookContext (packages/daemon/src/plugin.ts) the
 // adapter reads; the daemon's own type is assignable to it.
@@ -49,6 +49,8 @@ export type DecisionHandlerOptions = {
 };
 
 const NO_OPINION: HookResponse = {};
+// A server and tool no policy can name, to tell a rule about this server from a wildcard.
+const PROBE = { server: "armoriq-unnamed-probe-server", tool: "armoriq_unnamed_probe_tool" };
 
 // Allow returns no opinion rather than "allow", so Antigravity's own
 // permission settings (auto-run, terminal allow lists) still apply.
@@ -86,7 +88,7 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     if (guard) return { kind: "deny", code: "builtin_protected", reason: guard.reason, ruleId: "builtin:guard_files" };
 
     const active = options.policy.current();
-    const policy = segmentedPolicy(active.policy, { isShell: (c) => c.tool === "bash", home: options.guard.home });
+    const policy = segmentedPolicy(active.policy, { isShell: (c) => c.tool === "run_command", home: options.guard.home });
     const core: CoreToolCall = {
       sessionId: conversationId,
       callId: `${conversationId}:${stepIdx}`,
@@ -102,10 +104,13 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     if (verdict.kind === "denied") {
       return { kind: "deny", code: "mcp_server_denied", reason: `MCP server "${server}" is denied on this device`, ruleId: null };
     }
-    // A statement that names this call in a policy the user or org wrote
-    // approves the server; the built-in allow-all default does not.
+    // A policy statement that names this server or tool approves it. A wildcard
+    // permit, the built-in allow-all included, also matches the probe and does not.
     const named = policy.evaluate(core);
-    if (active.origin !== "default" && named.effect === "permit" && named.ruleId !== null) return decision;
+    if (named.effect === "permit" && named.ruleId !== null) {
+      const probe = policy.evaluate({ ...core, tool: mcpToolName(PROBE) });
+      if (probe.ruleId !== named.ruleId) return decision;
+    }
     return {
       kind: "ask",
       code: "mcp_server_unapproved",

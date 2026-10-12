@@ -1,7 +1,7 @@
 import type { DecideFn } from "../../src/decision.ts";
 import type { BackendToolLists } from "../../src/backend-lists.ts";
 
-const READ_ONLY = new Set(["read", "grep", "glob", "list", "webfetch", "websearch"]);
+const READ_ONLY = new Set(["view_file", "list_dir", "find_by_name", "grep_search"]);
 const OWN = new Set(["register_intent_plan", "trust_reanchor", "trust_revoke", "policy_read", "trust_delegate"]);
 
 // Stand-in for core decide() until https://github.com/armoriq/armorAntigravity/pull/58 lands it:

@@ -3,7 +3,8 @@ import type { CompileResult, CoreToolCall, Log } from "../../src/core-contract.t
 
 // Stand-in for core's compilePolicy until https://github.com/armoriq/armorAntigravity/pull/58
 // lands policy.ts: same input contract (armor.policy.v1 or legacy rules, optionally wrapped in
-// {policy}), exact-name tool rules only. Swap for the real one when it exists.
+// {policy}), exact-name tool rules plus the `bash.program in` condition, read
+// from args.command as ArmorClaude's parseBashCommand does. Swap for the real one when it exists.
 export function compileForTest(raw: unknown): CompileResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { ok: false, error: "policy must be a JSON object" };
   const body: Record<string, unknown> = "policy" in raw && typeof raw.policy === "object" && raw.policy !== null ? { ...raw.policy } : { ...raw };
@@ -12,7 +13,7 @@ export function compileForTest(raw: unknown): CompileResult {
   }
   const statements = Array.isArray(body.statements) ? body.statements : [];
   const defaults = typeof body.defaults === "object" && body.defaults !== null && "decision" in body.defaults ? body.defaults.decision : "deny";
-  type Rule = { id: string; effect: "permit" | "forbid" | "require_approval"; tools: string[] };
+  type Rule = { id: string; effect: "permit" | "forbid" | "require_approval"; tools: string[]; programs: string[] | null };
   const rules: Rule[] = [];
   for (const s of statements) {
     if (typeof s !== "object" || s === null) continue;
@@ -21,7 +22,15 @@ export function compileForTest(raw: unknown): CompileResult {
     const action = "action" in s && typeof s.action === "object" && s.action !== null ? s.action : {};
     const list: unknown[] = "in" in action && Array.isArray(action.in) ? action.in : ["*"];
     const tools = "eq" in action && typeof action.eq === "string" ? [action.eq] : list.filter((x): x is string => typeof x === "string");
-    rules.push({ id, effect, tools: tools.map((t) => t.toLowerCase()) });
+    const conditions: unknown[] = "conditions" in s && Array.isArray(s.conditions) ? s.conditions : [];
+    let programs: string[] | null = null;
+    for (const c of conditions) {
+      if (typeof c === "object" && c !== null && "field" in c && c.field === "bash.program" && "value" in c && Array.isArray(c.value)) {
+        const values: unknown[] = c.value;
+        programs = values.filter((v): v is string => typeof v === "string");
+      }
+    }
+    rules.push({ id, effect, tools: tools.map((t) => t.toLowerCase()), programs });
   }
   return {
     ok: true,
@@ -29,7 +38,11 @@ export function compileForTest(raw: unknown): CompileResult {
       hash: createHash("sha256").update(JSON.stringify({ statements, defaults })).digest("hex"),
       intentRequired: typeof body.intentRequired === "boolean" ? body.intentRequired : true,
       evaluate(call: CoreToolCall) {
-        const hits = rules.filter((r) => r.tools.includes("*") || r.tools.includes(call.tool.toLowerCase()));
+        const command = typeof call.args.command === "string" ? call.args.command : "";
+        const program = command.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*/, "").split(/\s+/)[0] ?? "";
+        const hits = rules.filter(
+          (r) => (r.tools.includes("*") || r.tools.includes(call.tool.toLowerCase())) && (r.programs === null || r.programs.includes(program)),
+        );
         const forbid = hits.find((r) => r.effect === "forbid");
         if (forbid) return { effect: "forbid", ruleId: forbid.id, reason: `ArmorIQ policy forbid: ${forbid.id}` };
         const hold = hits.find((r) => r.effect === "require_approval");
