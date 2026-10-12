@@ -18,3 +18,13 @@ export {
 export { backendToolLists, type BackendToolLists } from "./backend-lists.ts";
 export { parseShell, segmentText, type ShellParse, type ShellSegment } from "./shell.ts";
 export { checkGuard, guardPaths, shellWritesGuard, type GuardContext, type GuardViolation } from "./guard.ts";
+export type { CompiledPolicy, CompileResult, CoreToolCall, Decision, DenyCode, Log, Login, Mode, PolicyEffect } from "./core-contract.ts";
+export { backendRequest, type BackendAccess, type BackendResult, type Fetch } from "./backend-http.ts";
+export {
+  createPolicySource,
+  type ActivePolicy,
+  type PolicyOrigin,
+  type PolicySource,
+  type PolicySourceOptions,
+  type RefreshOutcome,
+} from "./policy-source.ts";
