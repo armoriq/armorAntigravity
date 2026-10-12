@@ -54,10 +54,11 @@ test("audit, usage, latency and traces all carry the raw conversationId as the s
   });
 
   const session = { surface: "cli" as const, conversationId: CONV };
-  const base = { conversationId: CONV, workspacePaths: ["/Users/dev/repo"], transcriptPath: `/Users/dev/.gemini/antigravity-cli/brain/${CONV}/.system_generated/logs/transcript.jsonl` };
+  const base = { conversationId: CONV, workspacePaths: ["/Users/dev/repo"], modelName: "gemini-3.8-flash-high", transcriptPath: `/Users/dev/.gemini/antigravity-cli/brain/${CONV}/.system_generated/logs/transcript.jsonl` };
   const toolCall = { name: "run_command", args: { CommandLine: "bun test" } };
   const pre: HookPayload = { ...base, event: "PreToolUse", toolCall, stepIdx: 4 };
-  const post: HookPayload = { ...base, event: "PostToolUse", toolCall, stepIdx: 4 };
+  // agy sends error on every PostToolUse, empty on success.
+  const post: HookPayload = { ...base, event: "PostToolUse", toolCall, stepIdx: 4, error: "" };
   const events: ObservedEvent[] = [
     { kind: "turn_start", session, at: t0 },
     { kind: "hook", hook: { receivedAt: t0 + 100, payload: pre, session }, at: t0 + 100 },
@@ -104,5 +105,6 @@ test("audit, usage, latency and traces all carry the raw conversationId as the s
   expect(latency).toMatchObject({ sessionId: CONV, product: "armorantigravity", sampleCount: 1, totalMs: 3_000 });
   expect(root?.attributes["armoriq.session_id"]).toBe(CONV);
   expect(tool?.attributes["armoriq.duration_ms"]).toBe(1_500);
+  expect(tool?.attributes["armoriq.tool.outcome"]).toBe("success");
   expect(traced.some((s) => s.name === "gen_ai.chat" && s.traceId === root?.traceId)).toBe(true);
 });

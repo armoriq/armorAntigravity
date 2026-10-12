@@ -109,6 +109,7 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
       transcriptPath: payload.transcriptPath,
       workspacePaths: payload.workspacePaths,
       surface: session.surface,
+      model: payload.modelName ?? refs.get(session.conversationId)?.model ?? null,
     });
   }
 
@@ -135,7 +136,8 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
     const span = {
       kind: "tool" as const,
       call,
-      ok: payload.error === undefined,
+      // agy sends error on every PostToolUse, empty on success.
+      ok: !payload.error,
       output: payload.error ?? "",
       durationMs: begun === undefined ? null : Math.max(0, hook.receivedAt - begun),
       at: hook.receivedAt,

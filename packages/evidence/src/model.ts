@@ -2,7 +2,7 @@
 // sets gen_ai.system from the id's prefix, so both need the provider's bare model id. Antigravity
 // adds a thinking level to its slugs (`gemini-3.8-flash-high`, https://antigravity.google/docs/cli/headless/)
 // and shows display names elsewhere ("Gemini 3.1 Pro (High)", "Claude Sonnet 5.5 (Thinking)").
-// Which form reaches the evidence pumps is settled by the P0 spike (#5).
+// Hook payloads carry the slug form in modelName (P0 spike, #5).
 const LEVEL_SUFFIX = /-(?:minimal|low|medium|high|thinking)$/;
 const DISPLAY_LEVEL = /\s*\((?:minimal|low|medium|high|thinking)\)\s*$/i;
 

@@ -1,12 +1,15 @@
 import { sessionTitle as coreSessionTitle, type SessionID, type SessionTitle, type StepUsage } from "@armorantigravity/core";
 import type { Surface } from "@armorantigravity/protocol";
 import { TITLE_SOURCE } from "../context.ts";
+import { canonicalModel } from "../model.ts";
 
 export type ConversationRef = {
   readonly conversationId: string;
   readonly transcriptPath: string;
   readonly workspacePaths: readonly string[];
   readonly surface: Surface;
+  // The hook payload's modelName; the transcript itself names no model. Null for history runs.
+  readonly model: string | null;
 };
 
 // One model call as the source reports it. `key` is unique within the conversation.
@@ -30,7 +33,7 @@ export type SourceRead = {
 };
 
 // Where token counts come from. Hooks carry none (PRD U8), so this reads what Antigravity writes
-// to disk; which file and schema is settled by the P0 spike (#5).
+// to disk (usage/transcript.ts).
 export interface UsageSource {
   read(ref: ConversationRef): Promise<SourceRead>;
   // Every conversation on this device, for discovery and history runs.
@@ -53,7 +56,8 @@ export function repoOf(workspacePaths: readonly string[]): string {
 // the child id stays in the call key, which keeps each call counted once.
 export function toStepUsage(rootId: string, conversationId: string, step: SourceStep, repo: string): StepUsage | null {
   const entry = {
-    model: step.model || "unknown",
+    // The same id the trace spans carry, so both streams price a call under one model.
+    model: canonicalModel(step.model),
     inputTokens: whole(step.inputTokens),
     outputTokens: whole(step.outputTokens),
     cacheReadTokens: whole(step.cacheReadTokens),
