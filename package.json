@@ -1,0 +1,10 @@
+{
+  "name": "armorantigravity",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc -b"
+  }
+}

@@ -1,0 +1,17 @@
+# Layout and ownership
+
+Bun workspace. Each package has one owner thread while v1 is built in parallel; edit another package only through a PR its owner reviews.
+
+| Path | Contents | Issues |
+|---|---|---|
+| `packages/protocol` | Hook payload, decision and socket types shared by everything | contract, change first |
+| `packages/core` | Decision core shared with armorOpenCode: decide, policy, intent, built-in rules, sanitize, outbox | #9, #10 |
+| `packages/adapter` | Antigravity event parsing, tool mapping, surface detection, shell lexer, MCP gate | #13 to #19, #28 |
+| `packages/hook` | `agd-hook` native client | #11, #21 |
+| `packages/daemon` | `armoriq-agd`: socket server, sessions, auth watcher, token pump, lifecycle | #12, #20, #25, #26 |
+| `packages/mcp` | Intent and trust MCP server | #22 to #24, #27, #29, #30 |
+| `packages/evidence` | Audit, usage, traces, history pumps | #31 to #42 |
+| `installer/` | curl installer, plugin packaging | #49, #50 |
+| `spike/` | P0 findings and captured payloads | #1 to #8 |
+
+Branches: work stacks on `feat/workspace-skeleton` until `dev` exists (#9), then retargets to `dev`.
