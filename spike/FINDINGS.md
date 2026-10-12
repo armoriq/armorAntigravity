@@ -5,6 +5,10 @@ Captured on 2026-10-12 with `agy` CLI 1.3.3 on macOS (Apple M5), signed in, in a
 (`~/.gemini/config/hooks.json`), a plugin (`~/.gemini/config/plugins/agspike/hooks.json`) and, for r5,
 the workspace (`<workspace>/.agents/hooks.json`). The logger is `spike/hooks/logger.py`; setup is
 `spike/hooks/setup.sh`. All evidence paths below are relative to `spike/payloads/cli/`.
+The exported `*.jsonl` keep full records for global hooks only; plugin and workspace runs appear in
+each file's `captureOrder` line and, for r5, with argv and cwd in `evidence/r5-hook-cwd.json`. The
+hook responses used per run are in `failure-modes/controls.json`, versions in `evidence/versions.txt`.
+Items marked (live) were observed in the TUI and are not in any file.
 
 Only the CLI was exercised. Antigravity 2.0 (2.22.0) and Antigravity IDE are installed in
 `/Applications` but neither would start from an agent shell (see "Not verified").
@@ -13,7 +17,7 @@ Only the CLI was exercised. Antigravity 2.0 (2.22.0) and Antigravity IDE are ins
 
 - stdin is one JSON object. It has **no event name**: the hook only knows its event from the command
   line it was registered with, so `agd-hook <Event>` must pass the event itself.
-- Fields per event (all observed on every capture):
+- Fields per event (present on every global-hook record):
 
   | Event | Fields |
   |---|---|
@@ -25,9 +29,10 @@ Only the CLI was exercised. Antigravity 2.0 (2.22.0) and Antigravity IDE are ins
 
 - `transcriptPath` points at `<brain>/<conversationId>/.system_generated/logs/transcript_full.jsonl`.
 - The hook process env adds only `ANTIGRAVITY_CONVERSATION_ID` (`env-sample.json`). Its cwd is the
-  directory holding the `hooks.json` that registered it.
+  directory holding the `hooks.json` that registered it: `.gemini/config`,
+  `.gemini/config/plugins/agspike` and `<ws>/.agents` (`evidence/r5-hook-cwd.json`).
 - Registrations for one event run one after another, never in parallel. Order is not stable: the
-  workspace hook ran first in r5, global usually ran before plugin, but `ft-crash1` ran plugin first.
+  workspace hook ran first in r5, global usually ran before plugin, but `ft-crash1`, `ft-invalid` and part of `tui-ask` ran plugin first.
   A PreToolUse deny or failure, or a Stop `continue`, skips the remaining registrations
   (`failure-modes/ft-crash1`, `ft-crash2`, `ft-deny`, `ft-stopcont`). A PostToolUse failure does not
   (`ft-postcrash` reports both).
@@ -38,8 +43,8 @@ Only the CLI was exercised. Antigravity 2.0 (2.22.0) and Antigravity IDE are ins
 - CLI: installed with the official script into a sandbox HOME, signed in, all five events captured
   (r1 to r5).
 - 2.0 app and IDE: installed (notarized, Google LLC, team EQHXZ8M8AV), but the 2.0 app exits right
-  after launch when started from the agent shell (`task_name_for_pid: (os/kern) failure (5)`), with
-  and without the sandbox HOME. Nothing captured. Needs a person to launch it from Finder and sign in.
+  after launch when started from the agent shell (`task_name_for_pid: (os/kern) failure (5)`,
+  `evidence/app-launch-error.txt`), with and without the sandbox HOME. Nothing captured. Needs a person to launch it from Finder and sign in.
 
 ## #2 MCP tool calls in PreToolUse
 
@@ -81,8 +86,9 @@ Evidence: `r4-subagent-browser.jsonl`, `r4-subagents.stream.jsonl`.
 
 ## #4 Crash, timeout, invalid JSON, deny reason, ask/force_ask, skip-permissions
 
-Each test runs one `touch`, so the filesystem shows whether the tool ran. Files in
-`failure-modes/`.
+Each test runs one `touch`, so the filesystem shows whether the tool ran
+(`evidence/ws-marker-files.txt` lists the markers left behind). Files in `failure-modes/`; the hook
+output for each run is in `failure-modes/controls.json`.
 
 | PreToolUse hook does | Tool ran | What the model gets |
 |---|---|---|
@@ -99,7 +105,7 @@ Each test runs one `touch`, so the filesystem shows whether the tool ran. Files 
   after the tool ran, and the model sees the hook error text as the tool result (`ft-postcrash`).
 - The deny reason reaches the model verbatim in both print mode and the TUI.
 - `ask` / `force_ask`:
-  - TUI: native prompt shows `Reason: <reason>`, the command, and options `1. Yes, run command`,
+  - TUI (live): native prompt shows `Reason: <reason>`, the command, and options `1. Yes, run command`,
     `2. Yes, and always allow in this conversation ...`, ..., `4. No, cancel` (`tui-ask.jsonl`).
     After choosing option 2, a later `ask` runs without a prompt; `force_ask` still prompts.
     Choosing "No, cancel" gives the model `User declined the tool call` and interrupts the turn.
@@ -114,21 +120,23 @@ Each test runs one `touch`, so the filesystem shows whether the tool ran. Files 
 
 ## #5 transcript.jsonl schema, token counts, model ids, titles
 
-Two files per conversation in `<brain>/<id>/.system_generated/logs/`, same lines:
-`transcript.jsonl` (every tool arg value JSON-encoded as a string) and `transcript_full.jsonl`
+Two files per conversation in `<brain>/<id>/.system_generated/logs/`, one line per step in both:
+`transcript.jsonl` (every tool arg value JSON-encoded as a string, long fields cut and listed in
+`truncated_fields`) and `transcript_full.jsonl`
 (typed args; this is the one `transcriptPath` names). One line per step:
 
 | Field | Notes |
 |---|---|
 | `step_index`, `type`, `source`, `status`, `created_at` | type: `USER_INPUT`, `PLANNER_RESPONSE`, `GENERIC` (tool result), `SYSTEM_MESSAGE`, `EPHEMERAL_MESSAGE` |
 | `input_tokens`, `output_tokens`, `cache_read_tokens` | on every `PLANNER_RESPONSE` |
-| `thinking`, `content`, `tool_calls[] {name, args}`, `error`, `truncated_fields[]` | when present |
+| `thinking`, `content`, `tool_calls[] {name, args}`, `error` | when present; `EPHEMERAL_MESSAGE` and `error` appeared in sandbox transcripts not committed here |
 
 - No model id and no title in the transcript. No thinking tokens either.
 - Model id: `modelName` on every hook payload (`gemini-3.8-flash-high`). `agy models` lists ids and
   display names (`transcripts/agy-models.txt`).
 - Title: `conversation_summaries.db` column `title`, and
-  `cache/conversation_metadata.json` `.conversations[id].summary.Title`. Children have an empty title.
+  `~/.gemini/antigravity-cli/cache/conversation_metadata.json` `.conversations[id].summary.Title`
+  (seen in the sandbox, not committed). Children have an empty title.
 - Per-turn totals including `thinking_tokens` are in the `--output-format stream-json` `result`
   event `usage` (print mode only).
 
@@ -140,7 +148,7 @@ CLI only:
 
 - Global `~/.gemini/config/hooks.json`, plugin `~/.gemini/config/plugins/<p>/hooks.json` and
   workspace `<ws>/.agents/hooks.json` all fire (r3, r5). `/hooks` in the TUI lists the plugin as
-  "(workspace)".
+  "(workspace)" (live).
 - Global `~/.gemini/config/mcp_config.json` and the plugin's `mcp_config.json` both load (r3).
 - The config root is `~/.gemini/config/`, separate from the CLI's data dir
   `~/.gemini/antigravity-cli/`. Whether 2.0 and the IDE read the same `~/.gemini/config/` is **not
@@ -168,16 +176,19 @@ was loaded by other work; Linux was not measured (Docker not running).
   while children run.
 - `Stop` returning `{"decision":"continue","reason":R}` starts another execution with R; it caps at
   ten in a row (`executionNum` 0 to 10, `ft-stopcont`).
+- A turn that ends because the user declined an `ask` / `force_ask` emits no PostToolUse,
+  PostInvocation or Stop (`tui-ask.jsonl`, the `m-tui-force` turn).
 - No hook fires for `/exit`, `/clear`, Ctrl-C mid-turn (not even PostToolUse for the interrupted
   tool), or deleting a conversation from `/resume` (F4). Deleting removes its brain dir and summary
-  row (`tui-interrupt.jsonl`, observed in the TUI).
+  row (`tui-interrupt.jsonl` for Ctrl-C; the rest live).
 
 ## Changes made in `packages/protocol/src/index.ts` (separate commit)
 
 - `HookPayload`: `event` is documented as coming from argv; `artifactDirectoryPath` and `modelName`
   are required; added `invocationNum` / `initialNumSteps`, the Stop fields and a required
   `error` on PostToolUse.
-- `HookResponse`: `{}` removed (it denies); `null` added for "print nothing". Stop uses
+- `HookResponse`: `{}` removed and `null` added for "print nothing", because `{}` denies in
+  PreToolUse. `{}` was neutral for the other events in every run; empty stdout there is untested. Stop uses
   `{decision: "continue", reason}` instead of `{continue: boolean}`.
 - Added `MCP_TOOL_NAME`, `McpToolArgs`, `SUBAGENT_TOOL_NAME` and `CONVERSATION_ID_ENV`.
 
