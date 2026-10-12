@@ -87,7 +87,9 @@ jobs:
 
       - name: Fail on error-level findings
         run: |
-          errors=$(jq '[.runs[].results[] | select((.level // "warning") == "error")] | length' codeql-results/*.sarif)
-          jq -r '.runs[].results[] | "\(.level // "warning") \(.ruleId) \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) \(.message.text)"' codeql-results/*.sarif
+          # CodeQL usually leaves result.level unset; the severity is on the rule.
+          levels='.runs[] | ([.tool.driver.rules[]?, .tool.extensions[]?.rules[]?] | map({key: .id, value: (.defaultConfiguration.level // "warning")}) | from_entries) as $rule | .results[] | . + {level: (.level // $rule[.ruleId] // "warning")}'
+          errors=$(jq -s "[.[] | $levels | select(.level == \"error\")] | length" codeql-results/*.sarif)
+          jq -r "$levels"' | "\(.level) \(.ruleId) \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) \(.message.text)"' codeql-results/*.sarif
           echo "error-level findings: $errors"
           [ "$errors" -eq 0 ]

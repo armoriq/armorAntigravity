@@ -58,6 +58,15 @@ async function upstreamBlob(path: string): Promise<string | null> {
 
 if (repoDir === undefined && !token) fail("pass --repo-dir <armorOpenCode clone> or set GH_TOKEN with read access to " + manifest.repo);
 
+// A missing ref or an inaccessible repo must not read as every file removed upstream.
+if (repoDir !== undefined) {
+  const ref = spawnSync("git", ["-C", repoDir, "rev-parse", "--verify", "--quiet", `origin/${manifest.ref}`], { encoding: "utf8" });
+  if (ref.status !== 0) fail(`${repoDir}: no origin/${manifest.ref}; is it an armorOpenCode clone? Run git fetch there first.`);
+} else {
+  const res = await fetch(`https://api.github.com/repos/${manifest.repo}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) fail(`GET repos/${manifest.repo}: ${res.status}; the token cannot read it`);
+}
+
 let moved = 0;
 for (const file of manifest.files) {
   const blob = await upstreamBlob(file.upstream);
