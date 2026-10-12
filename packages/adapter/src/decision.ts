@@ -52,12 +52,12 @@ const NO_OPINION: HookResponse = {};
 // A server and tool no policy can name, to tell a rule about this server from a wildcard.
 const PROBE = { server: "armoriq-unnamed-probe-server", tool: "armoriq_unnamed_probe_tool" };
 
-// Allow returns no opinion rather than "allow", so Antigravity's own
-// permission settings (auto-run, terminal allow lists) still apply.
+// agy treats an empty PreToolUse response as a deny, and a hook allow only
+// narrows its own permission checks, never widens them (P0 spike, spike/p0-hooks).
 export function toHookResponse(decision: AdapterDecision): HookResponse {
   switch (decision.kind) {
     case "allow":
-      return NO_OPINION;
+      return { decision: "allow" } satisfies ToolDecision;
     case "deny":
       return { decision: "deny", reason: `ArmorIQ blocked this call [${decision.code}]: ${decision.reason}` } satisfies ToolDecision;
     case "hold":

@@ -56,6 +56,9 @@ const withTool = (toolCall: { name: string; args: unknown }) => ({ ...stdinOf("p
 const runCommand = (CommandLine: string) => withTool({ name: "run_command", args: { CommandLine, Cwd: "/Users/dev/src/ws" } });
 const writeFile = () => stdinOf("pre-write_to_file");
 
+const ALLOW = { decision: "allow" } as const;
+const NONE = {};
+
 const rule = (id: string, effect: string, tool: string) => ({
   schemaVersion: "armor.policy.v1",
   defaults: { decision: "allow" },
@@ -63,16 +66,16 @@ const rule = (id: string, effect: string, tool: string) => ({
 });
 
 describe("allow", () => {
-  test("an allowed call returns no opinion so Antigravity's own permissions still apply", () => {
+  test("an allowed call returns an explicit allow, since agy denies on an empty response", () => {
     const { handle, records } = setup();
-    expect(handle(hook("PreToolUse", writeFile()))).toEqual({});
+    expect(handle(hook("PreToolUse", writeFile()))).toEqual(ALLOW);
     expect(records[0]).toMatchObject({ status: "allowed", stepIdx: 4, call: { name: "write_to_file", tool: "write_to_file" } });
   });
 
   test("events other than PreToolUse are not judged here", () => {
     const { handle, records } = setup();
-    expect(handle(hook("PreInvocation", stdinOf("pre-invocation")))).toEqual({});
-    expect(handle(hook("PostToolUse", stdinOf("post-run_command")))).toEqual({});
+    expect(handle(hook("PreInvocation", stdinOf("pre-invocation")))).toEqual(NONE);
+    expect(handle(hook("PostToolUse", stdinOf("post-run_command")))).toEqual(NONE);
     expect(records).toEqual([]);
   });
 });
@@ -134,7 +137,7 @@ describe("shell segments (#17)", () => {
   });
 
   test("a command without rm passes", () => {
-    expect(setup({ policy: noRm }).handle(hook("PreToolUse", stdinOf("pre-run_command")))).toEqual({});
+    expect(setup({ policy: noRm }).handle(hook("PreToolUse", stdinOf("pre-run_command")))).toEqual(ALLOW);
   });
 });
 
@@ -143,7 +146,7 @@ describe("backend lists (#28)", () => {
     const requested = ["run_command", "write_to_file"];
     const lists = backendToolLists({ validated: false, requested_tools: requested, allowed_tools: [], denied_tools: requested, held_tools: [], reason: "agent_unresolved" });
     const { handle } = setup({ decide: decideForTest(lists) });
-    expect(handle(hook("PreToolUse", runCommand("npm test")))).toEqual({});
+    expect(handle(hook("PreToolUse", runCommand("npm test")))).toEqual(ALLOW);
   });
 
   test("validated denied_tools deny with backend_denied_tool", () => {
@@ -174,20 +177,20 @@ describe("MCP server gate (#19)", () => {
 
   test("monitor mode does not gate", () => {
     const { handle } = setup();
-    expect(handle(hook("PreToolUse", mcpRaw(), "monitor"))).toEqual({});
+    expect(handle(hook("PreToolUse", mcpRaw(), "monitor"))).toEqual(ALLOW);
   });
 
   test("an approved server passes, a denied one is blocked", () => {
     const log = memoryLog();
     const gate = createMcpGate({ access: () => null, log, ownServer: "armoriq", initial: new Map([["agspike-global", "approved"], ["evil", "denied"]]) });
     const { handle } = setup({ gate });
-    expect(handle(hook("PreToolUse", mcpRaw()))).toEqual({});
+    expect(handle(hook("PreToolUse", mcpRaw()))).toEqual(ALLOW);
     const evil = withTool({ name: "call_mcp_tool", args: { ServerName: "evil", ToolName: "exfil", Arguments: {} } });
     expect(handle(hook("PreToolUse", evil))).toEqual({ decision: "deny", reason: 'ArmorIQ blocked this call [mcp_server_denied]: MCP server "evil" is denied on this device' });
   });
 
   test("policy can allow a server's tool or forbid it", () => {
-    expect(setup({ policy: rule("echo", "permit", "mcp_agspike_global_echo") }).handle(hook("PreToolUse", mcpRaw()))).toEqual({});
+    expect(setup({ policy: rule("echo", "permit", "mcp_agspike_global_echo") }).handle(hook("PreToolUse", mcpRaw()))).toEqual(ALLOW);
     expect(setup({ policy: rule("no-echo", "forbid", "mcp_agspike_global_echo") }).handle(hook("PreToolUse", mcpRaw()))).toMatchObject({ decision: "deny" });
   });
 
@@ -211,7 +214,7 @@ describe("MCP server gate (#19)", () => {
 
   test("ArmorIQ's own tools are never gated", () => {
     const own = withTool({ name: "call_mcp_tool", args: { ServerName: "armoriq", ToolName: "register_intent_plan", Arguments: { goal: "fix cart" } } });
-    expect(setup().handle(hook("PreToolUse", own))).toEqual({});
+    expect(setup().handle(hook("PreToolUse", own))).toEqual(ALLOW);
   });
 });
 
@@ -224,7 +227,7 @@ describe("failures", () => {
       decision: "deny",
       reason: "ArmorIQ blocked this call [internal_error]: ArmorIQ could not check this call: Error: session store unavailable",
     });
-    expect(setup({ decide }).handle(hook("PreToolUse", runCommand("ls"), "monitor"))).toEqual({});
+    expect(setup({ decide }).handle(hook("PreToolUse", runCommand("ls"), "monitor"))).toEqual(ALLOW);
   });
 
   test("a throwing observer does not change the response", () => {
