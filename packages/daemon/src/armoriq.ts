@@ -14,7 +14,7 @@ import {
   type SessionPair,
 } from "@armorantigravity/adapter";
 import { DEFAULT_POLICY_SOURCE, toAuditRow, type AuditStatus, type CompiledPolicy, type Decision, type Session as CoreSession, type SessionID, type ToolCall as CoreToolCall } from "@armorantigravity/core";
-import { callIdOf, evidencePlugin, type EvidenceRecorder } from "@armorantigravity/evidence";
+import { callIdOf, createAgySource, evidencePlugin, type EvidenceRecorder } from "@armorantigravity/evidence";
 import {
   conversationKey,
   createIntentRuntime,
@@ -39,8 +39,20 @@ type OpenCall = { readonly surface: Surface; readonly call: CoreToolCall; readon
 // Evidence is set up first so the guard can hand it every decision; the daemon runs setups in order.
 export function armoriqPlugins(): readonly DaemonPlugin[] {
   let recorder: EvidenceRecorder | null = null;
+  // agy's transcript names no model; every hook payload does, and hooks arrive before the turn end
+  // that reads the transcript.
+  const models = new Map<string, string>();
+  const source = createAgySource({ cliHome: path.join(homedir(), ".gemini", "antigravity-cli"), modelOf: (id) => models.get(id) });
   return [
-    evidencePlugin({ onRecorder: (r) => (recorder = r) }),
+    {
+      name: "models",
+      setup: () => ({
+        observe(event) {
+          if (event.kind === "hook" && event.hook.payload.modelName) models.set(event.hook.payload.conversationId, event.hook.payload.modelName);
+        },
+      }),
+    },
+    evidencePlugin({ source, onRecorder: (r) => (recorder = r) }),
     {
       name: "guard",
       setup(ctx) {

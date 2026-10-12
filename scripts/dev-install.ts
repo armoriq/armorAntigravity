@@ -60,7 +60,7 @@ function install(backend: string): void {
     writeFileSync(manifestPath, after);
   }
   console.log(`installed into ${home}`);
-  console.log(`log in with: armoriq login --product armorantigravity --backend ${backend}`);
+  console.log(`log in with: ARMORIQ_BACKEND_URL=${backend} armoriq login --product armorantigravity`);
   console.log("a running armoriq-agd reads its config at start; stop it to pick up changes");
 }
 
@@ -167,9 +167,12 @@ function deletePath(doc: JsonObject, key: readonly string[]): JsonObject {
 
 // mcp_config.json and hooks.json accept comments and trailing commas (PRD N2).
 function readJsonObject(file: string): JsonObject {
+  const text = readFileSync(file, "utf8");
+  // agy creates an empty mcp_config.json on first run.
+  if (text.trim() === "") return {};
   let parsed: unknown;
   try {
-    parsed = Bun.JSONC.parse(readFileSync(file, "utf8"));
+    parsed = Bun.JSONC.parse(text);
   } catch (error) {
     fail(`${file} is not valid JSON or JSONC (${String(error)}); fix it or move it aside`);
   }
