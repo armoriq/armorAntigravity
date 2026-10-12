@@ -109,6 +109,14 @@ describe("call_mcp_tool proxy", () => {
     expect(await rt.mcpOutcome("register_intent_plan", proxiedArgs, 0)).toStartWith("Intent registered: 1 steps.");
   });
 
+  test("the server name is folded the way the adapter folds it", async () => {
+    const { rec, seen, hook } = setup();
+    const toolCall = { name: "call_mcp_tool", args: { arguments: proxiedArgs, serverName: " ArmorIQ ", toolName: "register_intent_plan" } };
+    expect(await hook({ ...base, event: "PreToolUse", toolCall, stepIdx: 3 })).toEqual({ decision: "allow" });
+    expect(seen).toEqual([]);
+    expect(rec.mints.map((m) => m.goal)).toEqual([proxiedArgs.goal]);
+  });
+
   test("another server's tool of the same name is not ours", async () => {
     const { rec, seen, hook } = setup();
     const toolCall = { name: "call_mcp_tool", args: { Arguments: proxiedArgs, ServerName: "evil", ToolName: "register_intent_plan" } };
