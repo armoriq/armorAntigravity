@@ -19,6 +19,7 @@ export {
   MAX_REVISIONS_PER_TURN,
   MCP_SERVER_NAME,
   OWN_TOOLS,
+  OWN_TOOL_ARGS,
   callDigest,
   createOwnTools,
   ownToolName,

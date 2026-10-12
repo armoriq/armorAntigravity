@@ -199,8 +199,13 @@ describe("MCP outcome hand-off", () => {
     expect(await pending).toBe("No registered plan to revoke.");
   });
 
+  test("digests ignore the toolAction and toolSummary Antigravity adds to hook args", () => {
+    expect(callDigest("trust_revoke", { reason: "done", toolAction: "Revoking plan", toolSummary: "Revoke" })).toBe(callDigest("trust_revoke", { reason: "done" }));
+    expect(callDigest("trust_revoke", { reason: "done" })).not.toBe(callDigest("trust_revoke", { reason: "other" }));
+  });
+
   test("digests ignore key order", () => {
-    expect(callDigest("trust_revoke", { a: 1, b: { c: 2, d: 3 } })).toBe(callDigest("trust_revoke", { b: { d: 3, c: 2 }, a: 1 }));
+    expect(callDigest("register_intent_plan", { goal: "g", plan: { b: 1, c: 2 } })).toBe(callDigest("register_intent_plan", { plan: { c: 2, b: 1 }, goal: "g" }));
   });
 
   test("a duplicate PreToolUse for the same step acts once and publishes one outcome", async () => {

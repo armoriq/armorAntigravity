@@ -6,6 +6,16 @@ import { AGENT_ID, CLIENT_ID, conversationKey, type AuditRow, type ConversationK
 export const OWN_TOOLS = ["register_intent_plan", "trust_reanchor", "trust_revoke", "trust_delegate", "policy_read"] as const;
 export type OwnTool = (typeof OWN_TOOLS)[number];
 
+// The argument names each tool declares in the MCP server's schema (ArmorOpenCode tools/intent.ts plus
+// ArmorClaude's trust_delegate).
+export const OWN_TOOL_ARGS: Readonly<Record<OwnTool, readonly string[]>> = {
+  register_intent_plan: ["goal", "steps", "plan", "reason"],
+  trust_reanchor: ["updatedPlan", "reason"],
+  trust_revoke: ["reason"],
+  trust_delegate: ["delegatePublicKey", "subtreePath", "validitySeconds", "targetAgent"],
+  policy_read: ["tool"],
+};
+
 export const MCP_SERVER_NAME = "armoriq";
 export const MAX_REVISIONS_PER_TURN = 2;
 
@@ -35,9 +45,12 @@ function stable(value: unknown): unknown {
 }
 
 // MCP calls carry no conversation id, so the MCP server finds the outcome the hook computed for the same
-// call by tool name plus a digest of the arguments.
+// call by tool name plus a digest of the arguments. Only declared arguments count: the hook payload also
+// carries Antigravity's own toolAction and toolSummary (spike capture), which the MCP server never sees.
 export function callDigest(tool: OwnTool, args: unknown): string {
-  return createHash("sha256").update(JSON.stringify([tool, stable(args ?? {})])).digest("hex");
+  const record = isPlainObject(args) ? args : {};
+  const declared = Object.fromEntries(OWN_TOOL_ARGS[tool].filter((k) => record[k] !== undefined).map((k) => [k, record[k]]));
+  return createHash("sha256").update(JSON.stringify([tool, stable(declared)])).digest("hex");
 }
 
 export interface OwnToolDeps {
