@@ -31,9 +31,30 @@ describe("parseShell: every segment of a compound command", () => {
     ["command substitution", `echo "$(rm -rf x)"`, ["echo", "rm"]],
     ["backticks", "echo `curl x`", ["echo", "curl"]],
     // Words after a process substitution's `)` read as a new command: more checks, never fewer.
+    ["if/then/fi", "if true; then rm x; fi", ["true", "rm", "fi"]],
+    ["negation", "! rm x", ["rm"]],
+    ["while/do", "while true; do rm x; done", ["true", "rm", "done"]],
+    ["coproc", "coproc rm x", ["rm"]],
+    ["ANSI-C hex", String.raw`$'\x72m' -rf x`, ["rm"]],
+    ["ANSI-C octal", String.raw`$'\162\155' x`, ["rm"]],
     ["process substitution", "diff <(curl a) b", ["diff", "curl", "b"]],
   ])("%s", (_label, command, expected) => {
     expect(programs(command)).toEqual(expected);
+  });
+
+  test("variables assigned on the line are expanded in later commands", () => {
+    const r = parseShell("F=~/x; export D=/tmp/d; rm $F ${D}/y $UNSET", { cwd: null, home });
+    expect(r.ok && r.segments.map((s) => s.argv)).toEqual([[], ["export", "D=/tmp/d"], ["rm", "~/x", "/tmp/d/y", "$UNSET"]]);
+  });
+
+  test("raw keeps wrappers that argv drops", () => {
+    const r = parseShell("sudo -u root env A=1 rm x", { cwd: null, home });
+    expect(r.ok && r.segments.map((s) => [s.raw, s.argv])).toEqual([[["sudo", "-u", "root", "env", "A=1", "rm", "x"], ["rm", "x"]]]);
+  });
+
+  test("input marks commands reading a pipe, a file or a heredoc", () => {
+    const r = parseShell("echo x | python3; node < s.js; ruby <<<'p 1'; ls", { cwd: null, home });
+    expect(r.ok && r.segments.map((s) => s.input)).toEqual([false, true, true, true, false]);
   });
 
   test("xargs marks its command as fed from stdin", () => {

