@@ -22,7 +22,8 @@ export type ToolVocabulary = {
   // The name plan steps and calls are compared by. Both sides pass through it,
   // so ArmorClaude-style names in a plan reach the native tool they mean.
   canonical(name: string): string;
-  // Every native tool a policy action selector value reaches, the value itself included.
+  // Every native tool a policy action selector value reaches, the value itself
+  // included. Names must be lowercase: calls are looked up by lowercased tool name.
   policyNames(value: string): readonly string[];
   // The names a native tool answers to in `tool.name` conditions.
   nameReadings(tool: string): readonly string[];
@@ -31,7 +32,8 @@ export type ToolVocabulary = {
   // Spellings of a policy's `mcp.server` value as it appears in native names.
   mcpServerNames(server: string): readonly string[];
   // Argument fields that name a filesystem location, per tool, for the
-  // ~/.armoriq protection. Content fields must not be listed.
+  // ~/.armoriq protection. Only string values are read; content fields must
+  // not be listed. A tool taking a list of paths needs multiFileEdit instead.
   pathFields: ReadonlyMap<string, readonly string[]>;
   // The root of a recursive search that reads hidden files, or null.
   searchRoot(call: ToolCall): string | null;
