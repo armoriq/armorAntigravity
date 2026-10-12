@@ -31,11 +31,23 @@ function isOwnTool(name: string): name is OwnTool {
 
 const OWN_PREFIXES = [`mcp_${MCP_SERVER_NAME}_`, `mcp__${MCP_SERVER_NAME}__`];
 
-// Hooks report our MCP tools as mcp_armoriq_<tool> (the spike's capture of mcp_<server>_<tool>).
 export function ownToolName(name: string): OwnTool | null {
   const prefix = OWN_PREFIXES.find((p) => name.toLowerCase().startsWith(p));
   const bare = prefix ? name.slice(prefix.length) : name;
   return isOwnTool(bare) ? bare : null;
+}
+
+const MCP_CALL_TOOL = "call_mcp_tool";
+
+// The main agent reaches mcp_config.json servers through call_mcp_tool with ServerName, ToolName and Arguments
+// (live agy CLI run); a per-tool mcp_<server>_<tool> name was captured only for the built-in browser server.
+export function ownToolCall(name: string, args: unknown): { readonly tool: OwnTool; readonly args: unknown } | null {
+  if (name !== MCP_CALL_TOOL) {
+    const tool = ownToolName(name);
+    return tool ? { tool, args } : null;
+  }
+  if (!isPlainObject(args) || args.ServerName !== MCP_SERVER_NAME || typeof args.ToolName !== "string" || !isOwnTool(args.ToolName)) return null;
+  return { tool: args.ToolName, args: args.Arguments };
 }
 
 function stable(value: unknown): unknown {

@@ -22,6 +22,7 @@ export {
   OWN_TOOL_ARGS,
   callDigest,
   createOwnTools,
+  ownToolCall,
   ownToolName,
   type OwnTool,
   type OwnToolDeps,

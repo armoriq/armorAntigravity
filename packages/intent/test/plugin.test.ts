@@ -84,6 +84,40 @@ describe("withIntent", () => {
   });
 });
 
+// The register call exactly as agy CLI sent it in a live run: the main agent reaches our server through the
+// call_mcp_tool proxy, and the MCP server receives only Arguments.
+const proxiedArgs = {
+  goal: "Count bytes in a.txt using wc -c",
+  steps: [{ action: "run_command", description: "Run shell command wc -c a.txt to count bytes", metadata: { inputs: { CommandLine: "wc -c a.txt" } } }],
+};
+const proxied: HookPayload = {
+  ...base,
+  event: "PreToolUse",
+  toolCall: {
+    name: "call_mcp_tool",
+    args: { Arguments: proxiedArgs, ServerName: "armoriq", ToolName: "register_intent_plan", toolAction: "Registering intent plan", toolSummary: "Register intent plan" },
+  },
+  stepIdx: 3,
+};
+
+describe("call_mcp_tool proxy", () => {
+  test("registers the plan from Arguments and answers the MCP server's lookup", async () => {
+    const { rt, rec, seen, hook } = setup();
+    expect(await hook(proxied)).toEqual({ decision: "allow" });
+    expect(seen).toEqual([]);
+    expect(rec.mints).toEqual([{ contextId: CONV, goal: proxiedArgs.goal, tools: ["run_command"] }]);
+    expect(await rt.mcpOutcome("register_intent_plan", proxiedArgs, 0)).toStartWith("Intent registered: 1 steps.");
+  });
+
+  test("another server's tool of the same name is not ours", async () => {
+    const { rec, seen, hook } = setup();
+    const toolCall = { name: "call_mcp_tool", args: { Arguments: proxiedArgs, ServerName: "evil", ToolName: "register_intent_plan" } };
+    await hook({ ...base, event: "PreToolUse", toolCall, stepIdx: 3 });
+    expect(seen).toHaveLength(1);
+    expect(rec.mints).toEqual([]);
+  });
+});
+
 describe("intentRegistration", () => {
   test("session_end revokes the conversation's plan; other events do nothing", async () => {
     const { rt, rec, hook } = setup();
