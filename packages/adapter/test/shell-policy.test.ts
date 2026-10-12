@@ -36,9 +36,21 @@ describe("segmentedPolicy", () => {
     ["bash -c", `bash -c "rm x"`],
     ["a command substitution", `echo "$(rm x)"`],
     ["xargs", "ls | xargs rm"],
+    ["an if/then body", "if true; then rm -rf /; fi"],
+    ["a negated command", "! rm -rf /"],
+    ["a loop body", "while true; do rm -rf /; done"],
+    ["coproc", "true && coproc rm -rf /"],
+    ["ANSI-C quoting", String.raw`ls; $'\x72m' -rf /`],
   ])("forbids %s the first word does not show", (_label, command) => {
     expect(wrap(programPolicy({ rm: "forbid" })).evaluate(shellCall(command))).toMatchObject({ effect: "forbid", ruleId: "rule-rm" });
   });
+
+  test.each([["sudo", "ls && sudo ls"], ["env", "env -i ls"], ["xargs", "ls | xargs cat"], ["timeout", "timeout 5 ls"]])(
+    "a rule on the wrapper %s applies wherever it appears",
+    (wrapper, command) => {
+      expect(wrap(programPolicy({ [wrapper]: "forbid" })).evaluate(shellCall(command))).toMatchObject({ effect: "forbid", ruleId: `rule-${wrapper}` });
+    },
+  );
 
   test("approval in any segment holds the whole command", () => {
     expect(wrap(programPolicy({ git: "require_approval" })).evaluate(shellCall("npm ci && git push")).effect).toBe("require_approval");

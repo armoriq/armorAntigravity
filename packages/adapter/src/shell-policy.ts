@@ -26,9 +26,13 @@ export function segmentedPolicy(
           ? { effect: "require_approval", ruleId: "shell-unparsed", reason: "ArmorIQ could not split this command into its parts to check each one" }
           : whole;
       }
+      // Each segment is judged as the program it runs and, when a wrapper
+      // such as sudo or xargs fronts it, as written, so rules on either apply.
+      const texts = new Set(parsed.segments.flatMap((seg) => [segmentText(seg), segmentText({ ...seg, argv: seg.raw })]));
       let worst = whole;
-      for (const segment of parsed.segments) {
-        const v = policy.evaluate({ ...call, args: { ...call.args, command: segmentText(segment) } });
+      for (const text of texts) {
+        if (!text) continue;
+        const v = policy.evaluate({ ...call, args: { ...call.args, command: text } });
         if (SEVERITY[v.effect] > SEVERITY[worst.effect]) worst = v;
         if (v.effect === "forbid") break;
       }
