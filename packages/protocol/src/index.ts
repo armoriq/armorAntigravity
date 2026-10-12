@@ -22,7 +22,9 @@ interface BasePayload {
 export type HookPayload =
   | (BasePayload & { readonly event: "PreToolUse"; readonly toolCall: ToolCall; readonly stepIdx: number })
   | (BasePayload & { readonly event: "PostToolUse"; readonly toolCall: ToolCall; readonly stepIdx: number; readonly error?: string })
-  | (BasePayload & { readonly event: "PreInvocation" | "PostInvocation" | "Stop" });
+  // invocationNum counts model invocations within one user message and is 0 on the first (spike capture, agy CLI).
+  | (BasePayload & { readonly event: "PreInvocation" | "PostInvocation"; readonly invocationNum?: number })
+  | (BasePayload & { readonly event: "Stop" });
 
 export type ToolDecision =
   | { readonly decision: "allow" }
