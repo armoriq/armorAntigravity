@@ -75,6 +75,16 @@ test("login and logout through the SDK flip the mode within the debounce", async
   expect(a.mode()).toBe("monitor");
 });
 
+test("a login saved under the ARMORIQ_API_KEY already in use fills in the identity", async () => {
+  mkdirSync(path.join(sandbox.home, ".armoriq"), { recursive: true });
+  const a = start({}, { ARMORIQ_API_KEY: "ak_1" });
+  expect(a.state()).toMatchObject({ kind: "active", login: { apiKey: "ak_1", userId: "" } });
+
+  const identified = nextChange(a);
+  save(STAGING, "armorantigravity", "ak_1");
+  expect(await identified).toMatchObject({ kind: "active", login: { apiKey: "ak_1", userId: "user-1", orgId: "org-1" } });
+});
+
 test("a deleted ~/.armoriq falls back to polling and picks up a later login", async () => {
   const a = start();
   expect(a.state().kind).toBe("logged_out");

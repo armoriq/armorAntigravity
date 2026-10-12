@@ -229,6 +229,6 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
 function sameState(a: AuthState, b: AuthState): boolean {
   if (a.kind !== b.kind) return false;
   if (!("login" in a) || !("login" in b)) return true;
-  if (a.login !== b.login && loginBinding(a.login) !== loginBinding(b.login)) return false;
+  if (a.login !== b.login && (loginBinding(a.login) !== loginBinding(b.login) || a.login.userId !== b.login.userId)) return false;
   return a.kind !== "refused" || b.kind !== "refused" || a.code === b.code;
 }
