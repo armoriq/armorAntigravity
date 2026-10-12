@@ -16,6 +16,10 @@
     {"upstream": "src/core/builtin-rules.ts", "local": "packages/core/src/builtin-rules.ts", "blob": "897bfa74a98fe3339820ca713f5706f96bedff24"},
     {"upstream": "test/core/builtin-rules.test.ts", "local": "packages/core/test/builtin-rules.test.ts", "blob": "12af9f97f481f29891336d9e7087eacb3308df4f"},
     {"upstream": "src/core/decide.ts", "local": "packages/core/src/decide.ts", "blob": "ffffadac8cae942b0e3086c1e779dc44a7fe2c3b"},
-    {"upstream": "test/core/decide.test.ts", "local": "packages/core/test/decide.test.ts", "blob": "cb3d2d0b5b85f69c05e21568ae6fbbae39d70a04"}
+    {"upstream": "test/core/decide.test.ts", "local": "packages/core/test/decide.test.ts", "blob": "cb3d2d0b5b85f69c05e21568ae6fbbae39d70a04"},
+    {"upstream": "src/core/audit.ts", "local": "packages/core/src/audit.ts", "blob": "7056202fd4cf6dfc05d8a739a3a50ed06a7b4564"},
+    {"upstream": "test/core/audit.test.ts", "local": "packages/core/test/audit.test.ts", "blob": "f4ef00b9046b319a47ca81cd1969ab10b7ce76f6"},
+    {"upstream": "src/core/usage.ts", "local": "packages/core/src/usage.ts", "blob": "1db9e0c57df28a3e74f6048faef62a883c50e49e"},
+    {"upstream": "test/core/usage.test.ts", "local": "packages/core/test/usage.test.ts", "blob": "8c63fa501ae90c1108f8d1272e0f0677b32e79fc"}
   ]
 }

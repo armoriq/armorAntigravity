@@ -1,4 +1,6 @@
 import type { ProductConfig, ToolVocabulary } from "../product.ts";
+import type { SessionID, StepUsage, TokenUsageEntry } from "../types.ts";
+import { sessionTitle, type SessionTitle } from "../usage.ts";
 
 // armorOpenCode's product config, kept so the vendored tests prove parity
 // with upstream and as the reference for other adapters.
@@ -130,3 +132,46 @@ export const OPENCODE: ProductConfig = {
   titleSource: "opencode-session-title",
   tools: OPENCODE_VOCABULARY,
 };
+
+const count = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+
+// A step-finish part carries that step's tokens; message.tokens holds only the last step.
+// OpenCode reports reasoning separately from output; ArmorCodex counts reasoning inside outputTokens, so it is added back.
+export function stepUsageFromPart(
+  part: unknown,
+  modelOf: (messageId: string) => string | null,
+  repo: string,
+  at: number = Date.now(),
+): StepUsage | null {
+  if (!isStepFinish(part)) return null;
+  const t = part.tokens ?? {};
+  const entry: TokenUsageEntry = {
+    model: modelOf(part.messageID) ?? "unknown",
+    inputTokens: count(t.input),
+    outputTokens: count(t.output) + count(t.reasoning),
+    cacheReadTokens: count(t.cache?.read),
+    cacheWriteTokens: count(t.cache?.write),
+  };
+  if (entry.inputTokens + entry.outputTokens + entry.cacheReadTokens + entry.cacheWriteTokens === 0) return null;
+  const reasoningTokens = count(t.reasoning);
+  return { sessionId: part.sessionID as SessionID, messageId: part.messageID, partId: part.id, at, repo, entry, reasoningTokens };
+}
+
+type StepFinish = { id: string; sessionID: string; messageID: string; tokens?: Record<string, any> };
+
+function isStepFinish(part: unknown): part is StepFinish {
+  if (!part || typeof part !== "object") return false;
+  const p = part as Record<string, unknown>;
+  return p.type === "step-finish" && typeof p.id === "string" && typeof p.sessionID === "string" && typeof p.messageID === "string";
+}
+
+const PLACEHOLDER_TITLE = /^(New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+// OpenCode does not move time.updated on a rename, so the title is stamped when the plugin sees it.
+export function titleFromSession(info: unknown, at: number = Date.now()): SessionTitle | null {
+  if (!info || typeof info !== "object") return null;
+  const { id, title } = info as { id?: unknown; title?: unknown };
+  if (typeof id !== "string" || typeof title !== "string") return null;
+  if (PLACEHOLDER_TITLE.test(title.trim())) return null;
+  return sessionTitle(id, title, OPENCODE.titleSource, at);
+}
