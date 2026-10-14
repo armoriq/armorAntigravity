@@ -220,14 +220,18 @@ export function canonicalToolName(name: string, options: MapOptions = {}): strin
 const EDIT_FAMILY = ["replace_file_content", "multi_replace_file_content"];
 const SUBAGENT_TOOLS = ["invoke_subagent", "define_subagent", "send_message", "manage_subagents"];
 
-// Every Antigravity tool a policy selector value reaches, the value's own
-// canonical name included. For the core's ToolVocabulary.policyNames.
+// Every Antigravity tool a policy selector value reaches, the value itself
+// included, all lowercase (core's ToolVocabulary.policyNames contract).
 export function policyNames(value: string, options: MapOptions = {}): string[] {
   const lower = value.trim().toLowerCase();
-  if (lower === "task" || lower === "agent") return SUBAGENT_TOOLS;
-  if (lower === "apply_patch") return ["write_to_file", ...EDIT_FAMILY];
-  const tool = canonicalToolName(value, options);
-  return EDIT_FAMILY.includes(tool) ? EDIT_FAMILY : [tool];
+  let reached: readonly string[];
+  if (lower === "task" || lower === "agent") reached = SUBAGENT_TOOLS;
+  else if (lower === "apply_patch") reached = ["write_to_file", ...EDIT_FAMILY];
+  else {
+    const tool = canonicalToolName(value, options).toLowerCase();
+    reached = EDIT_FAMILY.includes(tool) ? EDIT_FAMILY : [tool];
+  }
+  return [...new Set([lower, ...reached])];
 }
 
 // ArmorClaude's name for each tool, so a `tool.name` condition written for

@@ -1,6 +1,7 @@
 export { isHookEvent, parseHookPayload, type ParseResult } from "./payload.ts";
 export {
   canonicalToolName,
+  BUILTIN_MCP_SERVERS,
   DEFAULT_OWN_MCP_SERVER,
   isReadOnly,
   mapToolCall,
@@ -40,3 +41,4 @@ export {
   type DecisionRecord,
   type HookInput,
 } from "./decision.ts";
+export { ANTIGRAVITY, ANTIGRAVITY_TOOLS, compileAntigravityPolicy, createCoreDecide, type SessionPair } from "./product.ts";

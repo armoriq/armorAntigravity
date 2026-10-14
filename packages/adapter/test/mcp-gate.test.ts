@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createMcpGate, parseServerList } from "../src/mcp-gate.ts";
 import { stubBackend } from "./support/backend.ts";
-import { memoryLog } from "./support/policy.ts";
+import { memoryLog } from "./support/log.ts";
 
 const stops: (() => void)[] = [];
 afterEach(() => stops.splice(0).forEach((s) => s()));

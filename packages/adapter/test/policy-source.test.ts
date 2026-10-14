@@ -6,7 +6,9 @@ import type { BackendAccess } from "../src/backend-http.ts";
 import type { CoreToolCall, SessionID } from "../src/core-contract.ts";
 import { createPolicySource, type PolicySource } from "../src/policy-source.ts";
 import { stubBackend } from "./support/backend.ts";
-import { compileForTest, DEFAULT_POLICY, memoryLog } from "./support/policy.ts";
+import { DEFAULT_POLICY_SOURCE } from "@armorantigravity/core";
+import { compileAntigravityPolicy } from "../src/product.ts";
+import { memoryLog } from "./support/log.ts";
 
 const call = (tool: string): CoreToolCall => ({ sessionId: "c0ffee00" as SessionID, callId: "1", tool, args: {} });
 
@@ -35,8 +37,8 @@ function source(opts: { access?: () => BackendAccess | null; refreshMs?: number;
   const log = memoryLog();
   const src = createPolicySource({
     path,
-    compile: compileForTest,
-    defaultSource: DEFAULT_POLICY,
+    compile: compileAntigravityPolicy,
+    defaultSource: DEFAULT_POLICY_SOURCE,
     access: opts.access ?? (() => null),
     log,
     pollMs: 10,
