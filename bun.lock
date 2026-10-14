@@ -30,6 +30,10 @@
         "armoriq-agd": "./src/main.ts",
       },
       "dependencies": {
+        "@armorantigravity/adapter": "workspace:*",
+        "@armorantigravity/core": "workspace:*",
+        "@armorantigravity/evidence": "workspace:*",
+        "@armorantigravity/intent": "workspace:*",
         "@armorantigravity/protocol": "workspace:*",
         "@armoriq/sdk-dev": "^0.8.17",
       },
@@ -106,7 +110,7 @@
 
     "@armoriq/sdk-dev": ["@armoriq/sdk-dev@0.8.17", "", { "dependencies": { "@opentelemetry/api": "^1.9.1", "@opentelemetry/core": "^2.10.0", "@opentelemetry/exporter-trace-otlp-http": "^0.221.0", "@opentelemetry/otlp-exporter-base": "^0.221.0", "@opentelemetry/otlp-transformer": "^0.221.0", "@opentelemetry/resources": "^2.10.0", "@opentelemetry/sdk-trace-base": "^2.10.0", "@opentelemetry/sdk-trace-node": "^2.10.0", "axios": "^1.7.0", "js-yaml": "^4.1.1" }, "bin": { "armoriq-dev": "dist/cli/index.js" } }, "sha512-PC9HiUNfL55LpkK2ZzQHoghTnLlLKGCTToom/rbtvUUID25jLJLV9Dbe62QdbP7HKxKNexYmgCksFdS39A7QHQ=="],
 
-    "@hono/node-server": ["@hono/node-server@2.1.5", "", { "peerDependencies": { "hono": "^4 || ^5.0.0-0" } }, "sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q=="],
+    "@hono/node-server": ["@hono/node-server@2.1.4", "", { "peerDependencies": { "hono": "^4 || ^5.0.0-0" } }, "sha512-2g1qeHl4BduwDn6L8nkAvDrPUWPMlkQ//a5NhP/zIyaXKMjZNRV+cG9Csu+BiJFf6+68pqzjf4Hi5sJGKHuS1g=="],
 
     "@modelcontextprotocol/sdk": ["@modelcontextprotocol/sdk@1.32.1", "", { "dependencies": { "@hono/node-server": "^1.19.9 || ^2.0.5", "ajv": "^8.17.1", "ajv-formats": "^3.0.1", "content-type": "^1.0.5", "cors": "^2.8.5", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.0", "express": "^5.2.1", "express-rate-limit": "^8.2.1", "hono": "^4.11.4", "jose": "^6.1.3", "json-schema-typed": "^8.0.2", "pkce-challenge": "^5.0.0", "raw-body": "^3.0.0", "zod": "^3.25 || ^4.0", "zod-to-json-schema": "^3.25.1" }, "peerDependencies": { "@cfworker/json-schema": "^4.1.1" }, "optionalPeers": ["@cfworker/json-schema"] }, "sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw=="],
 

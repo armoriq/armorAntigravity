@@ -135,8 +135,8 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
     const span = {
       kind: "tool" as const,
       call,
-      ok: payload.error === undefined,
-      output: payload.error ?? "",
+      ok: payload.error === "",
+      output: payload.error,
       durationMs: begun === undefined ? null : Math.max(0, hook.receivedAt - begun),
       at: hook.receivedAt,
     };
@@ -149,7 +149,8 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
     const fresh: ModelCall[] = [];
     for (const s of steps) {
       const key = `${s.messageId}:${s.partId}`;
-      if (s.at < since || seenCalls.has(key)) continue;
+      // agy stamps transcript steps to the whole second; the turn start has milliseconds.
+      if (s.at < Math.floor(since / 1000) * 1000 || seenCalls.has(key)) continue;
       seenCalls.add(key);
       fresh.push({ key, at: s.at, ...s.entry });
     }

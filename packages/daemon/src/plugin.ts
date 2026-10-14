@@ -43,10 +43,15 @@ export interface DaemonContext {
   readonly sessions: Pick<SessionStore, "get" | "all">;
 }
 
+// Answers the intent MCP server's mcp_outcome request with the text the PreToolUse hook produced for the
+// same tool and arguments, or null once waitMs passes.
+export type McpOutcomeHandler = (tool: string, args: unknown, waitMs: number) => Promise<string | null>;
+
 export interface PluginRegistration {
   readonly decide?: DecisionHandler;
   readonly observe?: EventObserver;
   readonly pumps?: readonly Pump[];
+  readonly mcpOutcome?: McpOutcomeHandler;
 }
 
 export interface DaemonPlugin {
