@@ -74,6 +74,8 @@ export type CompiledPolicy = {
 export type AuditStatus = "success" | "failed" | "error" | "blocked" | "held";
 
 export type AuditRow = {
+  // Backend CreateAuditLogDto dedupe key (UUID); armorOpenCode does not send it yet.
+  client_row_id?: string;
   plan_id?: string;
   session_id: string;
   agent_id?: string;
