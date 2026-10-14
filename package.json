@@ -2,13 +2,17 @@
   "name": "armorantigravity",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*"],
+  "packageManager": "bun@1.4.3",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "bun scripts/test.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -b",
+    "check:core-sync": "bun scripts/check-core-sync.ts"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.0",
-    "typescript": "^5.9.3"
+    "@types/bun": "1.4.3",
+    "typescript": "5.9.3"
   }
 }

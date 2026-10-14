@@ -1,0 +1,25 @@
+{
+  "_note": "Control rule per run, read by spike/hooks/logger.py from ctl.json. Recovered from the run log, except ft-deny and ft-emptyobj, reconstructed from the reason text and the {} capture they produced.",
+  "ft-crash1": {"PreToolUse:run_command": {"action": "crash", "exit": 1}},
+  "ft-crash2": {"PreToolUse:run_command": {"action": "crash", "exit": 2}},
+  "ft-invalid": {"PreToolUse:run_command": {"action": "invalid"}},
+  "ft-empty": {"PreToolUse:run_command": {"action": "empty"}},
+  "ft-emptyobj": {"PreToolUse:run_command": {"action": "respond", "response": {}}},
+  "ft-hang": {"PreToolUse:run_command": {"action": "hang", "seconds": 45}},
+  "ft-deny": {"PreToolUse:run_command": {"action": "respond", "response": {"decision": "deny", "reason": "ARMORIQ-MARKER-7731 blocked by policy"}}},
+  "ft-ask": {"PreToolUse:run_command": {"action": "respond", "response": {"decision": "ask", "reason": "ARMORIQ-ASK-MARKER"}}},
+  "ft-forceask": {"PreToolUse:run_command": {"action": "respond", "response": {"decision": "force_ask", "reason": "ARMORIQ-FORCEASK-MARKER"}}},
+  "ft-postcrash": {"PostToolUse": {"action": "crash", "exit": 1}},
+  "ft-preinvcrash": {"PreInvocation": {"action": "crash", "exit": 1}},
+  "ft-ask-noskip": {"PreToolUse:run_command": {"action": "respond", "response": {"decision": "ask", "reason": "ARMORIQ-ASK-MARKER"}}},
+  "ft-allowoverride-noskip": {"PreToolUse:run_command": {"action": "respond", "response": {"decision": "allow", "permissionOverrides": ["command(touch)"]}}},
+  "ft-allowexact-noskip": {"PreToolUse:run_command": {"action": "respond", "response": {"decision": "allow", "permissionOverrides": ["command(touch /tmp/agspike/ws/m-allowexact-noskip)"]}}},
+  "ft-deny-noskip": {"PreToolUse:run_command": {"action": "respond", "response": {"decision": "deny", "reason": "ARMORIQ-MARKER-noskip"}}},
+  "ft-stopcont": {"Stop": {"action": "respond", "response": {"decision": "continue", "reason": "ARMORIQ-STOP-MARKER: reply with the word CONTINUED"}}},
+  "tui-ask": [
+    {"PreToolUse:run_command": {"action": "respond", "response": {"decision": "ask", "reason": "ARMORIQ-ASK-TUI reason text"}}},
+    {"PreToolUse:run_command": {"action": "respond", "response": {"decision": "force_ask", "reason": "ARMORIQ-FORCEASK-TUI reason"}}},
+    {"PreToolUse:run_command": {"action": "respond", "response": {"decision": "deny", "reason": "ARMORIQ-DENY-TUI reason"}}}
+  ],
+  "default": "PreToolUse with no rule prints {\"decision\": \"allow\"}; every other event with no rule prints {}"
+}

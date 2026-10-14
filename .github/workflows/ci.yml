@@ -1,30 +1,38 @@
-name: ci
+name: CI
 
 on:
-  pull_request:
   push:
-    branches: [prd]
+    branches: [dev, prd]
+  pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    name: Test and typecheck
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.3
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run test
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx tsc -b
+
+      - name: Run tests
+        run: bun run test
+
       - name: Verify the systemd user unit
-        if: runner.os == 'Linux'
         run: |
           (cd packages/daemon && bun run build)
           sed "s#@AGD_BIN@#$PWD/packages/daemon/dist/armoriq-agd#" packages/daemon/service/armoriq-agd.service > "$RUNNER_TEMP/armoriq-agd.service"
@@ -32,6 +40,7 @@ jobs:
 
   # PRD section 6 budgets for the compiled client against the compiled daemon. Results go to the job summary.
   latency:
+    name: Hook latency
     strategy:
       fail-fast: false
       matrix:
@@ -39,9 +48,78 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.3
+          bun-version-file: .bun-version
+
       - run: bun install --frozen-lockfile
       - run: (cd packages/daemon && bun run build) && (cd packages/hook && bun run build)
       - run: bun packages/hook/bench/latency.ts --samples 100
+
+  # armorOpenCode is private, so this runs only when ARMOROPENCODE_READ_TOKEN
+  # (read access to that repo) is set; otherwise it reports the skip.
+  core-sync:
+    name: Core upstream sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Compare vendored core with armorOpenCode dev
+        env:
+          GH_TOKEN: ${{ secrets.ARMOROPENCODE_READ_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::ARMOROPENCODE_READ_TOKEN is not set; run 'bun run check:core-sync --repo-dir <armorOpenCode clone>' locally."
+            exit 0
+          fi
+          bun scripts/check-core-sync.ts
+
+  # Code security (GitHub Advanced Security) is off for this private repo, so
+  # results cannot be uploaded to code scanning. The analysis still runs, keeps
+  # the SARIF as an artifact, and fails the job on any error-level finding.
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+          # Tests hold hostile fixtures on purpose, such as the backtracking
+          # patterns the linear regex engine is checked against.
+          config: |
+            paths-ignore:
+              - "**/test/**"
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          upload: never
+          output: codeql-results
+
+      - name: Upload SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif
+          path: codeql-results
+          if-no-files-found: ignore
+
+      - name: Fail on error-level findings
+        run: |
+          # CodeQL usually leaves result.level unset; the severity is on the rule.
+          levels='.runs[] | ([.tool.driver.rules[]?, .tool.extensions[]?.rules[]?] | map({key: .id, value: (.defaultConfiguration.level // "warning")}) | from_entries) as $rule | .results[] | . + {level: (.level // $rule[.ruleId] // "warning")}'
+          errors=$(jq -s "[.[] | $levels | select(.level == \"error\")] | length" codeql-results/*.sarif)
+          jq -r "$levels"' | "\(.level) \(.ruleId) \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) \(.message.text)"' codeql-results/*.sarif
+          echo "error-level findings: $errors"
+          [ "$errors" -eq 0 ]

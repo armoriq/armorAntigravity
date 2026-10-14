@@ -146,12 +146,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
       raw = JSON.parse(line);
     } catch {
       log.warn("unparseable request line");
-      return { reply: { v: PROTOCOL_VERSION, id: "", response: {} }, event: null };
+      return { reply: { v: PROTOCOL_VERSION, id: "", response: null }, event: null };
     }
     const envelope = parseEnvelope(raw);
     if (!envelope.ok) {
       log.warn("rejected request", { reason: envelope.reason, id: envelope.id });
-      const response = envelope.event ? fallbackResponse(envelope.event, mode, "protocol_mismatch", envelope.reason) : {};
+      const response = envelope.event ? fallbackResponse(envelope.event, mode, "protocol_mismatch", envelope.reason) : null;
       return { reply: { v: PROTOCOL_VERSION, id: envelope.id, response }, event: null };
     }
     const { id, event, receivedAt } = envelope;

@@ -1,0 +1,11 @@
+{
+  "name": "@armorantigravity/core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "@armoriq/sdk-dev": "0.8.17"
+  }
+}

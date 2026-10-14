@@ -9,6 +9,8 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "declaration": true,
-    "composite": true
+    "composite": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   }
 }

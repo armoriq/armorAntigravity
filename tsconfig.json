@@ -1,11 +1,32 @@
 {
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "composite": false,
-    "declaration": false,
-    "noEmit": true,
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true
-  },
-  "include": ["packages/*/src", "packages/*/test", "packages/*/bench"]
+  "files": [],
+  "references": [
+    {
+      "path": "packages/protocol"
+    },
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/adapter"
+    },
+    {
+      "path": "scripts"
+    },
+    {
+      "path": "packages/evidence"
+    },
+    {
+      "path": "packages/intent"
+    },
+    {
+      "path": "packages/mcp"
+    },
+    {
+      "path": "packages/daemon"
+    },
+    {
+      "path": "packages/hook"
+    }
+  ]
 }
