@@ -24,24 +24,32 @@ export type ShellSegment = {
 
 export type ShellParse = { readonly ok: true; readonly segments: readonly ShellSegment[] } | { readonly ok: false };
 
+// `{` and `}` only delimit a group as standalone words; inside a word they are brace expansion.
 const SEPARATOR = /^(&&|\|\||[;|&\n(){}])$/;
 const TOKEN =
-  /[ \t]*(?:(&&|\|\||&>>?|\d*>&(?:\d+|-)|\d*>>?\|?|\d*<<<|\d*<<-?|\d*<&(?:\d+|-)|\d*<>?|[;|&\n(){}])|((?:\$'(?:\\[^]|[^'\\])*'|\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|"(?:\\.|[^"\\])*"|'[^']*'|\\[^]|[^\s"'`\\;&|<>(){}$]|\$)+))/y;
+  /[ \t]*(?:(&&|\|\||&>>?|\d*>&(?:\d+|-)|\d*>>?\|?|\d*<<<|\d*<<-?|\d*<&(?:\d+|-)|\d*<>?|[;|&\n()]|\{(?=[ \t\n])|\}(?=[ \t\n;|&)]|$))|((?:\$'(?:\\[^]|[^'\\])*'|\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|"(?:\\.|[^"\\])*"|'[^']*'|\\[^]|[^\s"'`\\;&|<>()$]|\$)+))/y;
 
 type Wrapper = { readonly withValue?: ReadonlySet<string>; readonly positional?: number; readonly stdin?: boolean };
 const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
-  ["sudo", { withValue: new Set(["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"]) }],
+  ["sudo", { withValue: new Set(["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "--user", "--group", "--chdir", "--host", "--prompt", "--role", "--type", "--other-user", "--close-from"]) }],
   ["doas", { withValue: new Set(["-u", "-C"]) }],
-  ["env", { withValue: new Set(["-u", "-C", "-S"]) }],
-  ["nice", { withValue: new Set(["-n"]) }],
+  ["env", { withValue: new Set(["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]) }],
+  ["nice", { withValue: new Set(["-n", "--adjustment"]) }],
+  ["ionice", { withValue: new Set(["-c", "-n", "-p", "--class", "--classdata"]) }],
   ["exec", { withValue: new Set(["-a"]) }],
-  ["timeout", { withValue: new Set(["-s", "-k"]), positional: 1 }],
-  ["xargs", { withValue: new Set(["-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a"]), stdin: true }],
+  ["timeout", { withValue: new Set(["-s", "-k", "--signal", "--kill-after"]), positional: 1 }],
+  ["xargs", { withValue: new Set(["-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file", "--replace"]), stdin: true }],
+  ["stdbuf", { withValue: new Set(["-i", "-o", "-e", "--input", "--output", "--error"]) }],
+  ["caffeinate", { withValue: new Set(["-t", "-w"]) }],
+  ["flock", { withValue: new Set(["-w", "-E", "--timeout", "--conflict-exit-code"]), positional: 1 }],
+  ["chrt", { positional: 1 }],
+  ["taskset", { positional: 1 }],
+  ["setsid", {}],
   ["nohup", {}],
   ["command", {}],
   ["builtin", {}],
   ["time", {}],
-  ["stdbuf", {}],
+  ["unbuffer", {}],
 ]);
 
 // Reserved words that can sit in front of a command without being it.
@@ -65,7 +73,7 @@ function ansiC(body: string): string {
 
 function unquote(raw: string): string {
   return raw.replace(
-    /\$'((?:\\[^]|[^'\\])*)'|\\([^])|"((?:\\.|[^"\\])*)"|'([^']*)'/g,
+    /\$'((?:\\[^]|[^'\\])*)'|\\([^])|\$?"((?:\\.|[^"\\])*)"|'([^']*)'/g,
     (_m, ansi?: string, escaped?: string, dq?: string, sq?: string) => (ansi !== undefined ? ansiC(ansi) : (escaped ?? dq?.replace(/\\(.)/g, "$1") ?? sq ?? "")),
   );
 }
@@ -178,6 +186,10 @@ function shellScript(argv: readonly string[]): string | null {
   return null;
 }
 
+export function isShellWithScript(argv: readonly string[]): boolean {
+  return shellScript(argv) !== null;
+}
+
 export function expandHome(word: string, home: string): string {
   return word.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, home);
 }
@@ -209,6 +221,8 @@ function parseAt(command: string, cwd: string | null, home: string, vars: Map<st
     const { argv, stdin } = unwrap(raw);
     const name = path.basename(argv[0] ?? "");
     if (name === "cd" || name === "pushd") base = changeDir(argv.slice(1), base, home);
+    // popd returns to a directory this parser no longer knows.
+    if (name === "popd") base = null;
     segments.push({ argv, raw, redirects, stdin, input: simple.input, cwd: base });
 
     const nested: string[] = [];

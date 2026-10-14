@@ -12,6 +12,7 @@
     "packages/adapter": {
       "name": "@armorantigravity/adapter",
       "dependencies": {
+        "@armorantigravity/core": "workspace:*",
         "@armorantigravity/protocol": "workspace:*",
         "zod": "^4.6.6",
       },
