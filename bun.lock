@@ -12,9 +12,25 @@
     "packages/daemon": {
       "name": "@armorantigravity/daemon",
       "version": "0.1.0",
+      "bin": {
+        "armoriq-agd": "./src/main.ts",
+      },
       "dependencies": {
         "@armorantigravity/protocol": "workspace:*",
         "@armoriq/sdk-dev": "^0.8.17",
+      },
+    },
+    "packages/hook": {
+      "name": "@armorantigravity/hook",
+      "version": "0.1.0",
+      "bin": {
+        "agd-hook": "./src/main.ts",
+      },
+      "dependencies": {
+        "@armorantigravity/protocol": "workspace:*",
+      },
+      "devDependencies": {
+        "@armorantigravity/daemon": "workspace:*",
       },
     },
     "packages/protocol": {
@@ -23,6 +39,8 @@
   },
   "packages": {
     "@armorantigravity/daemon": ["@armorantigravity/daemon@workspace:packages/daemon"],
+
+    "@armorantigravity/hook": ["@armorantigravity/hook@workspace:packages/hook"],
 
     "@armorantigravity/protocol": ["@armorantigravity/protocol@workspace:packages/protocol"],
 
