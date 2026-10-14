@@ -69,12 +69,15 @@ export function checkIntent({ root, tool, args, readOnly, now }: IntentCheckInpu
 
 const HINTED: ReadonlySet<IntentDenyCode> = new Set(["intent_drift", "intent_plan_missing", "intent_token_expired"]);
 const HINT_VALUE_MAX = 200;
+// Antigravity adds these to every hook's args as UI labels; they are not tool inputs and change per call.
+const UI_ARGS: ReadonlySet<string> = new Set(["toolAction", "toolSummary"]);
 
 // Only short scalar inputs go into the hint: a write_to_file body would otherwise be echoed back whole,
 // and inputs are advisory, so a long value adds nothing to the match.
 function hintInputs(args: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
   const kept = Object.entries(args).filter(
-    ([, v]) => typeof v === "number" || typeof v === "boolean" || (typeof v === "string" && v.length <= HINT_VALUE_MAX),
+    ([k, v]) =>
+      !UI_ARGS.has(k) && (typeof v === "number" || typeof v === "boolean" || (typeof v === "string" && v.length <= HINT_VALUE_MAX)),
   );
   return kept.length ? Object.fromEntries(kept) : null;
 }
