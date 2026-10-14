@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [prd]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      - name: Verify the systemd user unit
+        if: runner.os == 'Linux'
+        run: |
+          (cd packages/daemon && bun run build)
+          sed "s#@AGD_BIN@#$PWD/packages/daemon/dist/armoriq-agd#" packages/daemon/service/armoriq-agd.service > "$RUNNER_TEMP/armoriq-agd.service"
+          systemd-analyze verify "$RUNNER_TEMP/armoriq-agd.service"
+
+  # PRD section 6 budgets for the compiled client against the compiled daemon. Results go to the job summary.
+  latency:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: (cd packages/daemon && bun run build) && (cd packages/hook && bun run build)
+      - run: bun packages/hook/bench/latency.ts --samples 100
