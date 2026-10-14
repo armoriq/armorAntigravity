@@ -106,19 +106,22 @@ describe("built-in guard (#16)", () => {
 });
 
 describe("native approval (#18)", () => {
-  test("policy require_approval returns force_ask and a held record", () => {
+  test("policy require_approval blocks with a held record", () => {
     const { handle, records } = setup({ policy: rule("approve-writes", "require_approval", "write_to_file") });
     const res = handle(hook("PreToolUse", writeFile()));
-    expect(res).toEqual({ decision: "force_ask", reason: "ArmorIQ needs your approval: ArmorIQ policy requires approval: approve-writes" });
+    expect(res).toEqual({
+      decision: "deny",
+      reason: "ArmorIQ blocked this call until it is approved [approval_required]: ArmorIQ policy requires approval: approve-writes",
+    });
     expect(records[0]).toMatchObject({ status: "held", decision: { kind: "hold", ruleId: "approve-writes" }, response: res });
   });
 
-  test("backend held_tools return force_ask", () => {
+  test("backend held_tools block with a held record", () => {
     const lists = backendToolLists({ validated: true, denied_tools: [], held_tools: ["write_to_file"] });
     const { handle, records } = setup({ decide: decideWith(lists) });
     expect(handle(hook("PreToolUse", writeFile()))).toEqual({
-      decision: "force_ask",
-      reason: "ArmorIQ needs your approval: ArmorIQ holds write_to_file for approval",
+      decision: "deny",
+      reason: "ArmorIQ blocked this call until it is approved [approval_required]: ArmorIQ holds write_to_file for approval",
     });
     expect(records[0]?.status).toBe("held");
   });
