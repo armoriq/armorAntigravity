@@ -22,7 +22,9 @@ interface BasePayload {
 export type HookPayload =
   | (BasePayload & { readonly event: "PreToolUse"; readonly toolCall: ToolCall; readonly stepIdx: number })
   | (BasePayload & { readonly event: "PostToolUse"; readonly toolCall: ToolCall; readonly stepIdx: number; readonly error?: string })
-  | (BasePayload & { readonly event: "PreInvocation" | "PostInvocation" | "Stop" });
+  // invocationNum counts model invocations within one user message and is 0 on the first (spike capture, agy CLI).
+  | (BasePayload & { readonly event: "PreInvocation" | "PostInvocation"; readonly invocationNum?: number })
+  | (BasePayload & { readonly event: "Stop" });
 
 export type ToolDecision =
   | { readonly decision: "allow" }
@@ -56,3 +58,20 @@ export interface DaemonResponse {
 
 export const SOCKET_PATH_ENV = "ARMORANTIGRAVITY_SOCKET";
 export const DEFAULT_SOCKET_PATH = "~/.armoriq/armorantigravity/agd.sock";
+
+// The intent MCP server's request on the same socket. MCP calls carry no conversation id, so the server asks
+// for the outcome the PreToolUse hook already produced for the same tool and arguments.
+export interface McpOutcomeRequest {
+  readonly v: typeof PROTOCOL_VERSION;
+  readonly id: string;
+  readonly kind: "mcp_outcome";
+  readonly tool: string;
+  readonly args: unknown;
+  readonly waitMs: number;
+}
+
+export interface McpOutcomeResponse {
+  readonly v: typeof PROTOCOL_VERSION;
+  readonly id: string;
+  readonly text: string | null;
+}
