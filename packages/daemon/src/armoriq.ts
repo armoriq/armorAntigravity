@@ -108,7 +108,9 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder): Plug
   const auditRow = (surface: Surface, call: CoreToolCall, decision: Decision, status: AuditStatus, extra: { at: number; durationMs: number | null; error: string | null }) => {
     const { session, root } = sessions(surface, call.sessionId);
     const login = auth.uploadLogin();
-    const row = toAuditRow({ call, session, root, status, decision, output: null, ...extra, userId: login?.userId || undefined, userEmail: login?.email || undefined }, ANTIGRAVITY);
+    // Logged out is monitor mode: nothing is recorded, so no row can upload later under no user.
+    if (!login) return;
+    const row = toAuditRow({ call, session, root, status, decision, output: null, ...extra, userId: login.userId || undefined, userEmail: login.email || undefined }, ANTIGRAVITY);
     recorder.audit(row, { surface });
   };
 
