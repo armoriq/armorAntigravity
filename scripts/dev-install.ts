@@ -86,7 +86,22 @@ function uninstall(): void {
       unlinkSync(p);
     }
   }
+  stopDaemon();
   console.log(`uninstalled from ${home}`);
+}
+
+// The daemon holds its lock file with flock and writes its pid there; once the hooks are gone
+// nothing would ever stop it.
+function stopDaemon(): void {
+  const lock = path.join(home, ".armoriq", "armorantigravity", "agd.sock.lock");
+  const pid = existsSync(lock) ? Number.parseInt(readFileSync(lock, "utf8"), 10) : Number.NaN;
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(pid, "SIGTERM");
+    console.log(`stopped armoriq-agd (pid ${pid})`);
+  } catch {
+    // Already gone.
+  }
 }
 
 function build(pkg: string, binary: string): string {
