@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { expandHome, parseShell, type ShellSegment } from "./shell.ts";
+import { expandHome, isShellWithScript, parseShell, type ShellSegment } from "./shell.ts";
 import type { MappedCall } from "./tools.ts";
 
 export type GuardContext = {
@@ -30,8 +30,23 @@ const WRITES_OPERANDS = new Set(["tee", "truncate", "touch", "sponge", "ex", "vi
 const REMOVES_OPERANDS = new Set(["rm", "rmdir", "unlink", "shred", "chmod", "chown", "chattr", "chflags"]);
 const INTO_DESTINATION = new Set(["cp", "install", "ln", "rsync"]);
 const STDIN_WRITERS = new Set([...WRITES_OPERANDS, ...REMOVES_OPERANDS, ...INTO_DESTINATION, "mv", "sed", "dd"]);
-// Inline code or a script on stdin can write any file.
-const INTERPRETERS = new Set(["node", "nodejs", "bun", "deno", "python", "python3", "perl", "ruby", "php", "osascript", "awk", "jq", "sh", "bash", "zsh", "dash", "ksh", "fish"]);
+// Inline code or a script on stdin can write any file. jq cannot, so it is not here.
+const INTERPRETERS = new Set(["node", "nodejs", "bun", "deno", "python", "python2", "python3", "perl", "ruby", "php", "osascript", "awk", "gawk", "sh", "bash", "zsh", "dash", "ksh", "fish"]);
+// Flags whose value is a program, per interpreter. Short ones may sit at the end of a cluster (`perl -pe`).
+const CODE_FLAGS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["node", ["-e", "-p", "--eval", "--print"]],
+  ["nodejs", ["-e", "-p", "--eval", "--print"]],
+  ["bun", ["-e", "-p", "--eval", "--print"]],
+  ["deno", ["eval"]],
+  ["python", ["-c"]],
+  ["python2", ["-c"]],
+  ["python3", ["-c"]],
+  ["perl", ["-e", "-E"]],
+  ["ruby", ["-e"]],
+  ["php", ["-r"]],
+  ["osascript", ["-e"]],
+]);
+const GUARD_NAMES_FOR_SCRIPTS = new Set(["awk", "gawk"]);
 const GIT_WORKTREE = new Set(["checkout", "restore", "reset", "clean", "stash", "apply", "am", "pull", "merge", "rebase", "switch", "cherry-pick", "revert"]);
 
 function operands(args: readonly string[]): { files: string[]; targetDir: string | undefined } {
@@ -94,7 +109,9 @@ function commandTargets(argv: readonly string[], cwd: string | null): Targets {
     case "dd":
       return { writes: args.filter((a) => a.startsWith("of=")).map((a) => a.slice(3)), removes: [] };
     case "find": {
-      const destructive = args.some((a) => ["-delete", "-exec", "-execdir", "-ok", "-okdir"].includes(a));
+      // -exec only counts when what it runs can change files.
+      const execs = args.flatMap((a, i) => (["-exec", "-execdir", "-ok", "-okdir"].includes(a) ? [path.basename(args[i + 1] ?? "")] : []));
+      const destructive = args.includes("-delete") || execs.some((c) => STDIN_WRITERS.has(c) || INTERPRETERS.has(c));
       const end = args.findIndex((a) => a.startsWith("-") || a === "(" || a === "!");
       const roots = (end === -1 ? args : args.slice(0, end)).filter((a) => !a.startsWith("-"));
       return destructive ? { writes: [], removes: roots.length ? roots : here } : none;
@@ -120,8 +137,8 @@ function commandTargets(argv: readonly string[], cwd: string | null): Targets {
       return { writes: [...operands(args).files.slice(0, 1), ...flagValues(args, ["-o"], ["--output"])], removes: dirs.length ? dirs : here };
     }
     case "git": {
-      const dirs = flagValues(args, ["-C"], []);
-      const sub = args.find((a, i) => !a.startsWith("-") && args[i - 1] !== "-C");
+      const dirs = flagValues(args, ["-C"], ["--work-tree"]);
+      const sub = args.find((a, i) => !a.startsWith("-") && args[i - 1] !== "-C" && args[i - 1] !== "--work-tree" && args[i - 1] !== "--git-dir");
       return sub !== undefined && GIT_WORKTREE.has(sub) ? { writes: [], removes: dirs.length ? dirs : here } : none;
     }
     case "ln": {
@@ -182,6 +199,8 @@ const fold = (p: string) => realish(p).toLowerCase();
 
 class Matcher {
   private readonly roots: { shown: string; key: string }[];
+  // The whole command, for words the lexer cannot resolve on their own.
+  line = "";
   // Each root and each directory above it below home (".gemini", ".gemini/config"),
   // as text a command may contain, longest first.
   private readonly mentionable: { text: string; shown: string }[];
@@ -204,9 +223,12 @@ class Matcher {
   // The protected root a path word reaches, or null. `removal` also counts a
   // parent directory, since deleting or replacing it reaches the guard files.
   hit(word: string, base: string | null, removal: boolean): string | null {
-    const expanded = expandHome(word.replace(/^file:\/\//, ""), this.ctx.home);
+    const expanded = expandHome(word.replace(/^file:\/\/(localhost)?/i, ""), this.ctx.home);
+    // An unknown variable, a loop variable, a substitution or a brace
+    // expansion: what it names is only visible in the rest of the line.
+    if (/[$`]|\{[^}]*,[^}]*\}/.test(expanded)) return this.mentions(word) ?? this.mentions(this.line);
     const absolute = path.isAbsolute(expanded) ? expanded : base ? path.join(base, expanded) : null;
-    if (absolute === null || /[$`]/.test(expanded)) return this.mentions(word);
+    if (absolute === null) return this.named(word);
     if (/[*?[]/.test(absolute)) {
       const glob = path.normalize(absolute);
       const slash = glob.lastIndexOf("/", glob.search(/[*?[]/));
@@ -217,6 +239,12 @@ class Matcher {
     }
     const target = fold(absolute);
     return this.roots.find((root) => isUnder(target, root.key) || (removal && isUnder(root.key, target)))?.shown ?? null;
+  }
+
+  // A relative word when the directory is unknown: only its name can be compared.
+  named(word: string): string | null {
+    const name = path.basename(word).toLowerCase();
+    return this.roots.find((root) => path.basename(root.shown).toLowerCase() === name)?.shown ?? null;
   }
 
   // A guard path, or a directory above it under home, written out in free text.
@@ -233,6 +261,33 @@ class Matcher {
   }
 }
 
+// Code an interpreter runs: an inline program, or the line itself when the
+// program arrives on stdin. A script file's contents cannot be seen; perl and
+// ruby -i edit their operands in place.
+function interpreterHit(seg: ShellSegment, name: string, m: Matcher, command: string): string | null {
+  const args = seg.argv.slice(1);
+  const flags = CODE_FLAGS.get(name) ?? [];
+  const code: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    const clustered = /^-[A-Za-z]+$/.test(a) && flags.some((f) => f.length === 2 && f.startsWith("-") && a.endsWith(f.slice(1)));
+    if ((flags.includes(a) || clustered) && args[i + 1] !== undefined) code.push(args[++i] ?? "");
+  }
+  const operands = args.filter((a) => !a.startsWith("-") && !code.includes(a));
+  if (GUARD_NAMES_FOR_SCRIPTS.has(name) && code.length === 0 && operands[0] !== undefined) code.push(operands[0]);
+  for (const c of code) {
+    const hit = m.mentions(c);
+    if (hit) return hit;
+  }
+  if ((name === "perl" || name === "ruby") && args.some((a) => /^-[A-Za-z]*i/.test(a))) {
+    for (const f of operands) {
+      const hit = m.hit(f, seg.cwd, false);
+      if (hit) return hit;
+    }
+  }
+  return code.length === 0 && operands.length === 0 && seg.input ? m.mentions(command) : null;
+}
+
 function segmentHit(seg: ShellSegment, m: Matcher, command: string, allWords: readonly string[]): string | null {
   const name = path.basename(seg.argv[0] ?? "");
   if (seg.stdin && STDIN_WRITERS.has(name)) {
@@ -241,9 +296,8 @@ function segmentHit(seg: ShellSegment, m: Matcher, command: string, allWords: re
       if (hit) return hit;
     }
   }
-  if (INTERPRETERS.has(name)) {
-    // Inline code, or a script piped or redirected in: the whole line is the program text.
-    const hit = seg.input ? m.mentions(command) : seg.argv.slice(1).map((w) => m.mentions(w)).find((h) => h !== null);
+  if (INTERPRETERS.has(name) && !isShellWithScript(seg.argv)) {
+    const hit = interpreterHit(seg, name, m, command);
     if (hit) return hit;
   }
   const { writes, removes } = commandTargets(seg.argv, seg.cwd);
@@ -261,6 +315,7 @@ function segmentHit(seg: ShellSegment, m: Matcher, command: string, allWords: re
 // The protected path a shell line would write, move, delete or re-permission.
 export function shellWritesGuard(command: string, cwd: string | null, ctx: GuardContext): string | null {
   const m = new Matcher(ctx);
+  m.line = command;
   const parsed = parseShell(command, { cwd, home: ctx.home });
   if (!parsed.ok) return m.mentions(command);
   const allWords = parsed.segments.flatMap((s) => [...s.raw, ...s.redirects]);
@@ -282,7 +337,7 @@ const MUTATING = /(delete|remove|move|rename|rm|write|edit|create|copy|mv|put|up
 function argPaths(value: unknown, out: string[] = [], depth = 0): string[] {
   if (out.length > 200 || depth > 6) return out;
   if (typeof value === "string") {
-    if (/^(~|\$HOME|\$\{HOME\}|\/|file:\/\/)/.test(value)) out.push(decodeURIComponentSafe(value));
+    if (/^(~|\$HOME|\$\{HOME\}|\/|file:\/\/)/i.test(value)) out.push(decodeURIComponentSafe(value));
   } else if (Array.isArray(value)) {
     for (const v of value) argPaths(v, out, depth + 1);
   } else if (typeof value === "object" && value !== null) {
@@ -293,7 +348,7 @@ function argPaths(value: unknown, out: string[] = [], depth = 0): string[] {
 
 function decodeURIComponentSafe(s: string): string {
   try {
-    return s.startsWith("file://") ? decodeURIComponent(s) : s;
+    return /^file:\/\//i.test(s) ? decodeURIComponent(s) : s;
   } catch {
     return s;
   }
