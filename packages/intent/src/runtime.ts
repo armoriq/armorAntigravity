@@ -2,7 +2,7 @@ import type { HookPayload, HookResponse, Surface, ToolDecision } from "@armorant
 import { basename, dirname } from "node:path";
 import { createSdkBackend, type ClientIdentity } from "./backend.ts";
 import { INTENT_DIRECTIVE, planningDraftNote } from "./directive.ts";
-import { createOwnTools, ownToolName, type OwnTool } from "./own-tools.ts";
+import { createOwnTools, ownToolCall, type OwnTool } from "./own-tools.ts";
 import { isPlainObject } from "./plan.ts";
 import { createTokenPump } from "./pump.ts";
 import { createRegistry, type Conversation, type Registry } from "./registry.ts";
@@ -125,9 +125,9 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     },
 
     async ownToolDecision(surface, payload) {
-      const tool = ownToolName(payload.toolCall.name);
-      if (!tool) return null;
-      await tools.handle(refOf(surface, payload), tool, payload.toolCall.args, payload.stepIdx);
+      const call = ownToolCall(payload.toolCall.name, payload.toolCall.args);
+      if (!call) return null;
+      await tools.handle(refOf(surface, payload), call.tool, call.args, payload.stepIdx);
       return { decision: "allow" };
     },
 

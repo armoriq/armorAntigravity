@@ -19,8 +19,10 @@ export {
   MAX_REVISIONS_PER_TURN,
   MCP_SERVER_NAME,
   OWN_TOOLS,
+  OWN_TOOL_ARGS,
   callDigest,
   createOwnTools,
+  ownToolCall,
   ownToolName,
   type OwnTool,
   type OwnToolDeps,
@@ -32,3 +34,4 @@ export { CHECK_EVERY_MS, IDLE_AFTER_STOP_MS, REFRESH_BEFORE_MS, createTokenPump,
 export { INTENT_DIRECTIVE } from "./directive.ts";
 export { createSubagentLinker, type SubagentLinker } from "./subagents.ts";
 export { createIntentRuntime, type IntentRuntime, type IntentRuntimeOptions } from "./runtime.ts";
+export { intentRegistration, withIntent, type IntentDaemonEvent, type IntentHook, type IntentRegistration } from "./plugin.ts";

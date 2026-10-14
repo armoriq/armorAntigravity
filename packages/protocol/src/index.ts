@@ -58,3 +58,20 @@ export interface DaemonResponse {
 
 export const SOCKET_PATH_ENV = "ARMORANTIGRAVITY_SOCKET";
 export const DEFAULT_SOCKET_PATH = "~/.armoriq/armorantigravity/agd.sock";
+
+// The intent MCP server's request on the same socket. MCP calls carry no conversation id, so the server asks
+// for the outcome the PreToolUse hook already produced for the same tool and arguments.
+export interface McpOutcomeRequest {
+  readonly v: typeof PROTOCOL_VERSION;
+  readonly id: string;
+  readonly kind: "mcp_outcome";
+  readonly tool: string;
+  readonly args: unknown;
+  readonly waitMs: number;
+}
+
+export interface McpOutcomeResponse {
+  readonly v: typeof PROTOCOL_VERSION;
+  readonly id: string;
+  readonly text: string | null;
+}
