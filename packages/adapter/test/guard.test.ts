@@ -204,3 +204,43 @@ describe("ordinary work is not blocked", () => {
     expect(shell(command)).toBeNull();
   });
 });
+
+describe("second review", () => {
+  test.each([
+    ["stdbuf", "stdbuf -o L rm ~/.gemini/config/hooks.json", HOOKS],
+    ["timeout --signal", "timeout --signal KILL 5 rm ~/.gemini/config/hooks.json", HOOKS],
+    ["sudo --user", "sudo --user root rm ~/.gemini/config/hooks.json", HOOKS],
+    ["setsid", "setsid rm ~/.gemini/config/hooks.json", HOOKS],
+    ['$"..." quoting', 'rm ~/$".gemini"/config/hooks.json', HOOKS],
+    ["cd -", "cd ~/.gemini/config; cd /tmp; cd -; rm hooks.json", HOOKS],
+    ["cd into a glob", "cd ~/.gemini/conf* && rm hooks.json", HOOKS],
+    ["cd into a substitution", "cd $(echo ~/.gemini/config) && rm hooks.json", HOOKS],
+    ["popd", "pushd ~/.gemini/config && pushd /tmp && popd && rm hooks.json", HOOKS],
+    ["for loop", "for f in ~/.gemini/config/hooks.json; do rm $f; done", HOOKS],
+    ["env-prefixed bash -c", "F=~/.gemini/config/hooks.json bash -c 'rm $F'", HOOKS],
+    ["parameter expansion", 'F=~/.gemini/config/hooks.json; rm "${F%.json}.json"', HOOKS],
+    ["read into a variable", "read F <<< ~/.gemini/config/hooks.json; rm $F", HOOKS],
+    ["brace expansion", "tee ~/.gemini/config/hook{s,}.json < /dev/null", "/Users/dev/.gemini/config"],
+    ["git --work-tree", "git --work-tree ~/.gemini/config checkout -- .", HOOKS],
+    ["perl -i", "perl -pi -e 's/a/b/' ~/.gemini/config/hooks.json", HOOKS],
+    ["bash script on stdin", "echo 'rm ~/.gemini/config/hooks.json' | bash", HOOKS],
+  ])("%s", (_label, command, expected) => {
+    expect(shell(command)).toBe(expected);
+  });
+
+  test("an upper-case FILE:// URI in MCP arguments", () => {
+    expect(checkGuard(mapToolCall({ name: "call_mcp_tool", args: { ServerName: "fs", ToolName: "write_file", Arguments: { uri: `FILE://${HOOKS}` } } }), ctx)?.path).toBe(HOOKS);
+  });
+
+  test.each([
+    "cat ~/.gemini/config/hooks.json | jq .",
+    "jq . ~/.gemini/config/hooks.json",
+    "bash -c 'cat ~/.gemini/config/hooks.json'",
+    "python3 -m json.tool ~/.gemini/config/mcp_config.json",
+    "find ~ -name '*.md' -exec grep -l foo {} +",
+    "cat ~/.gemini/config/hooks.json | python3 -c 'import json,sys; print(json.load(sys.stdin))'",
+    "perl -ne 'print if /armoriq/' ~/.gemini/config/hooks.json",
+  ])("reading guard files stays allowed: %s", (command) => {
+    expect(shell(command)).toBeNull();
+  });
+});

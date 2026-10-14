@@ -47,6 +47,22 @@ describe("parseShell: every segment of a compound command", () => {
     expect(r.ok && r.segments.map((s) => s.argv)).toEqual([[], ["export", "D=/tmp/d"], ["rm", "~/x", "/tmp/d/y", "$UNSET"]]);
   });
 
+  test("braces inside a word are expansion, standalone ones a group", () => {
+    const r = parseShell("tee a{b,c}.txt; { rm x; }", { cwd: null, home });
+    expect(r.ok && r.segments.map((s) => s.argv)).toEqual([["tee", "a{b,c}.txt"], ["rm", "x"]]);
+  });
+
+  test.each([
+    ["stdbuf -o L rm x"],
+    ["timeout --signal KILL 5 rm x"],
+    ["sudo --user root rm x"],
+    ["setsid rm x"],
+    ["flock /tmp/l rm x"],
+  ])("wrapper with long or positional options: %s", (command) => {
+    const r = parseShell(command, { cwd: null, home });
+    expect(r.ok && r.segments.map((s) => s.argv[0])).toEqual(["rm"]);
+  });
+
   test("raw keeps wrappers that argv drops", () => {
     const r = parseShell("sudo -u root env A=1 rm x", { cwd: null, home });
     expect(r.ok && r.segments.map((s) => [s.raw, s.argv])).toEqual([[["sudo", "-u", "root", "env", "A=1", "rm", "x"], ["rm", "x"]]]);

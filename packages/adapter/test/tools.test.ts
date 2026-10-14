@@ -171,13 +171,14 @@ describe("canonicalToolName: ArmorClaude and OpenCode aliases for plans", () => 
 
 describe("policy vocabulary", () => {
   test.each([
-    ["Bash", ["run_command"]],
+    ["Bash", ["bash", "run_command"]],
     ["run_command", ["run_command"]],
-    ["Edit", ["replace_file_content", "multi_replace_file_content"]],
+    ["Edit", ["edit", "replace_file_content", "multi_replace_file_content"]],
     ["replace_file_content", ["replace_file_content", "multi_replace_file_content"]],
-    ["apply_patch", ["write_to_file", "replace_file_content", "multi_replace_file_content"]],
-    ["Task", ["invoke_subagent", "define_subagent", "send_message", "manage_subagents"]],
-    ["mcp__github__create_issue", ["mcp_github_create_issue"]],
+    ["apply_patch", ["apply_patch", "write_to_file", "replace_file_content", "multi_replace_file_content"]],
+    ["Task", ["task", "invoke_subagent", "define_subagent", "send_message", "manage_subagents"]],
+    ["mcp__github__create_issue", ["mcp__github__create_issue", "mcp_github_create_issue"]],
+    ["GenerateImage", ["generateimage"]],
   ])("policyNames(%s)", (value, expected) => {
     expect(policyNames(value)).toEqual(expected);
   });

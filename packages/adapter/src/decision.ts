@@ -4,7 +4,7 @@ import { checkGuard } from "./guard.ts";
 import type { McpGate } from "./mcp-gate.ts";
 import type { PolicySource } from "./policy-source.ts";
 import { segmentedPolicy } from "./shell-policy.ts";
-import { mapToolCall, mcpToolName, type MapOptions, type MappedCall } from "./tools.ts";
+import { BUILTIN_MCP_SERVERS, mapToolCall, mcpPart, mcpToolName, type MapOptions, type MappedCall } from "./tools.ts";
 
 // The part of the daemon's HookContext (packages/daemon/src/plugin.ts) the
 // adapter reads; the daemon's own type is assignable to it.
@@ -107,7 +107,7 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     // A policy statement that names this server or tool approves it. A wildcard
     // permit, the built-in allow-all included, also matches the probe and does not.
     const named = policy.evaluate(core);
-    if (named.effect === "permit" && named.ruleId !== null) {
+    if (named.effect === "permit" && named.ruleId !== null && !foldsAmbiguously(server, options.map?.knownMcpServers)) {
       const probe = policy.evaluate({ ...core, tool: mcpToolName(PROBE) });
       if (probe.ruleId !== named.ruleId) return decision;
     }
@@ -146,6 +146,18 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     }
     return response;
   };
+}
+
+// mcp_<server>_<tool> folds `_` and `-` together, so `github_create`/`issue`
+// and `github`/`create_issue` share a name. A rule naming one must not approve
+// the other, so policy approval is off while another known server overlaps.
+function foldsAmbiguously(server: string, known: ReadonlySet<string> = new Set()): boolean {
+  const own = mcpPart(server);
+  for (const other of [...known, ...BUILTIN_MCP_SERVERS]) {
+    const k = mcpPart(other);
+    if (k !== own && (own.startsWith(`${k}_`) || k.startsWith(`${own}_`))) return true;
+  }
+  return false;
 }
 
 // Antigravity's conversationId is the session id, used raw (PRD 4a session
