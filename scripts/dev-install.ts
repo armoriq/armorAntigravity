@@ -70,7 +70,13 @@ function uninstall(): void {
     console.log(`nothing installed by dev-install in ${home}`);
     return;
   }
+  // A copied home carries the original's manifest, whose paths point at the original home.
+  const inHome = (p: string) => path.resolve(p).startsWith(home + path.sep);
   for (const edit of [...manifest.keys].reverse()) {
+    if (!inHome(edit.file)) {
+      console.log(`skipped ${edit.file}: outside ${home}`);
+      continue;
+    }
     if (!existsSync(edit.file)) continue;
     const doc = readJsonObject(edit.file);
     const next = edit.had ? setPath(doc, edit.key, edit.previous) : deletePath(doc, edit.key.slice(0, edit.created + 1));
@@ -79,7 +85,7 @@ function uninstall(): void {
   unlinkSync(manifestPath);
   const edited = new Set(manifest.keys.map((k) => k.file));
   for (const p of [...manifest.created].reverse()) {
-    if (!existsSync(p)) continue;
+    if (!inHome(p) || !existsSync(p)) continue;
     if (statSync(p).isDirectory()) {
       if (readdirSync(p).length === 0) rmdirSync(p);
     } else if (!edited.has(p) || Object.keys(readJsonObject(p)).length === 0) {
