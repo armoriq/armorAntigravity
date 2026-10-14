@@ -67,8 +67,8 @@ describe("drift output", () => {
   const drift = check(conv("c"), "write_to_file");
   if (drift.kind !== "deny") throw new Error("expected deny");
 
-  test("the hook reason carries the code and a suggested register_intent_plan payload", () => {
-    const reason = denyReason(drift, { plan, tool: "write_to_file", args: { TargetFile: "src/a.ts", CodeContent: "x".repeat(500) } });
+  test("the hook reason carries a suggested register_intent_plan payload without Antigravity's UI labels", () => {
+    const reason = denyReason(drift, { plan, tool: "write_to_file", args: { TargetFile: "src/a.ts", CodeContent: "x".repeat(500), toolAction: "Writing file", toolSummary: "Write a.ts" } });
     expect(reason).toBe(
       [
         "ArmorIQ blocked this call [intent_drift]: write_to_file not in plan. Call register_intent_plan with the full updated plan, including this step, and a reason, then retry.",

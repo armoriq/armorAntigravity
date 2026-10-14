@@ -29,7 +29,7 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-const mcpPart = (part: string) => part.trim().replace(/[^A-Za-z0-9_]/g, "_").toLowerCase();
+export const mcpPart = (part: string) => part.trim().replace(/[^A-Za-z0-9_]/g, "_").toLowerCase();
 
 // Hooks name an MCP call mcp_<server>_<tool> with the server's dashes as underscores (spike capture of
 // mcp_chrome_devtools_list_pages, agy CLI). Plans may also use ArmorClaude's mcp__server__tool or

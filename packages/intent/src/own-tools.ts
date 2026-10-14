@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isPlainObject, parsePlan } from "./plan.ts";
+import { isPlainObject, mcpPart, parsePlan } from "./plan.ts";
 import type { Conversation, Registry } from "./registry.ts";
 import { AGENT_ID, CLIENT_ID, conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PolicyView, type Token } from "./types.ts";
 
@@ -31,11 +31,36 @@ function isOwnTool(name: string): name is OwnTool {
 
 const OWN_PREFIXES = [`mcp_${MCP_SERVER_NAME}_`, `mcp__${MCP_SERVER_NAME}__`];
 
-// Hooks report our MCP tools as mcp_armoriq_<tool> (the spike's capture of mcp_<server>_<tool>).
 export function ownToolName(name: string): OwnTool | null {
   const prefix = OWN_PREFIXES.find((p) => name.toLowerCase().startsWith(p));
   const bare = prefix ? name.slice(prefix.length) : name;
   return isOwnTool(bare) ? bare : null;
+}
+
+const MCP_CALL_TOOL = "call_mcp_tool";
+// Same keys and server folding as the adapter's resolveMcpCall, so a call core allows as an own tool is always
+// one intent handles. The first of each is what agy sent in a live run.
+const SERVER_KEYS = ["ServerName", "serverName", "server"];
+const TOOL_KEYS = ["ToolName", "toolName", "tool"];
+const ARGUMENT_KEYS = ["Arguments", "arguments", "args"];
+
+function firstOf(args: Record<string, unknown>, keys: readonly string[]): unknown {
+  const key = keys.find((k) => args[k] !== undefined);
+  return key === undefined ? undefined : args[key];
+}
+
+// The main agent reaches mcp_config.json servers through call_mcp_tool with ServerName, ToolName and Arguments
+// (live agy CLI run); a per-tool mcp_<server>_<tool> name was captured only for the built-in browser server.
+export function ownToolCall(name: string, args: unknown): { readonly tool: OwnTool; readonly args: unknown } | null {
+  if (name !== MCP_CALL_TOOL) {
+    const tool = ownToolName(name);
+    return tool ? { tool, args } : null;
+  }
+  if (!isPlainObject(args)) return null;
+  const server = firstOf(args, SERVER_KEYS);
+  const tool = firstOf(args, TOOL_KEYS);
+  if (typeof server !== "string" || mcpPart(server) !== mcpPart(MCP_SERVER_NAME) || typeof tool !== "string" || !isOwnTool(tool)) return null;
+  return { tool, args: firstOf(args, ARGUMENT_KEYS) };
 }
 
 function stable(value: unknown): unknown {
