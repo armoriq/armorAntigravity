@@ -43,7 +43,7 @@ async function replay(rt: ReturnType<typeof runtime>["rt"], until = events.lengt
     rt.observe("cli", payload);
     if (payload.event === "PreInvocation") {
       const r = rt.preInvocation("cli", payload);
-      if ("injectSteps" in r) for (const s of r.injectSteps) if (s.type === "ephemeralMessage") injected.push({ conversationId: payload.conversationId, text: s.text });
+      if (r && "injectSteps" in r) for (const s of r.injectSteps) if (s.type === "ephemeralMessage") injected.push({ conversationId: payload.conversationId, text: s.text });
     }
   }
   return injected;
@@ -54,6 +54,8 @@ const parentPlanCall: HookPayload = {
   conversationId: PARENT,
   workspacePaths: ["/private/tmp/agspike/ws"],
   transcriptPath: "",
+  artifactDirectoryPath: `/private/tmp/agspike/home/.gemini/antigravity-cli/brain/${PARENT}`,
+  modelName: "gemini-3.8-flash-high",
   toolCall: { name: "mcp_armoriq_register_intent_plan", args: { goal: "delegate work", steps: [{ action: "invoke_subagent" }, { action: "run_command" }] } },
   stepIdx: 1,
 };
@@ -128,11 +130,12 @@ describe("planning mode draft", () => {
       workspacePaths: [],
       transcriptPath: "",
       artifactDirectoryPath: dir,
+      modelName: "gemini-3.8-flash-high",
       toolCall: { name: "write_to_file", args: { TargetFile: join(dir, "implementation_plan.md") } },
       stepIdx: 3,
     };
     rt.observe("cli", write);
-    const r = rt.preInvocation("cli", { event: "PreInvocation", conversationId: PARENT, workspacePaths: [], transcriptPath: "", invocationNum: 1 });
+    const r = rt.preInvocation("cli", { event: "PreInvocation", conversationId: PARENT, workspacePaths: [], transcriptPath: "", artifactDirectoryPath: dir, modelName: "gemini-3.8-flash-high", invocationNum: 1, initialNumSteps: 0 });
     expect(r).toEqual({
       injectSteps: [
         {

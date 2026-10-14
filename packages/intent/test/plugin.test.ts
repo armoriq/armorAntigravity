@@ -6,8 +6,14 @@ import { createIntentRuntime } from "../src/runtime.ts";
 import { LOGIN, permitAll, recordingBackend, silentLog } from "./helpers.ts";
 
 const CONV = "95c0238a-147e-4adc-942e-376c18a16f42";
-const base = { conversationId: CONV, workspacePaths: ["/private/tmp/agspike/ws"], transcriptPath: "" };
-const preInvocation: HookPayload = { ...base, event: "PreInvocation", invocationNum: 0 };
+const base = {
+  conversationId: CONV,
+  workspacePaths: ["/private/tmp/agspike/ws"],
+  transcriptPath: "",
+  artifactDirectoryPath: `/private/tmp/agspike/home/.gemini/antigravity-cli/brain/${CONV}`,
+  modelName: "gemini-3.8-flash-high",
+};
+const preInvocation: HookPayload = { ...base, event: "PreInvocation", invocationNum: 0, initialNumSteps: 0 };
 const register: HookPayload = {
   ...base,
   event: "PreToolUse",
@@ -29,7 +35,7 @@ function setup(mode: "enforce" | "monitor" = "enforce") {
     backend: rec.backend,
   });
   const seen: HookPayload[] = [];
-  let reply: HookResponse = {};
+  let reply: HookResponse = null;
   const decide = withIntent(rt, (hook: IntentHook) => {
     seen.push(hook.payload);
     return hook.payload.event === "PreToolUse" ? { decision: "allow" } : reply;
@@ -65,13 +71,13 @@ describe("withIntent", () => {
       ],
     });
     await hook(register);
-    setReply({});
-    expect(await hook(preInvocation)).toEqual({});
+    setReply(null);
+    expect(await hook(preInvocation)).toBeNull();
   });
 
   test("monitor mode leaves the inner PreInvocation response untouched", async () => {
     const { hook } = setup("monitor");
-    expect(await hook(preInvocation)).toEqual({});
+    expect(await hook(preInvocation)).toBeNull();
   });
 
   test("the same conversationId on two surfaces keeps two plans", async () => {

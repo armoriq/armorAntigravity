@@ -134,12 +134,12 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     root: (ref) => registry.root(conversationKey(ref)),
 
     preInvocation(surface, payload) {
-      if (opts.mode() !== "enforce") return {};
+      if (opts.mode() !== "enforce") return null;
       const conv = registry.get(conversationKey(refOf(surface, payload)));
       // An unlinked subagent told to register would get a plan of its own and escape the parent's.
-      if (!conv || conv.parent !== null || linker.mightBeChild(conv.ref)) return {};
+      if (!conv || conv.parent !== null || linker.mightBeChild(conv.ref)) return null;
       const root = registry.root(conv.key);
-      if (root?.plan && root.plan.id !== "") return {};
+      if (root?.plan && root.plan.id !== "") return null;
       const draft = drafts.get(conv.key);
       const text = draft ? `${INTENT_DIRECTIVE}\n\n${planningDraftNote(draft)}` : INTENT_DIRECTIVE;
       // ASSUMPTION(P0): an ephemeralMessage reaches the model for this invocation only; the rules file stays the
