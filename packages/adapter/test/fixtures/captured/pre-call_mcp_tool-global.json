@@ -1,0 +1,25 @@
+{
+  "event": "PreToolUse",
+  "stdin": {
+    "artifactDirectoryPath": "/Users/dev/.gemini/antigravity-cli/brain/327c8ec8-3dfc-4f74-8540-7ad2260fe0e5",
+    "conversationId": "327c8ec8-3dfc-4f74-8540-7ad2260fe0e5",
+    "modelName": "gemini-3.8-flash-high",
+    "stepIdx": 10,
+    "toolCall": {
+      "args": {
+        "Arguments": {
+          "text": "mcp-ping"
+        },
+        "ServerName": "agspike-global",
+        "ToolName": "echo",
+        "toolAction": "Calling MCP tool",
+        "toolSummary": "Call echo tool"
+      },
+      "name": "call_mcp_tool"
+    },
+    "transcriptPath": "/Users/dev/.gemini/antigravity-cli/brain/327c8ec8-3dfc-4f74-8540-7ad2260fe0e5/.system_generated/logs/transcript_full.jsonl",
+    "workspacePaths": [
+      "/Users/dev/src/ws"
+    ]
+  }
+}
