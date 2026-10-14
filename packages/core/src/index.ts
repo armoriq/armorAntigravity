@@ -13,3 +13,31 @@ export {
   type PolicyIr,
   type Statement,
 } from "./policy.ts";
+export { checkCall, parsePlan, type ParsePlanResult, type PlanCheck } from "./intent.ts";
+export { checkBuiltin, type BuiltinContext } from "./builtin-rules.ts";
+export { decide, type DecideInput } from "./decide.ts";
+export { toAuditRow, type AuditInput, type AuditProduct } from "./audit.ts";
+export {
+  bucketByHour,
+  callKey,
+  changedBuckets,
+  entriesDigest,
+  hourKey,
+  MAX_BATCH_BYTES,
+  MAX_BATCH_ENTRIES,
+  MAX_BATCH_SNAPSHOTS,
+  packBatches,
+  sessionTitle,
+  splitParts,
+  toParts,
+  toSnapshots,
+  type HourBucket,
+  type HourKey,
+  type SessionTitle,
+  type UsageCallRecord,
+  type UsageCallSession,
+  type UsageParts,
+  type UsageSnapshot,
+} from "./usage.ts";
+export { createOutbox, MAX_ATTEMPTS, ROTATE_BYTES, type Outbox, type SendResult } from "./outbox.ts";
+export { isAlive, tryLock, withLock } from "./shared-lock.ts";
