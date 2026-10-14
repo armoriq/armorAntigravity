@@ -1,0 +1,24 @@
+{
+  "event": "PostToolUse",
+  "stdin": {
+    "artifactDirectoryPath": "/Users/dev/.gemini/antigravity-cli/brain/1fea794d-29ad-455a-a5c9-5d9a8e90c7c0",
+    "conversationId": "1fea794d-29ad-455a-a5c9-5d9a8e90c7c0",
+    "error": "",
+    "modelName": "gemini-3.8-flash-high",
+    "stepIdx": 2,
+    "toolCall": {
+      "args": {
+        "CommandLine": "echo hello-from-shell",
+        "Cwd": "/Users/dev/src/ws",
+        "WaitMsBeforeAsync": 10000,
+        "toolAction": "Running echo command",
+        "toolSummary": "Shell command execution"
+      },
+      "name": "run_command"
+    },
+    "transcriptPath": "/Users/dev/.gemini/antigravity-cli/brain/1fea794d-29ad-455a-a5c9-5d9a8e90c7c0/.system_generated/logs/transcript_full.jsonl",
+    "workspacePaths": [
+      "/Users/dev/src/ws"
+    ]
+  }
+}

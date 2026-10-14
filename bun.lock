@@ -9,6 +9,14 @@
         "typescript": "5.9.3",
       },
     },
+    "packages/adapter": {
+      "name": "@armorantigravity/adapter",
+      "dependencies": {
+        "@armorantigravity/core": "workspace:*",
+        "@armorantigravity/protocol": "workspace:*",
+        "zod": "^4.6.6",
+      },
+    },
     "packages/core": {
       "name": "@armorantigravity/core",
     },
@@ -17,6 +25,8 @@
     },
   },
   "packages": {
+    "@armorantigravity/adapter": ["@armorantigravity/adapter@workspace:packages/adapter"],
+
     "@armorantigravity/core": ["@armorantigravity/core@workspace:packages/core"],
 
     "@armorantigravity/protocol": ["@armorantigravity/protocol@workspace:packages/protocol"],
@@ -30,6 +40,8 @@
     "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "undici-types": ["undici-types@8.11.2", "", {}, "sha512-iMVNmWZ0leK/goS6eXMizSzmm9CDWtyphwbaCms3DNLqRxDL+mMoNVcZMTyyVgXP0N+Z8neAMzDoUOUJL8veKg=="],
+
+    "zod": ["zod@4.6.6", "", {}, "sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA=="],
 
     "@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
   }
