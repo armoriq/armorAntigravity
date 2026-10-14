@@ -1,0 +1,130 @@
+[
+ {
+  "file": "PostInvocation-0008.json",
+  "argv": [
+   "PostInvocation",
+   "global"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config"
+ },
+ {
+  "file": "PostInvocation-0009.json",
+  "argv": [
+   "PostInvocation",
+   "plugin"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config/plugins/agspike"
+ },
+ {
+  "file": "PostInvocation-0012.json",
+  "argv": [
+   "PostInvocation",
+   "global"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config"
+ },
+ {
+  "file": "PostInvocation-0013.json",
+  "argv": [
+   "PostInvocation",
+   "plugin"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config/plugins/agspike"
+ },
+ {
+  "file": "PostToolUse-0006.json",
+  "argv": [
+   "PostToolUse",
+   "global"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config"
+ },
+ {
+  "file": "PostToolUse-0007.json",
+  "argv": [
+   "PostToolUse",
+   "plugin"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config/plugins/agspike"
+ },
+ {
+  "file": "PreInvocation-0001.json",
+  "argv": [
+   "PreInvocation",
+   "global"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config"
+ },
+ {
+  "file": "PreInvocation-0002.json",
+  "argv": [
+   "PreInvocation",
+   "plugin"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config/plugins/agspike"
+ },
+ {
+  "file": "PreInvocation-0010.json",
+  "argv": [
+   "PreInvocation",
+   "global"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config"
+ },
+ {
+  "file": "PreInvocation-0011.json",
+  "argv": [
+   "PreInvocation",
+   "plugin"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config/plugins/agspike"
+ },
+ {
+  "file": "PreToolUse-0003.json",
+  "argv": [
+   "PreToolUse",
+   "workspace"
+  ],
+  "cwd": "/private/tmp/agspike/ws/.agents"
+ },
+ {
+  "file": "PreToolUse-0004.json",
+  "argv": [
+   "PreToolUse",
+   "global"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config"
+ },
+ {
+  "file": "PreToolUse-0005.json",
+  "argv": [
+   "PreToolUse",
+   "plugin"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config/plugins/agspike"
+ },
+ {
+  "file": "Stop-0014.json",
+  "argv": [
+   "Stop",
+   "workspace"
+  ],
+  "cwd": "/private/tmp/agspike/ws/.agents"
+ },
+ {
+  "file": "Stop-0015.json",
+  "argv": [
+   "Stop",
+   "global"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config"
+ },
+ {
+  "file": "Stop-0016.json",
+  "argv": [
+   "Stop",
+   "plugin"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config/plugins/agspike"
+ }
+]

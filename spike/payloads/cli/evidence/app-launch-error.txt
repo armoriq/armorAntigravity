@@ -1,0 +1,2 @@
+/tmp/agspike/app.log:[1012/200118.269254:ERROR:electron/shell/common/mac/codesign_util.cc:79] task_name_for_pid: (os/kern) failure (5)
+/tmp/agspike/app-open.err:[1012/200140.446929:ERROR:electron/shell/common/mac/codesign_util.cc:79] task_name_for_pid: (os/kern) failure (5)
