@@ -39,3 +39,5 @@ export {
   type UsageParts,
   type UsageSnapshot,
 } from "./usage.ts";
+export { createOutbox, MAX_ATTEMPTS, ROTATE_BYTES, type Outbox, type SendResult } from "./outbox.ts";
+export { isAlive, tryLock, withLock } from "./shared-lock.ts";

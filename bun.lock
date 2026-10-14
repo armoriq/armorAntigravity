@@ -15,12 +15,23 @@
         "@armoriq/sdk-dev": "0.8.17",
       },
     },
+    "packages/evidence": {
+      "name": "@armorantigravity/evidence",
+      "version": "0.1.0",
+      "dependencies": {
+        "@armorantigravity/core": "workspace:*",
+        "@armorantigravity/protocol": "workspace:*",
+        "@armoriq/sdk-dev": "^0.8.17",
+      },
+    },
     "packages/protocol": {
       "name": "@armorantigravity/protocol",
     },
   },
   "packages": {
     "@armorantigravity/core": ["@armorantigravity/core@workspace:packages/core"],
+
+    "@armorantigravity/evidence": ["@armorantigravity/evidence@workspace:packages/evidence"],
 
     "@armorantigravity/protocol": ["@armorantigravity/protocol@workspace:packages/protocol"],
 
