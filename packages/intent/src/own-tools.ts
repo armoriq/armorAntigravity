@@ -1,10 +1,20 @@
 import { createHash } from "node:crypto";
-import { isPlainObject, parsePlan } from "./plan.ts";
+import { isPlainObject, mcpPart, parsePlan } from "./plan.ts";
 import type { Conversation, Registry } from "./registry.ts";
 import { AGENT_ID, CLIENT_ID, conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PolicyView, type Token } from "./types.ts";
 
 export const OWN_TOOLS = ["register_intent_plan", "trust_reanchor", "trust_revoke", "trust_delegate", "policy_read"] as const;
 export type OwnTool = (typeof OWN_TOOLS)[number];
+
+// The argument names each tool declares in the MCP server's schema (ArmorOpenCode tools/intent.ts plus
+// ArmorClaude's trust_delegate).
+export const OWN_TOOL_ARGS: Readonly<Record<OwnTool, readonly string[]>> = {
+  register_intent_plan: ["goal", "steps", "plan", "reason"],
+  trust_reanchor: ["updatedPlan", "reason"],
+  trust_revoke: ["reason"],
+  trust_delegate: ["delegatePublicKey", "subtreePath", "validitySeconds", "targetAgent"],
+  policy_read: ["tool"],
+};
 
 export const MCP_SERVER_NAME = "armoriq";
 export const MAX_REVISIONS_PER_TURN = 2;
@@ -21,11 +31,36 @@ function isOwnTool(name: string): name is OwnTool {
 
 const OWN_PREFIXES = [`mcp_${MCP_SERVER_NAME}_`, `mcp__${MCP_SERVER_NAME}__`];
 
-// Hooks report our MCP tools as mcp_armoriq_<tool> (the spike's capture of mcp_<server>_<tool>).
 export function ownToolName(name: string): OwnTool | null {
   const prefix = OWN_PREFIXES.find((p) => name.toLowerCase().startsWith(p));
   const bare = prefix ? name.slice(prefix.length) : name;
   return isOwnTool(bare) ? bare : null;
+}
+
+const MCP_CALL_TOOL = "call_mcp_tool";
+// Same keys and server folding as the adapter's resolveMcpCall, so a call core allows as an own tool is always
+// one intent handles. The first of each is what agy sent in a live run.
+const SERVER_KEYS = ["ServerName", "serverName", "server"];
+const TOOL_KEYS = ["ToolName", "toolName", "tool"];
+const ARGUMENT_KEYS = ["Arguments", "arguments", "args"];
+
+function firstOf(args: Record<string, unknown>, keys: readonly string[]): unknown {
+  const key = keys.find((k) => args[k] !== undefined);
+  return key === undefined ? undefined : args[key];
+}
+
+// The main agent reaches mcp_config.json servers through call_mcp_tool with ServerName, ToolName and Arguments
+// (live agy CLI run); a per-tool mcp_<server>_<tool> name was captured only for the built-in browser server.
+export function ownToolCall(name: string, args: unknown): { readonly tool: OwnTool; readonly args: unknown } | null {
+  if (name !== MCP_CALL_TOOL) {
+    const tool = ownToolName(name);
+    return tool ? { tool, args } : null;
+  }
+  if (!isPlainObject(args)) return null;
+  const server = firstOf(args, SERVER_KEYS);
+  const tool = firstOf(args, TOOL_KEYS);
+  if (typeof server !== "string" || mcpPart(server) !== mcpPart(MCP_SERVER_NAME) || typeof tool !== "string" || !isOwnTool(tool)) return null;
+  return { tool, args: firstOf(args, ARGUMENT_KEYS) };
 }
 
 function stable(value: unknown): unknown {
@@ -35,9 +70,12 @@ function stable(value: unknown): unknown {
 }
 
 // MCP calls carry no conversation id, so the MCP server finds the outcome the hook computed for the same
-// call by tool name plus a digest of the arguments.
+// call by tool name plus a digest of the arguments. Only declared arguments count: the hook payload also
+// carries Antigravity's own toolAction and toolSummary (spike capture), which the MCP server never sees.
 export function callDigest(tool: OwnTool, args: unknown): string {
-  return createHash("sha256").update(JSON.stringify([tool, stable(args ?? {})])).digest("hex");
+  const record = isPlainObject(args) ? args : {};
+  const declared = Object.fromEntries(OWN_TOOL_ARGS[tool].filter((k) => record[k] !== undefined).map((k) => [k, record[k]]));
+  return createHash("sha256").update(JSON.stringify([tool, stable(declared)])).digest("hex");
 }
 
 export interface OwnToolDeps {
