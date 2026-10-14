@@ -3,9 +3,11 @@
   "private": true,
   "type": "module",
   "packageManager": "bun@1.4.3",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "test": "bun test",
+    "test": "bun scripts/test.ts",
     "typecheck": "tsc -b",
     "check:core-sync": "bun scripts/check-core-sync.ts"
   },
