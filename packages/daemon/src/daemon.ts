@@ -178,7 +178,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     const surface = surfaceFromTranscriptPath(payload.transcriptPath);
     const { session, created } = sessions.open(surface, payload.conversationId, now);
     if (created) emit({ kind: "session_start", session, at: now });
-    if (event === "PreInvocation") {
+    // agy fires Pre/PostInvocation around every model call; invocationNum 0 is the first call for a
+    // user message, and Stop ends the turn. A new first call also closes a turn whose Stop never came.
+    const firstCall = event === "PreInvocation" && payload.event === "PreInvocation" && payload.invocationNum === 0;
+    if (firstCall) {
+      if (session.turnStartedAt !== null) {
+        sessions.endTurn(session.key);
+        emit({ kind: "turn_end", session, at: now });
+      }
       sessions.beginTurn(session.key, now);
       emit({ kind: "turn_start", session, at: now });
     }
@@ -192,7 +199,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
       response = fallbackResponse(event, mode, "internal_error", "guard error");
     }
 
-    if (event === "PostInvocation" || event === "Stop") {
+    if (event === "Stop") {
       sessions.endTurn(session.key);
       setImmediate(() => {
         emit({ kind: "turn_end", session, at: Date.now() });
