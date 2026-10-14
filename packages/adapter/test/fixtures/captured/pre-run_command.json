@@ -1,0 +1,23 @@
+{
+  "event": "PreToolUse",
+  "stdin": {
+    "artifactDirectoryPath": "/Users/dev/.gemini/antigravity-cli/brain/ef59e687-e00f-44c2-9724-a00d0abf24d4",
+    "conversationId": "ef59e687-e00f-44c2-9724-a00d0abf24d4",
+    "modelName": "gemini-3.8-flash-high",
+    "stepIdx": 2,
+    "toolCall": {
+      "args": {
+        "CommandLine": "touch /Users/dev/src/ws/m-deny",
+        "Cwd": "/Users/dev/src/ws",
+        "WaitMsBeforeAsync": 5000,
+        "toolAction": "Running touch command",
+        "toolSummary": "Touch m-deny"
+      },
+      "name": "run_command"
+    },
+    "transcriptPath": "/Users/dev/.gemini/antigravity-cli/brain/ef59e687-e00f-44c2-9724-a00d0abf24d4/.system_generated/logs/transcript_full.jsonl",
+    "workspacePaths": [
+      "/Users/dev/src/ws"
+    ]
+  }
+}
