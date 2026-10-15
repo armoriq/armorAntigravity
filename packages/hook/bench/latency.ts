@@ -4,13 +4,29 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
+type Budgets = Partial<Record<HookEvent, { p50: number; p95: number }>>;
+
 // PRD section 6. A budget is enforced only with at least MIN_SAMPLES samples.
-const BUDGETS: Partial<Record<HookEvent, { p50: number; p95: number }>> = {
+const PRD_BUDGETS: Budgets = {
   PreToolUse: { p50: 8, p95: 30 },
   PostToolUse: { p50: 8, p95: 30 },
   PreInvocation: { p50: 15, p95: 50 },
   Stop: { p50: 15, p95: 50 },
 };
+// GitHub's hosted macOS runners spawn processes several times slower than a Mac or the Linux runners:
+// /usr/bin/true alone measured p50 1.3 to 4.2 ms there against 0.5 to 0.9 ms on ubuntu-latest. Over nine
+// runs of this bench (100 samples each) the worst macOS runner results were PreToolUse p50 17.2 / p95 25.4,
+// PostToolUse 13.8 / 20.8, PreInvocation 13.0 / 16.8 and Stop 12.3 / 20.3, and even PostInvocation, which
+// has no budget, never got below a p50 of 8.3 ms. The same build meets PRD_BUDGETS on an Apple M5, so
+// these are runner budgets, not product targets, and still fail a hook that gets several milliseconds slower.
+const MACOS_RUNNER_BUDGETS: Budgets = {
+  PreToolUse: { p50: 20, p95: 40 },
+  PostToolUse: { p50: 20, p95: 40 },
+  PreInvocation: { p50: 20, p95: 50 },
+  Stop: { p50: 20, p95: 50 },
+};
+const onMacosRunner = process.platform === "darwin" && process.env.GITHUB_ACTIONS === "true";
+const BUDGETS = onMacosRunner ? MACOS_RUNNER_BUDGETS : PRD_BUDGETS;
 const MIN_SAMPLES = 20;
 const EVENTS: readonly HookEvent[] = ["PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"];
 
@@ -92,6 +108,7 @@ try {
     `### agd-hook latency (${process.platform}/${process.arch})`,
     "",
     `Wall time per hook: spawn the compiled client, socket round trip to a live armoriq-agd, exit. Stub decision handler. Spawn floor (\`/usr/bin/true\`): p50 ${fmt(pct(floor, 50))} ms, p95 ${fmt(pct(floor, 95))} ms.`,
+    `Budgets: ${onMacosRunner ? "GitHub macOS runner (see MACOS_RUNNER_BUDGETS)" : "PRD section 6"}.`,
     "",
     "| Hook | Samples | p50 ms | p95 ms | max ms | Budget p50 / p95 | Result |",
     "|---|---|---|---|---|---|---|",
