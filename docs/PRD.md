@@ -209,7 +209,7 @@ Map ArmorClaude's names (`Bash`, `Edit`, `mcp__s__t`) the same way ArmorOpenCode
 | `PostToolUse` | 8 ms / 30 ms | Queue the audit row and trace event; no network |
 | `PreInvocation` / `Stop` | 15 ms / 50 ms | Turn bookkeeping and kicking the upload pumps |
 
-Measured in CI with a real `agy` against a stub model and a stub backend, the same way ArmorOpenCode's `bench/` gates CI today. A budget is enforced only on hooks with at least 20 samples. That rule exists because of a flaky gate we hit before.
+Measured in CI with a real `agy` against a stub model and a stub backend, the same way ArmorOpenCode's `bench/` gates CI today. A budget is enforced only on hooks with at least 20 samples. That rule exists because of a flaky gate we hit before. GitHub's hosted macOS runners spawn processes too slowly to meet these targets even for the bare spawn and socket round trip, so CI holds them to a separate runner budget recorded with its measurements in `packages/hook/bench/latency.ts`; Linux runners and local runs use the targets above.
 
 ## 7. Requirements
 
