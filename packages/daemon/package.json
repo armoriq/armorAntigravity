@@ -9,6 +9,10 @@
     "build": "bun build src/main.ts --compile --outfile dist/armoriq-agd"
   },
   "dependencies": {
+    "@armorantigravity/adapter": "workspace:*",
+    "@armorantigravity/core": "workspace:*",
+    "@armorantigravity/evidence": "workspace:*",
+    "@armorantigravity/intent": "workspace:*",
     "@armorantigravity/protocol": "workspace:*",
     "@armoriq/sdk-dev": "^0.8.17"
   }
