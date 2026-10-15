@@ -122,8 +122,9 @@ function resolveSocket(): string {
 }
 
 main().then(
-  (response) => {
-    if (response !== null) process.stdout.write(`${JSON.stringify(response)}\n`);
+  async (response) => {
+    // Bun.stdout instead of process.stdout: setting up the node stream measured 1 to 2.5 ms per PreToolUse on an M5.
+    if (response !== null) await Bun.write(Bun.stdout, `${JSON.stringify(response)}\n`).catch(() => {});
     process.exit(0);
   },
   () => process.exit(0),
