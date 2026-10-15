@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "/Users/psudokit/.t3/worktrees/armorAntigravity/spike-p0-hooks/spike/hooks/logger.py",
+    "PreInvocation",
+    "global"
+  ],
+  "cwd": "/private/tmp/agspike/home/.gemini/config",
+  "env": {
+    "ANTIGRAVITY_CONVERSATION_ID": "1fea794d-29ad-455a-a5c9-5d9a8e90c7c0",
+    "HOME": "/tmp/agspike/home",
+    "LANG": "en_US.UTF-8",
+    "LOGNAME": "psudokit",
+    "PATH": "/tmp/agspike/home/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    "PWD": "/private/tmp/agspike/home/.gemini/config",
+    "SHELL": "/bin/zsh",
+    "SHLVL": "1",
+    "TERM": "xterm-256color",
+    "TMPDIR": "/var/folders/wy/2_wybrtx7_g4_lbjcyjlhvnm0000gn/T/",
+    "USER": "psudokit",
+    "_": "/opt/homebrew/bin/python3"
+  }
+}
