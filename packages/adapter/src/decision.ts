@@ -61,9 +61,9 @@ export function toHookResponse(decision: AdapterDecision): HookResponse {
     case "deny":
       return { decision: "deny", reason: `ArmorIQ blocked this call [${decision.code}]: ${decision.reason}` } satisfies ToolDecision;
     case "hold":
-      // force_ask: a policy or backend hold must reach a person even when the
-      // user has set Antigravity to auto-approve.
-      return { decision: "force_ask", reason: `ArmorIQ needs your approval: ${decision.reason}` } satisfies ToolDecision;
+      // Not force_ask: agy auto-approves force_ask under --dangerously-skip-permissions (spike
+      // ft-forceask), so a hold would run. Until approvals exist, a hold blocks, as in ArmorOpenCode v1.
+      return { decision: "deny", reason: `ArmorIQ blocked this call until it is approved [approval_required]: ${decision.reason}` } satisfies ToolDecision;
     case "ask":
       return { decision: "ask", reason: decision.reason } satisfies ToolDecision;
   }
