@@ -1,0 +1,19 @@
+{
+  "name": "@armorantigravity/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "armoriq-agd": "./src/main.ts" },
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "build": "bun build src/main.ts --compile --outfile dist/armoriq-agd"
+  },
+  "dependencies": {
+    "@armorantigravity/adapter": "workspace:*",
+    "@armorantigravity/core": "workspace:*",
+    "@armorantigravity/evidence": "workspace:*",
+    "@armorantigravity/intent": "workspace:*",
+    "@armorantigravity/protocol": "workspace:*",
+    "@armoriq/sdk-dev": "^0.8.17"
+  }
+}
