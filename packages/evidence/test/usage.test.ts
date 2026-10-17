@@ -15,7 +15,7 @@ afterEach(() => {
 
 const ROOT = "conv-root-7f3a";
 const CHILD = "conv-child-91bc";
-const ref = (conversationId: string): ConversationRef => ({ conversationId, transcriptPath: `/tmp/brain/${conversationId}/transcript.jsonl`, workspacePaths: ["/Users/dev/repo"], surface: "cli" });
+const ref = (conversationId: string): ConversationRef => ({ conversationId, transcriptPath: `/tmp/brain/${conversationId}/transcript.jsonl`, workspacePaths: ["/Users/dev/repo"], surface: "cli", model: null });
 const step = (key: string, at: number, inputTokens = 100): SourceStep => ({ key, model: "gemini-3.8-flash-high", at, inputTokens, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 0, reasoningTokens: 7 });
 
 function sourceOf(reads: Record<string, SourceRead>): UsageSource {
@@ -48,7 +48,7 @@ describe("usage pump", () => {
     await usage.stop();
     const [batch] = backend.batches();
     expect(batch?.snapshots).toEqual([
-      expect.objectContaining({ sessionId: ROOT, usageDate: "2026-10-11", usageHour: 14, repo: "/Users/dev/repo", entries: [expect.objectContaining({ model: "gemini-3.8-flash-high", inputTokens: 400 })] }),
+      expect.objectContaining({ sessionId: ROOT, usageDate: "2026-10-11", usageHour: 14, repo: "/Users/dev/repo", entries: [expect.objectContaining({ model: "gemini-3.8-flash", inputTokens: 400 })] }),
     ]);
     expect(batch?.calls?.[0]?.sessionId).toBe(ROOT);
     expect(batch?.calls?.[0]?.records.map((r) => r.key)).toEqual([`${ROOT}:s1`, `${ROOT}:s2`]);

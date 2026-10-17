@@ -12,7 +12,7 @@ afterEach(() => {
 
 const ROOT = "conv-root-7f3a";
 const CHILD = "conv-child-91bc";
-const ref = (conversationId: string): ConversationRef => ({ conversationId, transcriptPath: `/tmp/brain/${conversationId}/transcript.jsonl`, workspacePaths: ["/Users/dev/repo"], surface: "cli" });
+const ref = (conversationId: string): ConversationRef => ({ conversationId, transcriptPath: `/tmp/brain/${conversationId}/transcript.jsonl`, workspacePaths: ["/Users/dev/repo"], surface: "cli", model: null });
 const step = (key: string, at: number, inputTokens = 100): SourceStep => ({ key, model: "gemini-3.8-flash-high", at, inputTokens, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 0, reasoningTokens: 7 });
 
 function sourceOf(reads: Record<string, SourceRead>): UsageSource {

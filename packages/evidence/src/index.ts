@@ -11,4 +11,5 @@ export {
   type EvidenceRecorder,
   type ObservedEvent,
 } from "./plugin.ts";
+export { createTranscriptSource, defaultDataDir, transcriptPathOf, type TranscriptSourceOptions } from "./usage/transcript.ts";
 export { EMPTY_SOURCE, repoOf, sessionTitle, type ConversationRef, type SourceRead, type SourceStep, type UsageSource } from "./usage/source.ts";
