@@ -1,0 +1,1 @@
+{"conversationId":"3afe252b-10dc-4b17-85fc-e3f3a5f5c391", "subagentDescriptor":{"typeName":"browser", "role":"Browser Agent"}, "state":"SUBAGENT_STATE_ALIVE", "spawnStepIndex":8, "workspaceUris":["file:///private/tmp/agspike/ws"]}
