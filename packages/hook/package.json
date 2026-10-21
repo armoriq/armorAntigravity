@@ -1,0 +1,17 @@
+{
+  "name": "@armorantigravity/hook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "agd-hook": "./src/main.ts" },
+  "scripts": {
+    "build": "bun build src/main.ts --compile --bytecode --minify --outfile dist/agd-hook",
+    "bench": "bun bench/latency.ts"
+  },
+  "dependencies": {
+    "@armorantigravity/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@armorantigravity/daemon": "workspace:*"
+  }
+}
