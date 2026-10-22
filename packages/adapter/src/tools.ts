@@ -43,9 +43,18 @@ const ANTIGRAVITY_TOOLS: ReadonlyMap<string, BuiltinCategory> = new Map([
   ["manage_subagents", "subagent"],
 ]);
 
-// ArmorClaude and ArmorOpenCode names, lower-cased, to the Antigravity tool
-// they mean. Same table as packages/intent plan.ts PLAN_ALIASES.
+// agy CLI 1.4 renamed its file tools (captured from 1.4.4); older agy and the
+// IDE still send the PRD 5.3 names, so these resolve to them.
+const AGY_14_NAMES: ReadonlyMap<string, string> = new Map([
+  ["read_file", "view_file"],
+  ["write_file", "write_to_file"],
+  ["edit_file", "replace_file_content"],
+]);
+
+// ArmorClaude, ArmorOpenCode and agy 1.4 names, lower-cased, to the Antigravity
+// tool they mean. Same table as packages/intent plan.ts PLAN_ALIASES.
 const ALIASES: ReadonlyMap<string, string> = new Map([
+  ...AGY_14_NAMES,
   ["bash", "run_command"],
   ["shell", "run_command"],
   ["write", "write_to_file"],
@@ -71,7 +80,7 @@ const ALIASES: ReadonlyMap<string, string> = new Map([
 const ARG_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
   ["command", ["CommandLine" /* captured */, "command", "commandLine"]],
   ["workdir", ["Cwd" /* captured */, "cwd", "workdir"]],
-  ["filePath", ["TargetFile" /* captured */, "AbsolutePath" /* captured */, "targetFile", "absolutePath", "filePath", "file_path"]],
+  ["filePath", ["TargetFile" /* captured */, "AbsolutePath" /* captured */, "Path" /* captured, agy 1.4 */, "targetFile", "absolutePath", "filePath", "file_path"]],
   ["path", ["DirectoryPath", "SearchDirectory", "SearchPath", "directoryPath", "searchPath", "path"]],
   ["pattern", ["Pattern", "Query", "pattern"]],
   ["include", ["Includes", "includes", "include"]],
@@ -252,7 +261,8 @@ const CLAUDE_NAMES: ReadonlyMap<string, readonly string[]> = new Map([
 ]);
 
 export function nameReadings(tool: string): string[] {
-  return [tool, ...(CLAUDE_NAMES.get(tool) ?? [])];
+  const renamed = [...AGY_14_NAMES].filter(([, native]) => native === tool).map(([name]) => name);
+  return [tool, ...(CLAUDE_NAMES.get(tool) ?? []), ...renamed];
 }
 
 export function isReadOnly(mapped: MappedCall): boolean {
