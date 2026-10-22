@@ -1,0 +1,157 @@
+name: Release
+
+# Stable: merging a PR labelled `release` into main publishes v<version> (packages/daemon/package.json),
+# with notes from that version's CHANGELOG.md section. Dev: every push to dev replaces the
+# `dev-latest` prerelease, which the dev installer downloads. Both run the tests first.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "stable publishes v<version>; dev replaces dev-latest"
+        required: true
+        type: choice
+        options: [dev, stable]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'release'))
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.plan.outputs.channel }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          REF: ${{ github.ref }}
+        run: |
+          channel=dev
+          if [ "$EVENT" = pull_request ] || [ "$INPUT_CHANNEL" = stable ]; then channel=stable; fi
+          if [ "$EVENT" = workflow_dispatch ] && [ "$channel" = stable ] && [ "$REF" != refs/heads/main ]; then
+            echo "::error::stable releases come from main; dispatch this workflow on main"
+            exit 1
+          fi
+          version=$(jq -r .version packages/daemon/package.json)
+          if [ "$channel" = stable ]; then
+            tag="v$version"
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "::error::$tag already exists; bump packages/daemon/package.json first"
+              exit 1
+            fi
+            if ! grep -q "^## \[$version\]" CHANGELOG.md; then
+              echo "::error::CHANGELOG.md has no ## [$version] section"
+              exit 1
+            fi
+          else
+            tag=dev-latest
+          fi
+          { echo "channel=$channel"; echo "tag=$tag"; echo "version=$version"; echo "sha=$(git rev-parse HEAD)"; } >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+
+  build:
+    needs: [plan, test]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Darwin binaries are built on macOS so they get the ad-hoc signature Apple silicon requires.
+          - os: macos-latest
+            targets: --target darwin-arm64 --target darwin-x64
+          - os: ubuntu-latest
+            targets: --target linux-x64 --target linux-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/build-release.ts ${{ matrix.targets }} --out dist/release
+      - name: Smoke test the native archive
+        run: |
+          native="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')"
+          mkdir -p smoke && tar -xzf "dist/release/armorantigravity-$native.tar.gz" -C smoke
+          test "$(./smoke/armorantigravity --version)" = "${{ needs.plan.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: dist/release/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    # Per channel, so a queued dev build can never displace a pending stable release.
+    concurrency:
+      group: release-${{ needs.plan.outputs.channel }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist/release
+          merge-multiple: true
+      - run: bun scripts/build-release.ts --sums-only --out dist/release
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          assets=(dist/release/*.tar.gz dist/release/SHA256SUMS)
+          if [ "$CHANNEL" = stable ]; then
+            awk -v v="$VERSION" '$0 ~ "^## \\[" { if (found) exit; found = index($0, "[" v "]") > 0; next } found' CHANGELOG.md > notes.md
+            gh release create "$TAG" "${assets[@]}" --target "$SHA" --title "$TAG" --notes-file notes.md --latest
+          else
+            gh release delete dev-latest --cleanup-tag --yes || true
+            gh release create dev-latest "${assets[@]}" --target "$SHA" --prerelease --latest=false \
+              --title "dev-latest ($VERSION, ${SHA:0:7})" --notes "Rolling build of dev at $SHA. Installed by the ArmorAntigravity dev installer."
+          fi
