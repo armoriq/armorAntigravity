@@ -172,3 +172,40 @@ test("captured agy hooks get policy, plan and drift decisions, and every decisio
   for (const row of rows) expect(row).toMatchObject({ session_id: runCommand.stdin.conversationId, agent_id: "antigravity", client_id: "armorantigravity", user_id: "user-1" });
   expect(backend.seen.some((r) => r.path === "/v1/traces")).toBe(true);
 }, 60_000);
+
+const AGY_14 = path.join(import.meta.dir, "../../adapter/test/fixtures/captured");
+
+// agy CLI 1.4 calls its file tools read_file, write_file and edit_file with a `Path` argument.
+function agy14(tool: "read_file" | "write_file" | "edit_file", args?: Record<string, unknown>): Capture {
+  const raw: unknown = JSON.parse(readFileSync(path.join(AGY_14, `pre-${tool}.json`), "utf8"));
+  if (typeof raw !== "object" || raw === null || !("stdin" in raw) || typeof raw.stdin !== "object" || raw.stdin === null) throw new Error(`bad capture ${tool}`);
+  const stdin: Record<string, unknown> = { ...raw.stdin };
+  if (args) stdin.toolCall = { name: tool, args };
+  return { event: "PreToolUse", stdin };
+}
+
+test("agy 1.4 file tools: ~/.armoriq stays protected inside a registered plan, and plan steps under the 1.4 names cover the calls", async () => {
+  const dataDir = path.join(sandbox.home, ".armoriq", "armorantigravity");
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(path.join(dataDir, "config.json"), JSON.stringify({ backendUrl: backend.url }));
+  saveLoginProfile({ backend: backend.url, product: "armorantigravity", apiKey: "ak_test_wiring", email: "dev@example.com", userId: "user-1", orgId: "org-1" });
+  daemon = await startDaemon({ env: {}, plugins: armoriqPlugins(), log: quiet });
+  await until(() => backend.seen.some((r) => r.path === "/policies/profiles/active"));
+  await Bun.sleep(100);
+
+  expect(await hook(agy14("read_file"))).toEqual({ decision: "allow" });
+  expect(await hook(agy14("write_file"))).toEqual({ decision: "deny", reason: expect.stringContaining("[intent_plan_missing]") });
+
+  const plan = { goal: "Edit notes", steps: [{ action: "read_file" }, { action: "write_file" }, { action: "edit_file" }] };
+  const conversation = agy14("read_file").stdin;
+  const register: Capture = { event: "PreToolUse", stdin: { ...conversation, toolCall: { name: "call_mcp_tool", args: { ServerName: "armoriq", ToolName: "register_intent_plan", Arguments: plan } } } };
+  expect(await hook(register)).toEqual({ decision: "allow" });
+  expect(await mcpOutcome(daemon.paths.socket, "register_intent_plan", plan)).toEqual({ v: 1, id: "mcp-1", text: expect.stringMatching(/^Intent registered/) });
+
+  expect(await hook(agy14("write_file"))).toEqual({ decision: "allow" });
+  expect(await hook(agy14("edit_file"))).toEqual({ decision: "allow" });
+  const protectedDeny = { decision: "deny", reason: expect.stringContaining("[builtin_protected]") };
+  expect(await hook(agy14("read_file", { Path: path.join(dataDir, "config.json") }))).toEqual(protectedDeny);
+  expect(await hook(agy14("write_file", { Content: "monitor", Overwrite: true, Path: path.join(dataDir, "mode") }))).toEqual(protectedDeny);
+  expect(await hook(agy14("edit_file", { Path: path.join(dataDir, "config.json"), Replacement: "{}", Target: "{" }))).toEqual(protectedDeny);
+}, 60_000);

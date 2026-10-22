@@ -304,6 +304,79 @@ describe("check order with the real core (PRD 4a)", () => {
   });
 });
 
+// agy CLI 1.4 renamed its file tools and their path argument (captured 2026-10-21).
+describe("agy 1.4 file tools", () => {
+  const at = (name: string, args: Record<string, unknown>) => {
+    const stdin = stdinOf(name);
+    return { ...stdin, toolCall: { name: name.replace(/^pre-/, ""), args } };
+  };
+  const readFile = (Path: string) => at("pre-read_file", { Path });
+  // Input shape as the audit outbox recorded it from a live agy 1.4.4 write.
+  const writeFile14 = (Path: string) => at("pre-write_file", { Content: "buy milk\n", Overwrite: true, Path });
+  const editFile = (Path: string) => at("pre-edit_file", { Path, Replacement: "TWO", Target: "two" });
+  const reasonOf = (res: unknown) => (typeof res === "object" && res !== null && "reason" in res ? String(res.reason) : "");
+  const PLAN_14 = ["read_file", "write_file", "edit_file"];
+
+  test.each([
+    ["read_file", readFile(`${home}/.armoriq/armorantigravity/config.json`)],
+    ["write_file", writeFile14(`${home}/.armoriq/armorantigravity/probe.txt`)],
+    ["write_file to the mode file", writeFile14(`${home}/.armoriq/armorantigravity/mode`)],
+    ["edit_file", editFile(`${home}/.armoriq/armorantigravity/config.json`)],
+  ])("%s in ~/.armoriq is the core's built-in deny, even when the plan names it", (_name, raw) => {
+    const res = setup({ decide: decideWith(undefined, PLAN_14) }).handle(hook("PreToolUse", raw));
+    expect(reasonOf(res)).toStartWith("ArmorIQ blocked this call [builtin_protected]");
+  });
+
+  test("a folder forbid policy applies to read_file, write_file and edit_file", () => {
+    const policy = {
+      schemaVersion: "armor.policy.v1",
+      defaults: { decision: "allow" },
+      statements: [{ id: "no-secrets-dir", effect: "forbid", action: { type: "tool", eq: "*" }, conditions: [{ field: "file.path", op: "starts_with", value: "/Users/dev/src/ws/enum/" }] }],
+    };
+    const { handle } = setup({ policy, decide: decideWith(undefined, PLAN_14) });
+    for (const raw of [stdinOf("pre-read_file"), stdinOf("pre-write_file"), stdinOf("pre-edit_file")]) {
+      expect(handle(hook("PreToolUse", raw))).toEqual({ decision: "deny", reason: "ArmorIQ blocked this call [policy_forbid]: ArmorIQ policy forbid: no-secrets-dir" });
+    }
+    expect(handle(hook("PreToolUse", readFile("/Users/dev/src/ws/notes.txt")))).toEqual(ALLOW);
+  });
+
+  test("read_file needs no plan like view_file; write_file and edit_file do", () => {
+    const { handle } = setup({ decide: decideWith(undefined, null) });
+    expect(handle(hook("PreToolUse", stdinOf("pre-read_file")))).toEqual(ALLOW);
+    expect(reasonOf(handle(hook("PreToolUse", stdinOf("pre-write_file"))))).toStartWith("ArmorIQ blocked this call [intent_plan_missing]");
+    expect(reasonOf(handle(hook("PreToolUse", stdinOf("pre-edit_file"))))).toStartWith("ArmorIQ blocked this call [intent_plan_missing]");
+  });
+
+  test("a plan step under either name covers the call", () => {
+    for (const steps of [["write_file", "edit_file"], ["write_to_file", "replace_file_content"]]) {
+      const { handle } = setup({ decide: decideWith(undefined, steps) });
+      expect(handle(hook("PreToolUse", stdinOf("pre-write_file")))).toEqual(ALLOW);
+      expect(handle(hook("PreToolUse", stdinOf("pre-edit_file")))).toEqual(ALLOW);
+    }
+    const { handle } = setup({ decide: decideWith(undefined, ["read_file"]) });
+    expect(reasonOf(handle(hook("PreToolUse", stdinOf("pre-write_file"))))).toStartWith("ArmorIQ blocked this call [intent_drift]");
+  });
+
+  test("write_file and edit_file may not modify the guard files; read_file may read them", () => {
+    const { handle } = setup({ decide: decideWith(undefined, PLAN_14) });
+    expect(reasonOf(handle(hook("PreToolUse", writeFile14(`${home}/.gemini/config/hooks.json`))))).toStartWith("ArmorIQ blocked this call [builtin_protected]: write_file may not modify ArmorIQ's guard files");
+    expect(reasonOf(handle(hook("PreToolUse", editFile(`${home}/.gemini/config/rules/armoriq.md`))))).toStartWith("ArmorIQ blocked this call [builtin_protected]: edit_file may not modify ArmorIQ's guard files");
+    expect(handle(hook("PreToolUse", readFile(`${home}/.gemini/config/hooks.json`)))).toEqual(ALLOW);
+  });
+
+  test.each([
+    ["view_file", "pre-read_file"],
+    ["write_to_file", "pre-write_file"],
+    ["replace_file_content", "pre-edit_file"],
+    ["Read", "pre-read_file"],
+    ["Write", "pre-write_file"],
+    ["Edit", "pre-edit_file"],
+  ])("a policy naming %s reaches %s", (tool, capture) => {
+    const res = setup({ policy: rule("legacy", "forbid", tool), decide: decideWith(undefined, PLAN_14) }).handle(hook("PreToolUse", stdinOf(capture)));
+    expect(res).toEqual({ decision: "deny", reason: "ArmorIQ blocked this call [policy_forbid]: ArmorIQ policy forbid: legacy" });
+  });
+});
+
 describe("policies written for ArmorClaude or OpenCode reach Antigravity tools", () => {
   test.each([
     ["Bash", runCommand("ls")],
