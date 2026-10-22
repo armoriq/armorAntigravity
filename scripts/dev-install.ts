@@ -1,4 +1,4 @@
-// Installs this checkout into an agy home for local testing; the real installer is #49.
+// Installs this checkout into an agy home for local testing; users get install_armorantigravity.sh.
 // Usage: bun scripts/dev-install.ts --home <dir> --backend <url>
 //        bun scripts/dev-install.ts --home <dir> --uninstall
 // Builds armoriq-agd and agd-hook, registers the hook for all five events in ~/.gemini/config/hooks.json,
