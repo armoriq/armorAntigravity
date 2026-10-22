@@ -17,6 +17,9 @@
         "zod": "^4.6.6",
       },
     },
+    "packages/cli": {
+      "name": "@armorantigravity/cli",
+    },
     "packages/core": {
       "name": "@armorantigravity/core",
       "devDependencies": {
@@ -93,6 +96,8 @@
   },
   "packages": {
     "@armorantigravity/adapter": ["@armorantigravity/adapter@workspace:packages/adapter"],
+
+    "@armorantigravity/cli": ["@armorantigravity/cli@workspace:packages/cli"],
 
     "@armorantigravity/core": ["@armorantigravity/core@workspace:packages/core"],
 
