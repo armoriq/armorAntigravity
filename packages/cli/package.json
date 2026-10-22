@@ -1,5 +1,8 @@
 {
   "name": "@armorantigravity/cli",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@armorantigravity/daemon": "workspace:*"
+  }
 }

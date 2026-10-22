@@ -1,19 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Installer template. Replace @AGD_BIN@ with the absolute path of armoriq-agd and @HOME@ with the
-  user's home, write to ~/Library/LaunchAgents/ai.armoriq.armorantigravity.agd.plist, then
-  launchctl bootstrap gui/$(id -u) <that file>. armoriq-agd exits 0 when another instance holds
-  its lock, so KeepAlive restarts it only after a crash.
+  Installer template. Replace @LABEL@ with the job label (ai.armoriq.armorantigravity.agd),
+  @AGD_BIN@ with the absolute path of armoriq-agd and @HOME@ with the user's home, write to
+  ~/Library/LaunchAgents/@LABEL@.plist, then launchctl bootstrap gui/$(id -u) <that file>.
+  armoriq-agd exits 0 when another instance holds its lock, so KeepAlive restarts it only after
+  a crash. HOME is pinned so the daemon reads the same ~/.armoriq the hooks talk to.
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>ai.armoriq.armorantigravity.agd</string>
+  <string>@LABEL@</string>
   <key>ProgramArguments</key>
   <array>
     <string>@AGD_BIN@</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>@HOME@</string>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

@@ -19,6 +19,9 @@
     },
     "packages/cli": {
       "name": "@armorantigravity/cli",
+      "dependencies": {
+        "@armorantigravity/daemon": "workspace:*",
+      },
     },
     "packages/core": {
       "name": "@armorantigravity/core",
