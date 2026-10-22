@@ -80,13 +80,16 @@ const ALIASES: ReadonlyMap<string, string> = new Map([
 const ARG_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
   ["command", ["CommandLine" /* captured */, "command", "commandLine"]],
   ["workdir", ["Cwd" /* captured */, "cwd", "workdir"]],
-  ["filePath", ["TargetFile" /* captured */, "AbsolutePath" /* captured */, "Path" /* captured, agy 1.4 */, "targetFile", "absolutePath", "filePath", "file_path"]],
+  ["filePath", ["TargetFile" /* captured */, "AbsolutePath" /* captured */, "targetFile", "absolutePath", "filePath", "file_path"]],
   ["path", ["DirectoryPath", "SearchDirectory", "SearchPath", "directoryPath", "searchPath", "path"]],
   ["pattern", ["Pattern", "Query", "pattern"]],
   ["include", ["Includes", "includes", "include"]],
   ["url", ["Url", "url" /* captured: chrome devtools navigate_page */, "URL"]],
   ["query", ["query" /* captured */, "Query"]],
 ]);
+
+// agy 1.4 writes to Path alone, so no other path field the model adds may stand in for it.
+const AGY_14_ARG_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([...ARG_SOURCES, ["filePath", ["Path" /* captured */]]]);
 
 const FIELDS_FOR_TOOL: ReadonlyMap<string, readonly string[]> = new Map([
   ["run_command", ["command", "workdir"]],
@@ -114,12 +117,12 @@ function firstString(args: Args, keys: readonly string[]): string | undefined {
   return undefined;
 }
 
-function canonicalArgs(tool: string, args: Args): Args {
+function canonicalArgs(tool: string, args: Args, sources = ARG_SOURCES): Args {
   const fields = FIELDS_FOR_TOOL.get(tool);
   if (!fields) return args;
   const out: Record<string, unknown> = { ...args };
   for (const field of fields) {
-    const value = firstString(args, ARG_SOURCES.get(field) ?? [field]);
+    const value = firstString(args, sources.get(field) ?? [field]);
     if (value !== undefined) out[field] = value;
   }
   return out;
@@ -213,7 +216,10 @@ export function mapToolCall(call: ToolCall, options: MapOptions = {}): MappedCal
 
   const alias = ALIASES.get(name.toLowerCase());
   const aliasCategory = alias === undefined ? undefined : ANTIGRAVITY_TOOLS.get(alias);
-  if (alias && aliasCategory) return { name, tool: alias, category: aliasCategory, args: canonicalArgs(alias, args) };
+  if (alias && aliasCategory) {
+    const sources = AGY_14_NAMES.has(name.toLowerCase()) ? AGY_14_ARG_SOURCES : ARG_SOURCES;
+    return { name, tool: alias, category: aliasCategory, args: canonicalArgs(alias, args, sources) };
+  }
   // Anything unrecognised is side-effecting: no read-only pass, and in
   // enforce mode it needs a plan step.
   return { name, tool: name, category: "unknown", args };
