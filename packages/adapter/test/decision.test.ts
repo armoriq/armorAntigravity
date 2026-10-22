@@ -322,6 +322,9 @@ describe("agy 1.4 file tools", () => {
     ["write_file", writeFile14(`${home}/.armoriq/armorantigravity/probe.txt`)],
     ["write_file to the mode file", writeFile14(`${home}/.armoriq/armorantigravity/mode`)],
     ["edit_file", editFile(`${home}/.armoriq/armorantigravity/config.json`)],
+    // agy 1.4 writes to Path; a 1.3 path field the model adds must not stand in for it.
+    ["write_file with a decoy TargetFile", at("pre-write_file", { Content: "x", Path: `${home}/.armoriq/armorantigravity/mode`, TargetFile: "/Users/dev/src/ws/ok.txt" })],
+    ["edit_file with a decoy AbsolutePath", at("pre-edit_file", { Path: `${home}/.armoriq/armorantigravity/mode`, AbsolutePath: "/Users/dev/src/ws/ok.txt", Target: "a", Replacement: "b" })],
   ])("%s in ~/.armoriq is the core's built-in deny, even when the plan names it", (_name, raw) => {
     const res = setup({ decide: decideWith(undefined, PLAN_14) }).handle(hook("PreToolUse", raw));
     expect(reasonOf(res)).toStartWith("ArmorIQ blocked this call [builtin_protected]");
