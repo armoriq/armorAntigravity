@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": { "armoriq-agd": "./src/main.ts" },
-  "exports": { ".": "./src/index.ts", "./package.json": "./package.json", "./service/*": "./service/*" },
+  "exports": { ".": "./src/index.ts", "./main": "./src/main.ts", "./package.json": "./package.json", "./service/*": "./service/*" },
   "scripts": {
     "build": "bun build src/main.ts --compile --outfile dist/armoriq-agd"
   },

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -262,6 +262,31 @@ describe("uninstall", () => {
     } finally {
       daemon.kill();
       other.kill();
+    }
+  });
+
+  test("uninstall succeeds when the daemon exits just before it is signalled", async () => {
+    await install(opts(), deps());
+    const executable = path.join(root, "armoriq-agd");
+    copyFileSync("/bin/sleep", executable);
+    chmodSync(executable, 0o755);
+    const daemon = Bun.spawn([executable, "60"]);
+    writeFileSync(L().lockFile, `${daemon.pid}\n`);
+    const kill = process.kill.bind(process);
+    const spy = spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === daemon.pid && signal === "SIGTERM") {
+        kill(pid, signal);
+        throw Object.assign(new Error("No such process"), { code: "ESRCH" });
+      }
+      return kill(pid, signal);
+    });
+    try {
+      await uninstall({ home, purge: true }, deps());
+      expect(existsSync(L().dataDir)).toBe(false);
+    } finally {
+      spy.mockRestore();
+      daemon.kill();
+      await daemon.exited;
     }
   });
 });

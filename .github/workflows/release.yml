@@ -106,8 +106,7 @@ jobs:
       - name: Smoke test the native archive
         run: |
           native="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')"
-          mkdir -p smoke && tar -xzf "dist/release/armorantigravity-$native.tar.gz" -C smoke
-          test "$(./smoke/armorantigravity --version)" = "${{ needs.plan.outputs.version }}"
+          bash scripts/smoke-release.sh "dist/release/armorantigravity-$native.tar.gz" "${{ needs.plan.outputs.version }}"
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.os }}

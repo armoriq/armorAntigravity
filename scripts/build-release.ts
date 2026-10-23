@@ -2,16 +2,15 @@
 // per target holding armoriq-agd, agd-hook and armorantigravity, plus SHA256SUMS over every archive in --out.
 // Usage: bun scripts/build-release.ts [--target darwin-arm64 ...] [--out dist/release] [--sums-only]
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
 const REPO = path.resolve(import.meta.dir, "..");
 const PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"] as const;
 const BINARIES = [
-  { name: "armoriq-agd", entry: "packages/daemon/src/main.ts", flags: [] },
+  { name: "armorantigravity", entry: "packages/cli/src/release.ts", flags: ["--minify"] },
   { name: "agd-hook", entry: "packages/hook/src/main.ts", flags: ["--bytecode", "--minify"] },
-  { name: "armorantigravity", entry: "packages/cli/src/main.ts", flags: [] },
 ] as const;
 
 const { values } = parseArgs({
@@ -30,8 +29,10 @@ if (!values["sums-only"]) {
     for (const bin of BINARIES) {
       run([process.execPath, "build", bin.entry, "--compile", `--target=bun-${platform}`, ...bin.flags, "--outfile", path.join(stage, bin.name)]);
     }
+    // tar stores this second entry as a hardlink, so CLI and daemon share one Bun runtime in the download.
+    linkSync(path.join(stage, "armorantigravity"), path.join(stage, "armoriq-agd"));
     const archive = path.join(out, `armorantigravity-${platform}.tar.gz`);
-    run(["tar", "-czf", archive, "-C", stage, ...BINARIES.map((b) => b.name)]);
+    run(["tar", "-czf", archive, "-C", stage, "armorantigravity", "armoriq-agd", "agd-hook"]);
     rmSync(stage, { recursive: true, force: true });
     console.log(`built ${archive}`);
   }

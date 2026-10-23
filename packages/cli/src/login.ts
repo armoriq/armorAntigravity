@@ -14,7 +14,7 @@ export function hasLogin(backend: string): boolean {
 export async function deviceLogin(backend: string, force: boolean): Promise<boolean> {
   process.env.ARMORIQ_BACKEND_URL = backend;
   const { runCliMain } = await import("@armoriq/sdk-dev/dist/cli/index.js");
-  const code = await runCliMain(["login", "--product", PRODUCT, ...(force ? ["--force"] : [])]);
+  const code = await runCliMain(["login", "--backend", backend, "--product", PRODUCT, ...(force ? ["--force"] : [])]);
   return code === 0 && hasLogin(backend);
 }
 

@@ -183,7 +183,12 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
     const binding = loginBinding(login);
     if (!warned.has(binding)) {
       warned.add(binding);
-      log.warn(`ArmorIQ login expired; run \`armoriq login --product ${PRODUCT} --force\``);
+      const cli = path.join(dataDir, "bin", "armorantigravity");
+      const backendArg = `'${login.backend.replaceAll("'", "'\\''")}'`;
+      const command = existsSync(cli)
+        ? `'${cli.replaceAll("'", "'\\''")}' login --backend ${backendArg} --force`
+        : `armoriq login --product ${PRODUCT} --backend ${backendArg} --force`;
+      log.warn(`ArmorIQ login expired; run \`${command}\``);
     }
     try {
       mkdirSync(dataDir, { recursive: true, mode: 0o700 });

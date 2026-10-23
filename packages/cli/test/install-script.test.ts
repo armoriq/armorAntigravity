@@ -54,7 +54,7 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 test("verifies the archive and runs the stable install from it", () => {
   const { code, out } = runScript([]);
   expect(code).toBe(0);
-  expect(out).toContain(`verified ${ARCHIVE}`);
+  expect(out).toContain(`Download verified (${ARCHIVE})`);
   expect(calls()).toEqual(["release-cli install --channel stable"]);
 });
 
@@ -98,5 +98,21 @@ test("uninstall falls back to the release CLI when nothing is installed", () => 
 test("rejects uninstall flags without --uninstall and unknown channels", () => {
   expect(runScript(["--purge"]).code).toBe(2);
   expect(runScript([], { ARMORANTIGRAVITY_CHANNEL: "beta" }).code).toBe(2);
+  expect(calls()).toEqual([]);
+});
+
+test("piped help is readable text without downloading or installing", () => {
+  const result = Bun.spawnSync(["bash", "-s", "--", "--help"], {
+    stdin: readFileSync(SCRIPT),
+    env: { PATH: process.env.PATH ?? "", HOME: home },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(result.exitCode).toBe(0);
+  const output = result.stdout.toString();
+  expect(output).toContain("ArmorAntigravity installer");
+  expect(output).toContain("--skip-login");
+  expect(output).not.toContain("\u0000");
+  expect(output).not.toContain("\u001b[");
   expect(calls()).toEqual([]);
 });
