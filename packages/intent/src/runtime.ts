@@ -15,7 +15,14 @@ type PreToolUse = Extract<HookPayload, { event: "PreToolUse" }>;
 // tool. The names are in the agy binary; a planning-mode capture has not confirmed how they are written.
 const PLAN_ARTIFACTS: ReadonlySet<string> = new Set(["implementation_plan.md", "task.md"]);
 const CHILD_MESSAGE_WINDOW_MS = 60_000;
-const FILE_WRITE_TOOLS: ReadonlySet<string> = new Set(["write_to_file", "replace_file_content", "multi_replace_file_content"]);
+// Each file-writing tool and the argument agy writes the path to (agy 1.4 renamed both).
+const FILE_WRITE_TOOLS: ReadonlyMap<string, string> = new Map([
+  ["write_to_file", "TargetFile"],
+  ["replace_file_content", "TargetFile"],
+  ["multi_replace_file_content", "TargetFile"],
+  ["write_file", "Path"],
+  ["edit_file", "Path"],
+]);
 
 export interface IntentRuntimeOptions {
   readonly client: ClientIdentity;
@@ -74,9 +81,10 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
   function notePlanArtifact(ref: ConversationRef, payload: PreToolUse): void {
     const dir = payload.artifactDirectoryPath;
     const args = payload.toolCall.args;
-    if (!dir || !FILE_WRITE_TOOLS.has(payload.toolCall.name) || !isPlainObject(args) || typeof args.TargetFile !== "string") return;
-    const target = args.TargetFile;
-    if (dirname(target) !== dir || !PLAN_ARTIFACTS.has(basename(target))) return;
+    const field = FILE_WRITE_TOOLS.get(payload.toolCall.name);
+    if (!dir || !field || !isPlainObject(args)) return;
+    const target = args[field];
+    if (typeof target !== "string" || dirname(target) !== dir || !PLAN_ARTIFACTS.has(basename(target))) return;
     const root = registry.root(conversationKey(ref));
     if (root) drafts.set(root.key, target);
   }
