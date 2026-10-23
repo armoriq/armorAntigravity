@@ -51,7 +51,7 @@ die()  { err "$*"; printf "%sNothing was changed.%s\n" "${R}" "${N}" >&2; exit 1
 
 banner() {
   local columns="${COLUMNS:-}"
-  [[ "${columns}" =~ ^[0-9]+$ ]] || columns="$(tput cols 2>/dev/null || printf '80')"
+  [[ "${columns}" =~ ^[0-9]+$ ]] || columns="$(stty size <&2 2>/dev/null | awk '{print $2}' || printf '80')"
   if [[ -n "${C}" && "${columns}" =~ ^[0-9]+$ && "${columns}" -ge 85 ]]; then
     cat <<EOF
 
