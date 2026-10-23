@@ -6,7 +6,9 @@
     "armoriq-agd-mcp": "./src/main.ts"
   },
   "exports": {
-    ".": "./src/server.ts"
+    ".": "./src/server.ts",
+    "./main": "./src/main.ts",
+    "./rules/armoriq.md": "./rules/armoriq.md"
   },
   "dependencies": {
     "@armorantigravity/protocol": "workspace:*",

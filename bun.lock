@@ -21,6 +21,7 @@
       "name": "@armorantigravity/cli",
       "dependencies": {
         "@armorantigravity/daemon": "workspace:*",
+        "@armorantigravity/mcp": "workspace:*",
       },
     },
     "packages/core": {
