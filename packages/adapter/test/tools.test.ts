@@ -60,6 +60,24 @@ describe("mapToolCall on captured agy calls", () => {
     expect(mapToolCall(capturedCall("pre-view_file")).args).toMatchObject({ filePath: "/Users/dev/src/ws/notes.txt" });
   });
 
+  test("read_file (agy 1.4): Path becomes filePath and it is a read-only view_file", () => {
+    const m = mapToolCall(capturedCall("pre-read_file"));
+    expect(m).toMatchObject({ name: "read_file", tool: "view_file", category: "read", args: { filePath: "/Users/dev/src/ws/enum/a.txt" } });
+    expect(isReadOnly(m)).toBe(true);
+  });
+
+  test("write_file (agy 1.4): Path becomes filePath, content is untouched", () => {
+    const m = mapToolCall(capturedCall("pre-write_file"));
+    expect(m).toMatchObject({ name: "write_file", tool: "write_to_file", category: "write", args: { filePath: "/Users/dev/src/ws/enum/new.txt", Content: "hello" } });
+    expect(isReadOnly(m)).toBe(false);
+  });
+
+  test("edit_file (agy 1.4): Path becomes filePath, Target is not a path", () => {
+    const m = mapToolCall(capturedCall("pre-edit_file"));
+    expect(m).toMatchObject({ name: "edit_file", tool: "replace_file_content", category: "write", args: { filePath: "/Users/dev/src/ws/enum/edit.txt", Target: "two" } });
+    expect(isReadOnly(m)).toBe(false);
+  });
+
   test("search_web keeps query", () => {
     expect(mapToolCall(capturedCall("pre-search_web"))).toMatchObject({ category: "web", args: { query: "antigravity hooks docs" } });
   });
@@ -164,6 +182,9 @@ describe("canonicalToolName: ArmorClaude and OpenCode aliases for plans", () => 
     ["Task", "invoke_subagent"],
     ["Agent", "invoke_subagent"],
     [" Bash ", "run_command"],
+    ["read_file", "view_file"],
+    ["write_file", "write_to_file"],
+    ["edit_file", "replace_file_content"],
   ])("%s -> %s", (name, canonical) => {
     expect(canonicalToolName(name)).toBe(canonical);
   });
@@ -178,6 +199,9 @@ describe("policy vocabulary", () => {
     ["apply_patch", ["apply_patch", "write_to_file", "replace_file_content", "multi_replace_file_content"]],
     ["Task", ["task", "invoke_subagent", "define_subagent", "send_message", "manage_subagents"]],
     ["mcp__github__create_issue", ["mcp__github__create_issue", "mcp_github_create_issue"]],
+    ["read_file", ["read_file", "view_file"]],
+    ["write_file", ["write_file", "write_to_file"]],
+    ["edit_file", ["edit_file", "replace_file_content", "multi_replace_file_content"]],
     ["GenerateImage", ["generateimage"]],
   ])("policyNames(%s)", (value, expected) => {
     expect(policyNames(value)).toEqual(expected);
@@ -186,6 +210,9 @@ describe("policy vocabulary", () => {
   test("nameReadings gives ArmorClaude's names for tool.name conditions", () => {
     expect(nameReadings("run_command")).toEqual(["run_command", "Bash", "bash"]);
     expect(nameReadings("mcp_github_create_issue")).toEqual(["mcp_github_create_issue"]);
+    expect(nameReadings("view_file")).toContain("read_file");
+    expect(nameReadings("write_to_file")).toContain("write_file");
+    expect(nameReadings("replace_file_content")).toContain("edit_file");
   });
 });
 
