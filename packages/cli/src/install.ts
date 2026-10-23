@@ -336,11 +336,19 @@ export async function stopDaemon(l: Layout, run: Run, log: (line: string) => voi
   if (!Number.isInteger(pid) || pid <= 1 || !alive(pid)) return;
   const command = run(["ps", "-o", "command=", "-p", String(pid)]).output;
   if (!command.includes("armoriq-agd")) return;
-  process.kill(pid, "SIGTERM");
+  signalProcess(pid, "SIGTERM");
   const deadline = Date.now() + 10_000;
   while (alive(pid) && Date.now() < deadline) await Bun.sleep(50);
-  if (alive(pid)) process.kill(pid, "SIGKILL");
+  if (alive(pid)) signalProcess(pid, "SIGKILL");
   log(`stopped armoriq-agd (pid ${pid})`);
+}
+
+function signalProcess(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ESRCH") throw error;
+  }
 }
 
 function alive(pid: number): boolean {

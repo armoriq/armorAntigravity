@@ -33,16 +33,38 @@ CHANNEL="${ARMORANTIGRAVITY_CHANNEL:-stable}"
 VERSION="${ARMORANTIGRAVITY_VERSION:-}"
 RELEASE_URL="${ARMORANTIGRAVITY_RELEASE_URL:-}"
 INSTALLED="${HOME}/.armoriq/armorantigravity/bin/armorantigravity"
+RECEIPT="${HOME}/.armoriq/armorantigravity/release.sha256"
 
-if [[ -t 1 ]]; then
+if [[ -t 1 && -z "${NO_COLOR+x}" ]]; then
   R=$'\033[1;31m' G=$'\033[32m' B=$'\033[1m' D=$'\033[0;90m' N=$'\033[0m'
+  C=$'\033[38;2;0;229;204m' M=$'\033[38;2;185;112;255m'
+  CHECK="✔" DOT="·" BAR="┃ "
 else
-  R="" G="" B="" D="" N=""
+  R="" G="" B="" D="" N="" C="" M=""
+  CHECK="[ok]" DOT="-" BAR=""
 fi
-ok()   { printf "%s[ok]%s %s\n" "${G}" "${N}" "$*"; }
-info() { printf "%s-%s %s\n" "${D}" "${N}" "$*"; }
+ok()   { printf "%s%s%s %s\n" "${G}" "${CHECK}" "${N}" "$*"; }
+info() { printf "%s%s%s %s\n" "${D}" "${DOT}" "${N}" "$*"; }
+section() { printf '\n%s%s%s%s%s\n' "${B}" "${M}" "${BAR}" "$*" "${N}"; }
 err()  { printf "%s[error]%s %s\n" "${R}" "${N}" "$*" >&2; }
 die()  { err "$*"; printf "%sNothing was changed.%s\n" "${R}" "${N}" >&2; exit 1; }
+
+help() {
+  cat <<'HELP'
+ArmorAntigravity installer
+
+Usage:
+  curl -fsSL https://armoriq.ai/install_armorantigravity.sh | bash
+  curl -fsSL https://armoriq.ai/install_armorantigravity_dev.sh | bash
+  bash install_armorantigravity.sh [--force-login] [--skip-login]
+  bash install_armorantigravity.sh --uninstall [--purge] [--logout]
+
+--force-login  reconnect your ArmorIQ account once
+--skip-login   install without connecting ArmorIQ
+--purge        remove product configuration, logs and queued uploads on uninstall
+--logout       also remove this product's login on uninstall
+HELP
+}
 
 pwd >/dev/null 2>&1 || cd "${HOME:-/}"
 
@@ -54,7 +76,7 @@ for arg in "$@"; do
     --uninstall) DO_UNINSTALL=1 ;;
     --purge|--logout) UNINSTALL_ARGS+=("${arg}") ;;
     --force-login|--skip-login) INSTALL_ARGS+=("${arg}") ;;
-    -h|--help) sed -n '4,30p' "${BASH_SOURCE[0]:-$0}" 2>/dev/null || true; exit 0 ;;
+    -h|--help) help; exit 0 ;;
     *) err "unknown argument: ${arg}"; exit 2 ;;
   esac
 done
@@ -103,21 +125,40 @@ sha256() {
   fi
 }
 
+installed_fingerprint() {
+  local name file
+  printf '%s\n' "$1"
+  for name in armorantigravity armoriq-agd agd-hook; do
+    file="${INSTALLED%/*}/${name}"
+    [[ -x "${file}" ]] || return 1
+    printf '%s  %s\n' "$(sha256 "${file}")" "${name}"
+  done
+}
+
 # Prints the directory holding the verified, unpacked binaries.
 fetch_release() {
   command -v curl >/dev/null 2>&1 || die "curl is required"
   command -v tar >/dev/null 2>&1 || die "tar is required"
-  local base archive want got
+  local base archive want got fingerprint
   base="$(release_base)"
   archive="armorantigravity-$(platform).tar.gz"
-  info "downloading ${base}/${archive}" >&2
-  curl -fsSL --retry 2 "${base}/SHA256SUMS" -o "${WORK}/SHA256SUMS" || die "could not download ${base}/SHA256SUMS"
-  curl -fSL --retry 2 --progress-bar "${base}/${archive}" -o "${WORK}/${archive}" || die "could not download ${base}/${archive}"
+  section "Preparing release" >&2
+  info "Checking the ${CHANNEL} release for $(platform)" >&2
+  curl -fsSL --connect-timeout 15 --max-time 60 --retry 2 "${base}/SHA256SUMS" -o "${WORK}/SHA256SUMS" || die "could not download ${base}/SHA256SUMS"
   want="$(awk -v f="${archive}" '$2 == f || $2 == "*" f { print $1 }' "${WORK}/SHA256SUMS")"
-  [[ -n "${want}" ]] || die "SHA256SUMS has no entry for ${archive}"
+  [[ "${want}" =~ ^[[:xdigit:]]{64}$ ]] || die "SHA256SUMS has no entry for ${archive}"
+  if [[ -f "${RECEIPT}" ]] && fingerprint="$(installed_fingerprint "${want}")" && [[ "$(cat "${RECEIPT}")" == "${fingerprint}" ]]; then
+    ok "Release is already downloaded and verified" >&2
+    printf '%s' "${INSTALLED%/*}"
+    return
+  fi
+  info "Downloading ArmorAntigravity" >&2
+  local progress=(-sS)
+  [[ -t 2 ]] && progress=(--progress-bar)
+  curl -fL --connect-timeout 15 --max-time 300 --retry 2 "${progress[@]}" "${base}/${archive}" -o "${WORK}/${archive}" || die "could not download ${base}/${archive}"
   got="$(sha256 "${WORK}/${archive}")"
   [[ "${got}" == "${want}" ]] || die "checksum mismatch for ${archive}: expected ${want}, got ${got}"
-  ok "verified ${archive} (sha256 ${got})" >&2
+  ok "Download verified (${archive})" >&2
   mkdir -p "${WORK}/bin"
   tar -xzf "${WORK}/${archive}" -C "${WORK}/bin" armoriq-agd agd-hook armorantigravity || die "could not unpack ${archive}"
   printf '%s' "${WORK}/bin"
@@ -138,13 +179,19 @@ main() {
     return
   fi
 
-  printf "%sArmorAntigravity installer%s %s(%s channel)%s\n" "${B}" "${N}" "${D}" "${CHANNEL}" "${N}"
+  printf '\n%s%sARMORIQ%s  %sArmorAntigravity%s %s(%s)%s\n' "${C}" "${B}" "${N}" "${B}" "${N}" "${D}" "${CHANNEL}" "${N}"
+  printf '%sIntent capture, tool policies and audit logging%s\n' "${D}" "${N}"
   local bin args
   bin="$(fetch_release)"
   args=(install --channel "${CHANNEL}")
   [[ -n "${ARMORIQ_BACKEND_URL:-}" ]] && args+=(--backend "${ARMORIQ_BACKEND_URL}")
   # The device login polls the backend and never reads stdin, which is the script itself under curl | bash.
-  "${bin}/armorantigravity" "${args[@]}" ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"} </dev/null
+  ARMORANTIGRAVITY_INSTALLER_UI=1 "${bin}/armorantigravity" "${args[@]}" ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"} </dev/null
+  local want
+  want="$(awk -v f="armorantigravity-$(platform).tar.gz" '$2 == f || $2 == "*" f { print $1 }' "${WORK}/SHA256SUMS")"
+  if [[ -x "${INSTALLED}" ]] && installed_fingerprint "${want}" > "${WORK}/release.sha256"; then
+    mv "${WORK}/release.sha256" "${RECEIPT}"
+  fi
 }
 
 main "$@"

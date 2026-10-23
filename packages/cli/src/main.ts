@@ -13,7 +13,7 @@ const HELP = `armorantigravity ${pkg.version}: ArmorIQ intent assurance for Goog
 Usage:
   armorantigravity install [--channel stable|dev] [--backend <url>] [--force-login] [--skip-login]
   armorantigravity uninstall [--purge] [--logout]
-  armorantigravity login [--force]
+  armorantigravity login [--backend <url>] [--force]
   armorantigravity status
   armorantigravity mcp            (the MCP server Antigravity starts; not for interactive use)
 
@@ -24,13 +24,18 @@ uninstall  removes all of that and stops the daemon. --purge also deletes ~/.arm
            (config, logs, queued uploads). The ArmorIQ login is kept unless --logout is given.
 `;
 
-const tty = process.stdout.isTTY;
+const tty = process.stdout.isTTY && process.env.NO_COLOR === undefined;
 const color = (code: string) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
-const [green, yellow, red, bold, dim] = [color("32"), color("33"), color("1;31"), color("1"), color("90")];
-const ok = (s: string) => console.log(`${green("[ok]")} ${s}`);
-const warn = (s: string) => console.error(`${yellow("[warn]")} ${s}`);
+const [green, yellow, red, bold, dim, cyan, purple] = [color("32"), color("33"), color("1;31"), color("1"), color("90"), color("38;2;0;229;204"), color("38;2;185;112;255")];
+const ok = (s: string) => console.log(`${green(tty ? "✔" : "[ok]")} ${s}`);
+const warn = (s: string) => process.stderr.write(`${yellow(tty ? "!" : "[warn]")} ${s}\n`);
 const info = (s: string) => console.log(`${dim("-")} ${s}`);
-const section = (s: string) => console.log(`\n${bold(s)}`);
+const section = (s: string) => console.log(`\n${purple(bold(`${tty ? "┃ " : ""}${s}`))}`);
+
+function banner(channel: string): void {
+  console.log(`\n${cyan(bold("ARMORIQ"))}  ${bold("ArmorAntigravity")} ${dim(`v${pkg.version} (${channel})`)}`);
+  console.log(dim("Intent capture, tool policies and audit logging\n"));
+}
 
 const home = homedir();
 let installStarted = false;
@@ -88,29 +93,31 @@ async function cmdInstall(args: string[]): Promise<number> {
   const backend = normalizeBackend(values.backend || DEFAULT_BACKENDS[channel]);
   const sourceDir = path.resolve(values.from ?? path.dirname(process.execPath));
 
-  console.log(bold(`ArmorAntigravity ${pkg.version} installer`) + dim(` (${channel}, ${backend})`));
-  section("Checking");
+  if (process.env.ARMORANTIGRAVITY_INSTALLER_UI !== "1") banner(channel);
+  section("Checking configuration");
   preflight(home);
-  ok(`existing ~/.gemini/config files can be merged`);
+  ok("Existing Antigravity settings can be preserved");
 
-  section("Connecting to ArmorIQ");
+  section("Connect to ArmorIQ");
+  info(`Backend: ${backend}`);
   if (values["skip-login"]) {
-    warn(`skipping sign-in; armoriq-agd runs in monitor mode until you run: ${path.join(layout(home).binDir, "armorantigravity")} login`);
+    warn("ArmorIQ sign-in was skipped");
   } else if (!values["force-login"] && hasLogin(backend)) {
-    ok(`ArmorIQ login for ${PRODUCT_AT(backend)} found, skipping sign-in`);
-  } else if (await deviceLogin(backend, Boolean(values["force-login"]))) {
-    ok(`signed in to ArmorIQ (${backend})`);
+    ok("Existing ArmorIQ login found. Sign-in skipped.");
   } else {
-    throw new Error(`ArmorIQ sign-in did not complete for ${backend}`);
+    info("Sign in to ArmorIQ, then authorize this installation once.");
+    if (!(await deviceLogin(backend, Boolean(values["force-login"])))) {
+      throw new Error(`ArmorIQ sign-in did not complete for ${backend}`);
+    }
+    ok("ArmorIQ connected");
   }
 
-  section("Installing");
+  section("Installing integration");
   installStarted = true;
   const result = await install({ home, sourceDir, version: pkg.version, channel: channel as Channel, backend }, deps);
-  for (const file of result.changed) info(`wrote ${file}`);
-  if (result.changed.length === 0) ok("already up to date");
+  ok(result.changed.length === 0 ? "Integration is already up to date" : "Hooks, policy tools and intent rules configured");
   if (result.service) {
-    if (result.daemonUp) ok(`armoriq-agd is running (${result.service.kind} ${result.service.label})`);
+    if (result.daemonUp) ok("ArmorIQ service is ready");
     else warn(`armoriq-agd did not open ${layout(home).socket} yet; see ${path.join(layout(home).dataDir, "logs")}. agd-hook starts it on first use.`);
   }
 
@@ -118,10 +125,18 @@ async function cmdInstall(args: string[]): Promise<number> {
     warn(`${file} has comments or trailing commas. They were kept, but agy reads this file as strict JSON and skips all of it, so ArmorIQ's entries (and yours) do not load until they are removed.`);
   }
 
-  section("Antigravity surfaces");
-  reportSurfaces();
-  console.log(`\n${green(bold("ArmorAntigravity is installed."))} Restart Antigravity (2.0, IDE or agy) to load the hooks.`);
-  info(`uninstall: ${path.join(layout(home).binDir, "armorantigravity")} uninstall [--purge]`);
+  const needsAttention = result.notStrictJson.length > 0 || (result.service !== null && !result.daemonUp);
+  console.log(`\n${(needsAttention ? yellow : green)(bold(needsAttention ? "ArmorAntigravity is installed. Resolve the warnings above." : "ArmorAntigravity is installed."))}`);
+  section("Quick start");
+  console.log("  Restart Antigravity to load the integration.");
+  if (values["skip-login"] && !hasLogin(backend)) {
+    console.log("  Connect ArmorIQ to enable enforcement:");
+    console.log(`  ${path.join(layout(home).binDir, "armorantigravity")} login`);
+  }
+  section("Manage anytime");
+  console.log(`  ${path.join(layout(home).binDir, "armorantigravity")} status`);
+  console.log(`  ${path.join(layout(home).binDir, "armorantigravity")} uninstall`);
+  console.log(`  ${cyan("https://docs.armoriq.ai/armorantigravity")}\n`);
   return 0;
 }
 
@@ -141,8 +156,8 @@ async function cmdUninstall(args: string[]): Promise<number> {
 }
 
 async function cmdLogin(args: string[]): Promise<number> {
-  const { values } = parseArgs({ args, options: { force: { type: "boolean" } }, strict: true });
-  const backend = installedBackend() ?? DEFAULT_BACKENDS.stable;
+  const { values } = parseArgs({ args, options: { force: { type: "boolean" }, backend: { type: "string" } }, strict: true });
+  const backend = normalizeBackend(values.backend || process.env.ARMORIQ_BACKEND_URL?.trim() || installedBackend() || DEFAULT_BACKENDS.stable);
   return (await deviceLogin(backend, Boolean(values.force))) ? 0 : 1;
 }
 

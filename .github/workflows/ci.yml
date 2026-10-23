@@ -38,6 +38,26 @@ jobs:
           sed "s#@AGD_BIN@#$PWD/packages/daemon/dist/armoriq-agd#" packages/daemon/service/armoriq-agd.service > "$RUNNER_TEMP/armoriq-agd.service"
           systemd-analyze verify "$RUNNER_TEMP/armoriq-agd.service"
 
+  release-smoke:
+    name: Native release (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: Build and exercise the native archive
+        run: |
+          native="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')"
+          bun scripts/build-release.ts --target "$native" --out dist/release
+          version="$(bun -p 'require("./packages/daemon/package.json").version')"
+          bash scripts/smoke-release.sh "dist/release/armorantigravity-$native.tar.gz" "$version"
+
   # PRD section 6 budgets for the compiled client against the compiled daemon. Results go to the job summary.
   latency:
     name: Hook latency
