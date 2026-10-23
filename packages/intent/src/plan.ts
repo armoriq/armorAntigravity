@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import type { Draft, PlanStep } from "./types.ts";
 
-// Claude and OpenCode names a model may write in a plan, mapped to the Antigravity tool they mean (PRD 5.3).
+// Claude, OpenCode and agy 1.4 names a model may write in a plan, mapped to the Antigravity tool they mean (PRD 5.3).
 const PLAN_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["read_file", "view_file"],
+  ["write_file", "write_to_file"],
+  ["edit_file", "replace_file_content"],
   ["bash", "run_command"],
   ["shell", "run_command"],
   ["write", "write_to_file"],

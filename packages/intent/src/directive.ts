@@ -3,7 +3,7 @@ import { MAX_REVISIONS_PER_TURN } from "./own-tools.ts";
 // The same text ships as ~/.gemini/config/rules/armoriq.md (packages/mcp) and is injected on PreInvocation.
 export const INTENT_DIRECTIVE = [
   "ArmorIQ intent enforcement is active for this conversation.",
-  "Before any tool other than view_file, list_dir, find_by_name and grep_search (that includes run_command, file edits, search_web, read_url_content, invoke_subagent, browser actions and MCP tools), call register_intent_plan once with the plan in this JSON shape:",
+  "Before any tool other than read_file, view_file, list_dir, find_by_name and grep_search (that includes run_command, file edits, search_web, read_url_content, invoke_subagent, browser actions and MCP tools), call register_intent_plan once with the plan in this JSON shape:",
   "",
   "{",
   '  "goal": "<one-line summary of the task>",',

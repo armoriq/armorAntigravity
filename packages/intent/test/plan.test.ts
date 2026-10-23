@@ -48,6 +48,16 @@ describe("planToolName", () => {
   });
 });
 
+describe("agy 1.4 file tool names", () => {
+  test.each([
+    ["read_file", "view_file"],
+    ["write_file", "write_to_file"],
+    ["edit_file", "replace_file_content"],
+  ])("a plan step %s means %s", (name, tool) => {
+    expect(planToolName(name)).toBe(tool);
+  });
+});
+
 describe("checkCall", () => {
   const steps = [
     { action: "run_command", tool: "run_command", params: { CommandLine: "npm test" } },
