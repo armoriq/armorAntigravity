@@ -43,9 +43,18 @@ const ANTIGRAVITY_TOOLS: ReadonlyMap<string, BuiltinCategory> = new Map([
   ["manage_subagents", "subagent"],
 ]);
 
-// ArmorClaude and ArmorOpenCode names, lower-cased, to the Antigravity tool
-// they mean. Same table as packages/intent plan.ts PLAN_ALIASES.
+// agy CLI 1.4 renamed its file tools (captured from 1.4.4); older agy and the
+// IDE still send the PRD 5.3 names, so these resolve to them.
+const AGY_14_NAMES: ReadonlyMap<string, string> = new Map([
+  ["read_file", "view_file"],
+  ["write_file", "write_to_file"],
+  ["edit_file", "replace_file_content"],
+]);
+
+// ArmorClaude, ArmorOpenCode and agy 1.4 names, lower-cased, to the Antigravity
+// tool they mean. Same table as packages/intent plan.ts PLAN_ALIASES.
 const ALIASES: ReadonlyMap<string, string> = new Map([
+  ...AGY_14_NAMES,
   ["bash", "run_command"],
   ["shell", "run_command"],
   ["write", "write_to_file"],
@@ -79,6 +88,9 @@ const ARG_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
   ["query", ["query" /* captured */, "Query"]],
 ]);
 
+// agy 1.4 writes to Path alone, so no other path field the model adds may stand in for it.
+const AGY_14_ARG_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([...ARG_SOURCES, ["filePath", ["Path" /* captured */]]]);
+
 const FIELDS_FOR_TOOL: ReadonlyMap<string, readonly string[]> = new Map([
   ["run_command", ["command", "workdir"]],
   ["write_to_file", ["filePath"]],
@@ -105,12 +117,12 @@ function firstString(args: Args, keys: readonly string[]): string | undefined {
   return undefined;
 }
 
-function canonicalArgs(tool: string, args: Args): Args {
+function canonicalArgs(tool: string, args: Args, sources = ARG_SOURCES): Args {
   const fields = FIELDS_FOR_TOOL.get(tool);
   if (!fields) return args;
   const out: Record<string, unknown> = { ...args };
   for (const field of fields) {
-    const value = firstString(args, ARG_SOURCES.get(field) ?? [field]);
+    const value = firstString(args, sources.get(field) ?? [field]);
     if (value !== undefined) out[field] = value;
   }
   return out;
@@ -204,7 +216,10 @@ export function mapToolCall(call: ToolCall, options: MapOptions = {}): MappedCal
 
   const alias = ALIASES.get(name.toLowerCase());
   const aliasCategory = alias === undefined ? undefined : ANTIGRAVITY_TOOLS.get(alias);
-  if (alias && aliasCategory) return { name, tool: alias, category: aliasCategory, args: canonicalArgs(alias, args) };
+  if (alias && aliasCategory) {
+    const sources = AGY_14_NAMES.has(name.toLowerCase()) ? AGY_14_ARG_SOURCES : ARG_SOURCES;
+    return { name, tool: alias, category: aliasCategory, args: canonicalArgs(alias, args, sources) };
+  }
   // Anything unrecognised is side-effecting: no read-only pass, and in
   // enforce mode it needs a plan step.
   return { name, tool: name, category: "unknown", args };
@@ -252,7 +267,8 @@ const CLAUDE_NAMES: ReadonlyMap<string, readonly string[]> = new Map([
 ]);
 
 export function nameReadings(tool: string): string[] {
-  return [tool, ...(CLAUDE_NAMES.get(tool) ?? [])];
+  const renamed = [...AGY_14_NAMES].filter(([, native]) => native === tool).map(([name]) => name);
+  return [tool, ...(CLAUDE_NAMES.get(tool) ?? []), ...renamed];
 }
 
 export function isReadOnly(mapped: MappedCall): boolean {

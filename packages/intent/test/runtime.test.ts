@@ -121,6 +121,17 @@ describe("unlinked subagent", () => {
 });
 
 describe("planning mode draft", () => {
+  test("agy 1.4's write_file with Path is seen as a planning draft too", () => {
+    const { rt } = runtime();
+    const dir = join(FIXTURE, "home", ".gemini", "antigravity-cli", "brain", PARENT);
+    const target = join(dir, "implementation_plan.md");
+    const base = { conversationId: PARENT, workspacePaths: [], transcriptPath: "", artifactDirectoryPath: dir, modelName: "gemini-3.8-flash-high" };
+    rt.observe("cli", { ...base, event: "PreToolUse", toolCall: { name: "write_file", args: { Content: "# plan", Path: target } }, stepIdx: 3 });
+    const r = rt.preInvocation("cli", { ...base, event: "PreInvocation", invocationNum: 1, initialNumSteps: 0 });
+    expect(JSON.stringify(r)).toContain(`Planning mode wrote ${target}.`);
+  });
+
+
   test("a write of implementation_plan.md into the artifact directory is offered as a draft to register", () => {
     const { rt } = runtime();
     const dir = join(FIXTURE, "home", ".gemini", "antigravity-cli", "brain", PARENT);
