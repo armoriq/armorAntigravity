@@ -27,6 +27,9 @@
     },
     {
       "path": "packages/hook"
+    },
+    {
+      "path": "packages/cli"
     }
   ]
 }
