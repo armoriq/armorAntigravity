@@ -2,8 +2,13 @@
   "name": "@armorantigravity/cli",
   "private": true,
   "type": "module",
+  "bin": { "armorantigravity": "./src/main.ts" },
+  "scripts": {
+    "build": "bun build src/main.ts --compile --outfile dist/armorantigravity"
+  },
   "dependencies": {
     "@armorantigravity/daemon": "workspace:*",
-    "@armorantigravity/mcp": "workspace:*"
+    "@armorantigravity/mcp": "workspace:*",
+    "@armoriq/sdk-dev": "^0.8.17"
   }
 }

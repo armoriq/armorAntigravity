@@ -19,9 +19,13 @@
     },
     "packages/cli": {
       "name": "@armorantigravity/cli",
+      "bin": {
+        "armorantigravity": "./src/main.ts",
+      },
       "dependencies": {
         "@armorantigravity/daemon": "workspace:*",
         "@armorantigravity/mcp": "workspace:*",
+        "@armoriq/sdk-dev": "^0.8.17",
       },
     },
     "packages/core": {
