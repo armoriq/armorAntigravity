@@ -49,6 +49,33 @@ section() { printf '\n%s%s%s%s%s\n' "${B}" "${M}" "${BAR}" "$*" "${N}"; }
 err()  { printf "%s[error]%s %s\n" "${R}" "${N}" "$*" >&2; }
 die()  { err "$*"; printf "%sNothing was changed.%s\n" "${R}" "${N}" >&2; exit 1; }
 
+banner() {
+  local columns="${COLUMNS:-}"
+  [[ "${columns}" =~ ^[0-9]+$ ]] || columns="$(tput cols 2>/dev/null || printf '80')"
+  if [[ -n "${C}" && "${columns}" =~ ^[0-9]+$ && "${columns}" -ge 85 ]]; then
+    cat <<EOF
+
+${C}${B} █████╗ ██████╗ ███╗   ███╗ ██████╗ ██████╗${N}
+${C}${B}██╔══██╗██╔══██╗████╗ ████║██╔═══██╗██╔══██╗${N}
+${C}${B}███████║██████╔╝██╔████╔██║██║   ██║██████╔╝${N}
+${C}${B}██╔══██║██╔══██╗██║╚██╔╝██║██║   ██║██╔══██╗${N}
+${C}${B}██║  ██║██║  ██║██║ ╚═╝ ██║╚██████╔╝██║  ██║${N}
+${C}${B}╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═╝${N}
+
+${C}${B} █████╗ ███╗   ██╗████████╗██╗ ██████╗ ██████╗  █████╗ ██╗   ██╗██╗████████╗██╗   ██╗${N}
+${C}${B}██╔══██╗████╗  ██║╚══██╔══╝██║██╔════╝ ██╔══██╗██╔══██╗██║   ██║██║╚══██╔══╝╚██╗ ██╔╝${N}
+${C}${B}███████║██╔██╗ ██║   ██║   ██║██║  ███╗██████╔╝███████║██║   ██║██║   ██║    ╚████╔╝${N}
+${C}${B}██╔══██║██║╚██╗██║   ██║   ██║██║   ██║██╔══██╗██╔══██║╚██╗ ██╔╝██║   ██║     ╚██╔╝${N}
+${C}${B}██║  ██║██║ ╚████║   ██║   ██║╚██████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║   ██║      ██║${N}
+${C}${B}╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝   ╚═╝      ╚═╝${N}
+
+EOF
+  else
+    printf '\n%s%sARMORIQ%s  %sArmorAntigravity%s\n' "${C}" "${B}" "${N}" "${B}" "${N}"
+  fi
+  printf '%sIntent capture, tool policies and audit logging (%s)%s\n' "${D}" "${CHANNEL}" "${N}"
+}
+
 help() {
   cat <<'HELP'
 ArmorAntigravity installer
@@ -152,10 +179,8 @@ fetch_release() {
     printf '%s' "${INSTALLED%/*}"
     return
   fi
-  info "Downloading ArmorAntigravity" >&2
-  local progress=(-sS)
-  [[ -t 2 ]] && progress=(--progress-bar)
-  curl -fL --connect-timeout 15 --max-time 300 --retry 2 "${progress[@]}" "${base}/${archive}" -o "${WORK}/${archive}" || die "could not download ${base}/${archive}"
+  info "Downloading ArmorAntigravity. Please wait..." >&2
+  curl -fsSL --connect-timeout 15 --max-time 300 --retry 2 "${base}/${archive}" -o "${WORK}/${archive}" || die "could not download ${base}/${archive}"
   got="$(sha256 "${WORK}/${archive}")"
   [[ "${got}" == "${want}" ]] || die "checksum mismatch for ${archive}: expected ${want}, got ${got}"
   ok "Download verified (${archive})" >&2
@@ -179,8 +204,7 @@ main() {
     return
   fi
 
-  printf '\n%s%sARMORIQ%s  %sArmorAntigravity%s %s(%s)%s\n' "${C}" "${B}" "${N}" "${B}" "${N}" "${D}" "${CHANNEL}" "${N}"
-  printf '%sIntent capture, tool policies and audit logging%s\n' "${D}" "${N}"
+  banner
   local bin args
   bin="$(fetch_release)"
   args=(install --channel "${CHANNEL}")
