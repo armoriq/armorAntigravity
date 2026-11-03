@@ -58,6 +58,9 @@ export interface UsagePump {
   // A run the backend says is no longer current: its queued batches are dropped.
   dropRun(runId: string): Promise<void>;
   client(): Promise<{ client: UsageClient; dir: string; login: Login } | null>;
+  // Creates this device's stream when conmap has none: conmap refuses run reports until it exists,
+  // and a live pass creates it only once a turn has token counts to send.
+  ensureStream(): Promise<UsageResult<string>>;
   start(): void;
   kick(): void;
   stop(): Promise<void>;
@@ -415,6 +418,14 @@ export function createUsagePump(deps: EvidenceDeps, options: UsagePumpOptions = 
     async client() {
       const ready = await prepare();
       return ready && { client: ready.client, dir: ready.dir, login: ready.login };
+    },
+    ensureStream() {
+      // conmap's initialize is an upsert: asking again returns the current generation and fences nothing.
+      return serial(async (): Promise<UsageResult<string>> => {
+        const ready = stopped ? null : await prepare();
+        if (!ready) return { ok: false, retryable: true, reason: stopped ? "stopping" : "not signed in" };
+        return generationFor(ready.dir, ready.client, true);
+      });
     },
     async stop() {
       stopped = true;

@@ -36,6 +36,7 @@ import path from "node:path";
 import type { DaemonContext, DaemonPlugin, HookContext, PluginRegistration } from "./plugin.ts";
 import { loginBinding } from "./auth.ts";
 import { createReachability, type Reachability } from "./reachability.ts";
+import { APP_DATA_DIRS } from "./surface.ts";
 
 const MAX_OPEN_CALLS = 10_000;
 
@@ -51,7 +52,8 @@ export function armoriqPlugins(): readonly DaemonPlugin[] {
   // agy's transcript names no model; every hook payload does, and hooks arrive before the turn end
   // that reads the transcript.
   const models = new Map<string, string>();
-  const source = createAgySource({ cliHome: path.join(homedir(), ".gemini", "antigravity-cli"), modelOf: (id) => models.get(id) });
+  const appDirs = Object.entries(APP_DATA_DIRS).map(([name, surface]) => ({ dir: path.join(homedir(), ".gemini", name), surface }));
+  const source = createAgySource({ appDirs, modelOf: (id) => models.get(id) });
   return [
     {
       name: "models",

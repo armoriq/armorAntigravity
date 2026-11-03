@@ -41,7 +41,8 @@ export interface UsageClient {
 
 const AUTH_STATUSES = new Set([401, 402, 403]);
 
-export const isFenced = (r: UsageResult<unknown>) => !r.ok && r.status === 409 && /generation/i.test(r.reason);
+// A stream conmap no longer has fences like a new generation: initializing again recreates it.
+export const isFenced = (r: UsageResult<unknown>) => !r.ok && r.status === 409 && /generation|initialize the usage stream/i.test(r.reason);
 
 // The SDK client is loaded only from a pump, never on the hook path.
 export async function createUsageClient(login: Login, uploads: Uploads): Promise<UsageClient> {
