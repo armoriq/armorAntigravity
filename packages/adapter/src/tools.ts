@@ -1,3 +1,4 @@
+import type { Capability } from "@armorantigravity/core";
 import type { ToolCall } from "@armorantigravity/protocol";
 
 export type Args = Readonly<Record<string, unknown>>;
@@ -273,4 +274,21 @@ export function nameReadings(tool: string): string[] {
 
 export function isReadOnly(mapped: MappedCall): boolean {
   return mapped.category === "read";
+}
+
+// Spec 0002 capability table: every MCP tool is mcp, read-only ones included; subagents, the browser and
+// unrecognised tools are other.
+export function capabilityOf(mapped: MappedCall): Capability {
+  switch (mapped.category) {
+    case "read":
+    case "write":
+    case "shell":
+    case "mcp":
+    case "web":
+      return mapped.category;
+    case "subagent":
+    case "browser":
+    case "unknown":
+      return "other";
+  }
 }

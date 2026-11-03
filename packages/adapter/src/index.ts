@@ -3,6 +3,7 @@ export {
   canonicalToolName,
   BUILTIN_MCP_SERVERS,
   DEFAULT_OWN_MCP_SERVER,
+  capabilityOf,
   isReadOnly,
   mapToolCall,
   mcpPart,

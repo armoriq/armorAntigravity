@@ -24,12 +24,14 @@ export interface Login {
   readonly deviceName: string;
 }
 
-export type Refusal = "account_revoked" | "billing_blocked";
+export type Refusal = "billing_blocked";
 
 export type AuthState =
   | { readonly kind: "logged_out" }
   | { readonly kind: "active"; readonly login: Login }
   | { readonly kind: "relogin_required"; readonly login: Login }
+  // The backend answered 401: run on local rules alone, as if signed out, until a probe or mint succeeds or the key changes.
+  | { readonly kind: "local_only"; readonly login: Login }
   | { readonly kind: "refused"; readonly login: Login; readonly code: Refusal };
 
 export interface Auth {
@@ -40,8 +42,9 @@ export interface Auth {
   mode(): Mode;
   // Null while logged out or after relogin_required: audit, usage and trace pumps must stay idle.
   uploadLogin(): Login | null;
-  // Call with every backend response a mint or upload gets; it applies the PRD 4a error rules.
-  reportStatus(status: number, body: unknown, source: "mint" | "upload"): void;
+  // Call with every backend response a mint, upload or reachability probe gets; it applies the PRD 4a error
+  // rules, except that a 401 means signed out (spec 0002 posture).
+  reportStatus(status: number, body: unknown, source: "mint" | "upload" | "probe"): void;
   onChange(listener: (state: AuthState) => void): () => void;
   stop(): void;
 }
@@ -205,16 +208,17 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
     client,
     headers,
     state: () => state,
-    mode: () => (state.kind === "logged_out" || config.forceMonitor ? "monitor" : "enforce"),
+    mode: () => (state.kind === "logged_out" || state.kind === "local_only" || config.forceMonitor ? "monitor" : "enforce"),
     uploadLogin: () => (state.kind === "active" || state.kind === "refused" ? state.login : null),
 
     reportStatus(status, body, source) {
       if (!("login" in state)) return;
       if (isReloginRequired(status, body)) return markRelogin(state.login);
-      if (source !== "mint" || state.kind === "relogin_required") return;
-      if (status === 401) set({ kind: "refused", login: state.login, code: "account_revoked" });
-      else if (status === 402) set({ kind: "refused", login: state.login, code: "billing_blocked" });
-      else if (status >= 200 && status < 300 && state.kind === "refused") set({ kind: "active", login: state.login });
+      // Upload routes are not the key check, so a 401 from one never signs the developer out.
+      if (source === "upload" || state.kind === "relogin_required") return;
+      if (status === 401) set({ kind: "local_only", login: state.login });
+      else if (status === 402 && source === "mint") set({ kind: "refused", login: state.login, code: "billing_blocked" });
+      else if (status >= 200 && status < 300 && (state.kind === "local_only" || (state.kind === "refused" && source === "mint"))) set({ kind: "active", login: state.login });
     },
 
     onChange(listener) {

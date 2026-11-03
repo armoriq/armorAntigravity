@@ -20,6 +20,7 @@ export type DenyCode =
   | "account_revoked"
   | "billing_blocked"
   | "own_tool_shadowed"
+  | "backend_unreachable"
   | "internal_error";
 
 export type Decision =
@@ -73,6 +74,9 @@ export type CompiledPolicy = {
 
 export type AuditStatus = "success" | "failed" | "error" | "blocked" | "held";
 
+// Spec 0002 verdict field, from the tools-core capability table.
+export type Capability = "read" | "write" | "shell" | "mcp" | "web" | "other";
+
 export type AuditRow = {
   // Backend CreateAuditLogDto dedupe key (UUID); armorOpenCode does not send it yet.
   client_row_id?: string;
@@ -91,6 +95,7 @@ export type AuditRow = {
   error_message?: string;
   duration_ms?: number;
   executed_at: string;
+  capability?: Capability;
 };
 
 export type BatchAck = {
