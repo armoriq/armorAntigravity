@@ -34,6 +34,7 @@ import type { HookPayload, HookResponse, Surface } from "@armorantigravity/proto
 import { homedir } from "node:os";
 import path from "node:path";
 import type { DaemonContext, DaemonPlugin, HookContext, PluginRegistration } from "./plugin.ts";
+import { loginBinding } from "./auth.ts";
 import { createReachability, type Reachability } from "./reachability.ts";
 
 const MAX_OPEN_CALLS = 10_000;
@@ -72,7 +73,15 @@ export function armoriqPlugins(): readonly DaemonPlugin[] {
 }
 
 function defaultReachability({ log, auth }: DaemonContext): Reachability {
-  return createReachability({ log, headers: auth.headers, onResponse: (status, body) => auth.reportStatus(status, body, "probe") });
+  return createReachability({
+    log,
+    headers: auth.headers,
+    // A probe still in flight when the key changed must not decide the new key's state.
+    onResponse: (probed, status, body) => {
+      const state = auth.state();
+      if ("login" in state && loginBinding(state.login) === loginBinding(probed)) auth.reportStatus(status, body, "probe");
+    },
+  });
 }
 
 function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reachability: Reachability): PluginRegistration {
@@ -105,6 +114,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     audit: (row) => recorder.audit({ ...row, capability: "mcp" }, { surface: surfaceOf(runtime, row.session_id) }),
     // The intent backend flags relogin only for this exact response (sdk isReloginRequired).
     onRelogin: () => auth.reportStatus(403, { error: "relogin_required" }, "mint"),
+    onUnauthorized: () => auth.reportStatus(401, null, "mint"),
     log,
   });
   const intent = intentRegistration(runtime);

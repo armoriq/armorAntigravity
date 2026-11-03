@@ -12,7 +12,7 @@ function setup(answer: (signal: AbortSignal) => Promise<Response>, timeoutMs = 5
   const reach = createReachability({
     log: quiet,
     headers: {},
-    onResponse: (status) => statuses.push(status),
+    onResponse: (_probed, status) => statuses.push(status),
     fetch: (url, init) => {
       calls.push(url);
       if (!init.signal) throw new Error("probe has no timeout signal");

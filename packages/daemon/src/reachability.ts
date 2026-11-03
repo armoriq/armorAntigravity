@@ -15,7 +15,7 @@ export interface ReachabilityOptions {
   readonly log: Log;
   readonly headers: Readonly<Record<string, string>>;
   // Every probe answer goes here, so the auth state applies 401 and relogin_required.
-  onResponse(status: number, body: unknown): void;
+  onResponse(probed: Login, status: number, body: unknown): void;
   readonly fetch?: (input: string, init: RequestInit) => Promise<Response>;
   readonly now?: () => number;
   readonly timeoutMs?: number;
@@ -60,7 +60,7 @@ export function createReachability(opts: ReachabilityOptions): Reachability {
 
   async function refresh(login: Login, key: string): Promise<Reach> {
     const res = await probe(login);
-    if (res.status !== null) opts.onResponse(res.status, res.body);
+    if (res.status !== null) opts.onResponse(login, res.status, res.body);
     const reach = toReach(res);
     const previous = cached?.key === key ? cached.reach.kind : null;
     cached = { key, reach, until: now() + cacheMs };

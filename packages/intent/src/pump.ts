@@ -26,6 +26,7 @@ export function createTokenPump(deps: {
   backend: IntentBackend;
   login: () => Login | null;
   log: Log;
+  onUnauthorized?: () => void;
   now?: () => number;
   checkEveryMs?: number;
   idleAfterStopMs?: number;
@@ -105,6 +106,8 @@ export function createTokenPump(deps: {
       if (planId && planId !== plan.id) revokePlan(auth, c.key, planId, current ? "plan replaced during token refresh" : "antigravity conversation closed");
       return;
     }
+    // Signed out by a 401: the plan and its last token stay, so the session resumes once the key is accepted.
+    if (token.status === "refused" && token.code === "account_revoked" && deps.onUnauthorized) return deps.onUnauthorized();
     if (token.status === "refused" || planId === plan.id) return registry.setToken(c.key, token);
     const cursor = current.stepCursor;
     registry.setPlan(c.key, { ...plan, id: planId }, token);

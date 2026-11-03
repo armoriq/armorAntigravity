@@ -30,7 +30,7 @@ export type AuthState =
   | { readonly kind: "logged_out" }
   | { readonly kind: "active"; readonly login: Login }
   | { readonly kind: "relogin_required"; readonly login: Login }
-  // The backend answered 401: run on local rules alone, as if signed out, until a probe or mint succeeds or the key changes.
+  // The backend answered 401: run on local rules alone, as if signed out, until a probe succeeds or the key changes.
   | { readonly kind: "local_only"; readonly login: Login }
   | { readonly kind: "refused"; readonly login: Login; readonly code: Refusal };
 
