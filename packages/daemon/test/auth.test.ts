@@ -117,13 +117,29 @@ test("403 relogin_required writes the marker, pauses uploads, and survives a res
   expect(restarted.uploadLogin()?.apiKey).toBe("ak_2");
 });
 
-test("401 and 402 on mint refuse until a mint succeeds; uploads never refuse", () => {
+test("a 401 on mint or probe means local-only until the key checks out; uploads never change state", () => {
   save(STAGING, "armorantigravity", "ak_1");
   const a = start();
   a.reportStatus(401, {}, "upload");
   expect(a.state().kind).toBe("active");
+  a.reportStatus(401, {}, "probe");
+  expect(a.state().kind).toBe("local_only");
+  expect(a.mode()).toBe("monitor");
+  expect(a.uploadLogin()).toBeNull();
+  a.reportStatus(200, {}, "probe");
+  expect(a.state().kind).toBe("active");
+  expect(a.mode()).toBe("enforce");
   a.reportStatus(401, {}, "mint");
-  expect(a.state()).toMatchObject({ kind: "refused", code: "account_revoked" });
+  expect(a.state().kind).toBe("local_only");
+  a.reportStatus(200, {}, "mint");
+  expect(a.state().kind).toBe("active");
+});
+
+test("402 on mint refuses until a mint succeeds", () => {
+  save(STAGING, "armorantigravity", "ak_1");
+  const a = start();
+  a.reportStatus(402, {}, "probe");
+  expect(a.state().kind).toBe("active");
   a.reportStatus(402, {}, "mint");
   expect(a.state()).toMatchObject({ kind: "refused", code: "billing_blocked" });
   expect(a.uploadLogin()?.apiKey).toBe("ak_1");

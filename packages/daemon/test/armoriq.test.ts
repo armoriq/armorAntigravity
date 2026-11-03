@@ -28,10 +28,13 @@ function captured(): Map<number, Capture> {
   return out;
 }
 
-type Seen = { method: string; path: string; body: unknown };
+type Seen = { method: string; path: string; body: unknown; accepted: boolean };
+
+type BackendHealth = "up" | "down" | "unauthorized";
 
 function stubBackend() {
   const seen: Seen[] = [];
+  const health: { now: BackendHealth } = { now: "up" };
   const policy = {
     schemaVersion: "armor.policy.v1",
     defaults: { decision: "allow" },
@@ -43,8 +46,14 @@ function stubBackend() {
       const url = new URL(req.url);
       const text = await req.text();
       const json = (req.headers.get("content-type") ?? "").includes("json") && text ? JSON.parse(text) : null;
-      seen.push({ method: req.method, path: url.pathname, body: json });
+      seen.push({ method: req.method, path: url.pathname, body: json, accepted: health.now === "up" });
       const route = `${req.method} ${url.pathname}`;
+      if (route === "POST /iap/validate-key") {
+        if (health.now === "down") await Bun.sleep(5_000);
+        if (health.now === "unauthorized") return Response.json({ message: "Invalid or expired API key", statusCode: 401 }, { status: 401 });
+        return Response.json({ orgId: "org-1", userId: "user-1" });
+      }
+      if (health.now === "down") return new Response("", { status: 503 });
       if (route === "GET /policies/profiles/active") return Response.json({ version: 1, policy, updatedBy: "dashboard", publishedAt: "2026-10-12T10:00:00.000Z" });
       // The fields the SDK's getIntentToken reads from conmap's /iap/sdk/token.
       if (route === "POST /iap/sdk/token") {
@@ -59,7 +68,7 @@ function stubBackend() {
       return Response.json({ message: `Cannot ${route}`, statusCode: 404 }, { status: 404 });
     },
   });
-  return { url: `http://127.0.0.1:${server.port}`, seen, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}`, seen, health, stop: () => server.stop(true) };
 }
 
 function isRows(body: unknown): body is { rows: Record<string, unknown>[] } {
@@ -208,4 +217,79 @@ test("agy 1.4 file tools: ~/.armoriq stays protected inside a registered plan, a
   expect(await hook(agy14("read_file", { Path: path.join(dataDir, "config.json") }))).toEqual(protectedDeny);
   expect(await hook(agy14("write_file", { Content: "monitor", Overwrite: true, Path: path.join(dataDir, "mode") }))).toEqual(protectedDeny);
   expect(await hook(agy14("edit_file", { Path: path.join(dataDir, "config.json"), Replacement: "{}", Target: "{" }))).toEqual(protectedDeny);
+}, 60_000);
+
+async function signedInDaemon(): Promise<RunningDaemon> {
+  const dataDir = path.join(sandbox.home, ".armoriq", "armorantigravity");
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(path.join(dataDir, "config.json"), JSON.stringify({ backendUrl: backend.url }));
+  saveLoginProfile({ backend: backend.url, product: "armorantigravity", apiKey: "ak_test_wiring", email: "dev@example.com", userId: "user-1", orgId: "org-1" });
+  const started = await startDaemon({ env: {}, plugins: armoriqPlugins(), log: quiet });
+  await until(() => backend.seen.some((r) => r.path === "/policies/profiles/active"));
+  await Bun.sleep(100);
+  return started;
+}
+
+async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
+  const start = performance.now();
+  const value = await work;
+  return { value, ms: performance.now() - start };
+}
+
+test("backend down while signed in: reads run, writes, shell and MCP are blocked backend_unreachable, and the rows upload once it is back", async () => {
+  daemon = await signedInDaemon();
+  const r3 = captured();
+  const at = (seq: number): Capture => {
+    const c = r3.get(seq);
+    if (!c) throw new Error(`no capture ${seq}`);
+    return c;
+  };
+  backend.health.now = "down";
+
+  const read = await timed(hook(at(19)));
+  expect(read.value).toEqual({ decision: "allow" });
+  expect(read.ms).toBeLessThan(1_500);
+
+  const unreachable = { decision: "deny", reason: expect.stringMatching(/\[backend_unreachable\].*armorantigravity status/) };
+  const shell = await timed(hook(at(3)));
+  expect(shell.value).toEqual(unreachable);
+  expect(shell.ms).toBeGreaterThanOrEqual(2_000);
+  expect(shell.ms).toBeLessThan(4_000);
+  // The verdict is cached, so the next calls are blocked without another 2 s wait.
+  const write = await timed(hook(at(11)));
+  expect(write.value).toEqual(unreachable);
+  expect(write.ms).toBeLessThan(1_500);
+  expect(await hook(at(35))).toEqual(unreachable);
+  expect(backend.seen.filter((r) => r.path === "/iap/validate-key")).toHaveLength(1);
+
+  // The pump tries, gets a 503, and keeps the rows in the outbox across a restart.
+  await until(() => backend.seen.some((r) => r.path === "/iap/audit/batch"), 15_000);
+  expect(uploaded()).toEqual([]);
+  await daemon.stop();
+  backend.health.now = "up";
+  daemon = await startDaemon({ env: {}, plugins: armoriqPlugins(), log: quiet });
+  await until(() => uploaded().length >= 3, 15_000);
+
+  const summary = uploaded().map((r) => [r.tool, r.status, r.capability, typeof r.error_message === "string" ? r.error_message.split(":")[0] : null]);
+  expect(summary).toEqual([
+    ["run_command", "blocked", "shell", "backend_unreachable"],
+    ["write_to_file", "blocked", "write", "backend_unreachable"],
+    ["mcp_agspike_global_echo", "blocked", "mcp", "backend_unreachable"],
+  ]);
+}, 90_000);
+
+function uploaded(): Record<string, unknown>[] {
+  // Rows a 503 turned away stay in the outbox; only accepted batches count.
+  return backend.seen.filter((r) => r.path === "/iap/audit/batch" && r.accepted).flatMap((r) => (isRows(r.body) ? r.body.rows : []));
+}
+
+test("a 401 from the backend means signed out: local-only mode, nothing blocked as unreachable", async () => {
+  daemon = await signedInDaemon();
+  backend.health.now = "unauthorized";
+  const write = captured().get(11);
+  if (!write) throw new Error("no capture 11");
+  expect(await hook(write)).toEqual({ decision: "allow" });
+  expect(daemon.auth.state().kind).toBe("local_only");
+  expect(daemon.auth.mode()).toBe("monitor");
+  expect(readFileSync(daemon.paths.modeFile, "utf8").trim()).toBe("monitor");
 }, 60_000);

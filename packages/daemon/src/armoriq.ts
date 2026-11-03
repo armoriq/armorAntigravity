@@ -1,5 +1,6 @@
 import {
   ANTIGRAVITY,
+  capabilityOf,
   compileAntigravityPolicy,
   createCoreDecide,
   createDecisionHandler,
@@ -7,13 +8,16 @@ import {
   createPolicySource,
   DEFAULT_OWN_MCP_SERVER,
   guardPaths,
+  mapToolCall,
+  toHookResponse,
   type AdapterDecision,
   type BackendAccess,
   type DecisionRecord,
   type HookInput,
+  type MappedCall,
   type SessionPair,
 } from "@armorantigravity/adapter";
-import { DEFAULT_POLICY_SOURCE, toAuditRow, type AuditStatus, type CompiledPolicy, type Decision, type Session as CoreSession, type SessionID, type ToolCall as CoreToolCall } from "@armorantigravity/core";
+import { DEFAULT_POLICY_SOURCE, toAuditRow, type AuditStatus, type Capability, type CompiledPolicy, type Decision, type Session as CoreSession, type SessionID, type ToolCall as CoreToolCall } from "@armorantigravity/core";
 import { callIdOf, createAgySource, evidencePlugin, type EvidenceRecorder } from "@armorantigravity/evidence";
 import {
   conversationKey,
@@ -30,12 +34,17 @@ import type { HookPayload, HookResponse, Surface } from "@armorantigravity/proto
 import { homedir } from "node:os";
 import path from "node:path";
 import type { DaemonContext, DaemonPlugin, HookContext, PluginRegistration } from "./plugin.ts";
+import { loginBinding } from "./auth.ts";
+import { createReachability, type Reachability } from "./reachability.ts";
 import { APP_DATA_DIRS } from "./surface.ts";
 
 const MAX_OPEN_CALLS = 10_000;
 
 type PostToolUse = Extract<HookPayload, { event: "PostToolUse" }>;
-type OpenCall = { readonly surface: Surface; readonly call: CoreToolCall; readonly decision: Decision; readonly at: number };
+type PreToolUse = Extract<HookPayload, { event: "PreToolUse" }>;
+type OpenCall = { readonly surface: Surface; readonly call: CoreToolCall; readonly decision: Decision; readonly capability: Capability; readonly at: number };
+
+export const DOCTOR_COMMAND = "armorantigravity status";
 
 // Evidence is set up first so the guard can hand it every decision; the daemon runs setups in order.
 export function armoriqPlugins(): readonly DaemonPlugin[] {
@@ -59,13 +68,25 @@ export function armoriqPlugins(): readonly DaemonPlugin[] {
       name: "guard",
       setup(ctx) {
         if (!recorder) throw new Error("the evidence plugin must be set up before the guard");
-        return guardRegistration(ctx, recorder);
+        return guardRegistration(ctx, recorder, defaultReachability(ctx));
       },
     },
   ];
 }
 
-function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder): PluginRegistration {
+function defaultReachability({ log, auth }: DaemonContext): Reachability {
+  return createReachability({
+    log,
+    headers: auth.headers,
+    // A probe still in flight when the key changed must not decide the new key's state.
+    onResponse: (probed, status, body) => {
+      const state = auth.state();
+      if ("login" in state && loginBinding(state.login) === loginBinding(probed)) auth.reportStatus(status, body, "probe");
+    },
+  });
+}
+
+function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reachability: Reachability): PluginRegistration {
   const { log, auth } = ctx;
   const home = homedir();
   const access = (): BackendAccess | null => {
@@ -91,9 +112,11 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder): Plug
     mode: () => auth.mode(),
     policy: () => policyView(policy.current().policy),
     mintPolicy: () => undefined,
-    audit: (row) => recorder.audit(row, { surface: surfaceOf(runtime, row.session_id) }),
+    // Intent rows come from the plugin's own MCP tools.
+    audit: (row) => recorder.audit({ ...row, capability: "mcp" }, { surface: surfaceOf(runtime, row.session_id) }),
     // The intent backend flags relogin only for this exact response (sdk isReloginRequired).
     onRelogin: () => auth.reportStatus(403, { error: "relogin_required" }, "mint"),
+    onUnauthorized: () => auth.reportStatus(401, null, "mint"),
     log,
   });
   const intent = intentRegistration(runtime);
@@ -107,7 +130,13 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder): Plug
   };
 
   const open = new Map<string, OpenCall>();
-  const auditRow = (surface: Surface, call: CoreToolCall, decision: Decision, status: AuditStatus, extra: { at: number; durationMs: number | null; error: string | null }) => {
+  const auditRow = (
+    surface: Surface,
+    call: CoreToolCall,
+    decision: Decision,
+    status: AuditStatus,
+    extra: { at: number; durationMs: number | null; error: string | null; capability: Capability },
+  ) => {
     const { session, root } = sessions(surface, call.sessionId);
     const login = auth.uploadLogin();
     // Logged out is monitor mode: nothing is recorded, so no row can upload later under no user.
@@ -128,10 +157,11 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder): Plug
       decision,
       at: record.at,
     });
-    if (record.status !== "allowed") auditRow(surface, call, decision, record.status, { at: record.at, durationMs: null, error: null });
+    const capability = capabilityOf(record.call);
+    if (record.status !== "allowed") auditRow(surface, call, decision, record.status, { at: record.at, durationMs: null, error: null, capability });
     // A held call the user approves still runs; its result row comes from PostToolUse.
     if (record.status !== "blocked") {
-      open.set(call.callId, { surface, call, decision, at: record.at });
+      open.set(call.callId, { surface, call, decision, capability, at: record.at });
       if (open.size > MAX_OPEN_CALLS) open.delete(open.keys().next().value ?? call.callId);
     }
   };
@@ -142,7 +172,31 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder): Plug
     if (!opened) return;
     open.delete(callId);
     const status: AuditStatus = payload.error === "" ? "success" : "failed";
-    auditRow(opened.surface, opened.call, opened.decision, status, { at, durationMs: Math.max(0, at - opened.at), error: payload.error || null });
+    auditRow(opened.surface, opened.call, opened.decision, status, { at, durationMs: Math.max(0, at - opened.at), error: payload.error || null, capability: opened.capability });
+  };
+
+  // Spec 0002 posture. Signed in and the backend unreachable: only read calls run. Signed out by a 401
+  // (local_only), calls never wait on a probe, but one runs in the background so a working key comes back.
+  const unreachable = async (surface: Surface, payload: PreToolUse, at: number): Promise<HookResponse | null> => {
+    const state = auth.state();
+    if (state.kind === "local_only") {
+      void reachability.check(state.login);
+      return null;
+    }
+    if ((state.kind !== "active" && state.kind !== "refused") || auth.mode() === "monitor") return null;
+    const call: MappedCall = mapToolCall(payload.toolCall);
+    if (capabilityOf(call) === "read") return null;
+    const reach = await reachability.check(state.login);
+    if (reach.kind !== "unreachable") return null;
+    const decision: AdapterDecision = {
+      kind: "deny",
+      code: "backend_unreachable",
+      reason: `the ArmorIQ backend at ${state.login.backend} is unreachable (${reach.reason}); only read calls run until it answers. Run \`${DOCTOR_COMMAND}\` to check.`,
+      ruleId: null,
+    };
+    const response = toHookResponse(decision);
+    onDecision(surface, { conversationId: payload.conversationId, stepIdx: payload.stepIdx, at, call, decision, status: "blocked", response });
+    return response;
   };
 
   const builtin = { armoriqDir: ctx.paths.armoriqDir, ownTools: new Set<string>(OWN_TOOLS), shadowedTools: new Set<string>() };
@@ -170,7 +224,14 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder): Plug
   syncOrg();
 
   return {
-    decide: withIntent(runtime, (hook: HookContext) => handlerFor(hook.session.surface)(hook)),
+    // The plugin's own intent tools are decided before this runs; they need the backend anyway and fail on their own.
+    decide: withIntent(runtime, async (hook: HookContext) => {
+      const surface = hook.session.surface;
+      if (hook.payload.event !== "PreToolUse") return handlerFor(surface)(hook);
+      const blocked = await unreachable(surface, hook.payload, hook.receivedAt);
+      // A probe can turn a 401 into local-only mode; decide with the mode it left behind.
+      return blocked ?? handlerFor(surface)({ payload: hook.payload, mode: auth.mode(), receivedAt: hook.receivedAt });
+    }),
     observe(event) {
       intent.observe(event);
       if (event.kind === "session_start") syncOrg();

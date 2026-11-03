@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { checkIntent } from "../src/decision.ts";
-import { AMBIGUOUS_OUTCOME, callDigest, ownToolName } from "../src/own-tools.ts";
+import { AMBIGUOUS_OUTCOME, callDigest, createOwnTools, ownToolName } from "../src/own-tools.ts";
+import { createRegistry } from "../src/registry.ts";
 import { conversationKey, type ConversationRef, type PolicyView } from "../src/types.ts";
-import { harness } from "./helpers.ts";
+import { harness, LOGIN, permitAll, recordingBackend, silentLog } from "./helpers.ts";
 
 const A: ConversationRef = { surface: "cli", conversationId: "conv-a" };
 const B: ConversationRef = { surface: "cli", conversationId: "conv-b" };
@@ -222,5 +223,25 @@ describe("MCP outcome hand-off", () => {
     expect(ownToolName("mcp_armoriq_register_intent_plan")).toBe("register_intent_plan");
     expect(ownToolName("mcp__armoriq__trust_delegate")).toBe("trust_delegate");
     expect(ownToolName("run_command")).toBeNull();
+  });
+});
+
+describe("a 401 on mint", () => {
+  test("reports signed out instead of storing an account_revoked token", async () => {
+    const registry = createRegistry();
+    let unauthorized = 0;
+    const tools = createOwnTools({
+      registry,
+      backend: { ...recordingBackend().backend, mint: async () => ({ ok: true, value: { planId: "", token: { status: "refused", code: "account_revoked" } } }) },
+      login: () => LOGIN,
+      mode: () => "enforce",
+      policy: () => permitAll,
+      audit: () => {},
+      log: silentLog,
+      onUnauthorized: () => unauthorized++,
+    });
+    expect(await tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toMatch(/local-only mode/);
+    expect(unauthorized).toBe(1);
+    expect(registry.root(conversationKey(A))?.token ?? null).toBeNull();
   });
 });
