@@ -14,17 +14,22 @@ export const batchOf = (r: Recorded): Batch => {
   return r.body as Batch;
 };
 
-// conmap's token-usage routes, with the acknowledgement shapes the SDK checks.
+// conmap's token-usage routes, with the acknowledgement shapes the SDK checks. Like conmap, every
+// route but /stream answers 409 until /stream has created the stream for this device.
 export function usageBackend(extra: Record<string, Handler> = {}, opts: { generations?: string[]; fence?: (b: Batch) => boolean; refuse?: () => number | null } = {}) {
   const generations = [...(opts.generations ?? [crypto.randomUUID()])];
   let current = generations[0] ?? crypto.randomUUID();
+  let initialized = false;
+  const uninitialized = { status: 409, body: { message: "Initialize the usage stream first" } };
   const runs = new Map<string, { applied: boolean; completedAt: string | null }>();
   const backend = stubBackend({
     "POST /dashboard/token-usage/stream": () => {
+      initialized = true;
       current = generations.shift() ?? current;
       return { body: { generation: current } };
     },
     "POST /dashboard/token-usage/batch": (r) => {
+      if (!initialized) return uninitialized;
       const b = batchOf(r);
       const refused = opts.refuse?.();
       if (refused) return { status: refused, body: { message: "Invalid API key" } };
@@ -38,6 +43,7 @@ export function usageBackend(extra: Record<string, Handler> = {}, opts: { genera
       };
     },
     "PUT /dashboard/token-usage/runs/*": (r) => {
+      if (!initialized) return uninitialized;
       const runId = r.path.split("/").pop() ?? "";
       const phase = isRecord(r.body) ? r.body.phase : null;
       const run = { applied: true, completedAt: phase === "complete" ? new Date().toISOString() : null };
