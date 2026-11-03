@@ -7,7 +7,7 @@ import { renderUnit, serviceFor, startService, stopService, type Run, type Servi
 
 export const PRODUCT = "armorantigravity";
 export type Channel = "stable" | "dev";
-export const DEFAULT_BACKENDS: Readonly<Record<Channel, string>> = { stable: "https://api.armoriq.ai", dev: "https://api.armoriq.ai" };
+export const DEFAULT_BACKENDS: Readonly<Record<Channel, string>> = { stable: "https://api.armoriq.ai", dev: "https://staging-api.armoriq.io" };
 export const BINARIES = ["armoriq-agd", "agd-hook", "armorantigravity"] as const;
 
 const EVENTS = ["PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"] as const;
