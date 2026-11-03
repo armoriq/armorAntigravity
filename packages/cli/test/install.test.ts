@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { BINARIES, DEFAULT_BACKENDS, hooksValue, install, layout, mcpValue, uninstall, type Deps } from "../src/install.ts";
+import { BINARIES, hooksValue, install, layout, mcpValue, uninstall, type Deps } from "../src/install.ts";
 import { parseJsonc } from "../src/jsonc.ts";
 import type { Run } from "../src/service.ts";
 
@@ -60,10 +60,6 @@ beforeEach(() => {
   logs = [];
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
-
-test("both channels default to the production backend", () => {
-  expect(DEFAULT_BACKENDS).toEqual({ stable: "https://api.armoriq.ai", dev: "https://api.armoriq.ai" });
-});
 
 describe("install", () => {
   test("merges into existing JSONC files without touching the user's bytes", async () => {

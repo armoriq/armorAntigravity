@@ -23,7 +23,7 @@ set -euo pipefail
 #
 # Environment:
 #   ARMORANTIGRAVITY_CHANNEL      stable (default) or dev
-#   ARMORIQ_BACKEND_URL           backend (default https://api.armoriq.ai on both channels)
+#   ARMORIQ_BACKEND_URL           backend (default https://api.armoriq.ai; dev https://staging-api.armoriq.io)
 #   ARMORANTIGRAVITY_VERSION      release tag to install, such as v0.1.0 (default: the newest
 #                                 release; dev-latest on the dev channel)
 #   ARMORANTIGRAVITY_RELEASE_URL  directory URL holding the archives and SHA256SUMS, instead of GitHub
