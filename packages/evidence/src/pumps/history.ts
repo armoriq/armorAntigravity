@@ -134,6 +134,12 @@ export function createHistoryPump(deps: EvidenceDeps & { usage: UsagePump; sourc
       state.history = request.requestId ? { mode: "history", runId: randomUUID(), requestId: request.requestId, sequence: 0, hours: [] } : null;
       await save();
     }
+    if (!state.history && state.discovered) return;
+    const stream = await usage.ensureStream();
+    if (!stream.ok) {
+      log.warn("history: usage stream not ready", { reason: stream.reason });
+      return;
+    }
     if (state.history && (await runOnce(client, state.history, save))) {
       state.history = null;
       state.discovered = true;

@@ -16,7 +16,7 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
-function cliHome(): string {
+function appDir(): string {
   const home = mkdtempSync(path.join(tmpdir(), "agy-source-"));
   homes.push(home);
   cpSync(FIXTURE, home, { recursive: true });
@@ -45,8 +45,8 @@ function summaries(home: string, rows: { id: string; title: string; parent: stri
 
 describe("agy transcript source", () => {
   test("token totals match agy's own result; cached tokens are counted apart from input", async () => {
-    const home = cliHome();
-    const read = await createAgySource({ cliHome: home, modelOf: () => "gemini-3.8-flash-high" }).read(ref(home));
+    const home = appDir();
+    const read = await createAgySource({ appDirs: [{ dir: home, surface: "cli" }], modelOf: () => "gemini-3.8-flash-high" }).read(ref(home));
     const sum = (k: "inputTokens" | "outputTokens" | "cacheReadTokens") => read.steps.reduce((n, s) => n + s[k], 0);
     expect(read.problems).toEqual([]);
     expect(sum("inputTokens")).toBe(77013);
@@ -57,39 +57,52 @@ describe("agy transcript source", () => {
   });
 
   test("a model never seen in a hook is unknown", async () => {
-    const home = cliHome();
-    const read = await createAgySource({ cliHome: home, modelOf: () => undefined }).read(ref(home));
+    const home = appDir();
+    const read = await createAgySource({ appDirs: [{ dir: home, surface: "cli" }], modelOf: () => undefined }).read(ref(home));
     expect(read.steps.every((s) => s.model === "unknown")).toBe(true);
   });
 
   test("a half-written last line is reported, not thrown, and earlier steps still count", async () => {
-    const home = cliHome();
+    const home = appDir();
     appendFileSync(ref(home).transcriptPath, '{"step_index":99,"type":"PLANNER_RESPONSE","input_tok');
-    const read = await createAgySource({ cliHome: home, modelOf: () => "gemini-3.8-flash-high" }).read(ref(home));
+    const read = await createAgySource({ appDirs: [{ dir: home, surface: "cli" }], modelOf: () => "gemini-3.8-flash-high" }).read(ref(home));
     expect(read.steps.reduce((n, s) => n + s.outputTokens, 0)).toBe(2652);
     expect(read.problems).toHaveLength(1);
   });
 
   test("a missing transcript gives no steps and one problem", async () => {
-    const home = cliHome();
-    const read = await createAgySource({ cliHome: home, modelOf: () => undefined }).read(ref(home, "no-such-conversation"));
+    const home = appDir();
+    const read = await createAgySource({ appDirs: [{ dir: home, surface: "cli" }], modelOf: () => undefined }).read(ref(home, "no-such-conversation"));
     expect(read.steps).toEqual([]);
     expect(read.problems).toHaveLength(1);
   });
 
   test("a subagent resolves to its root conversation and has no title of its own", async () => {
-    const home = cliHome();
+    const home = appDir();
     summaries(home, [
       { id: "root", title: "README And CHANGELOG Summary", parent: "" },
       { id: "child", title: "", parent: "root" },
       { id: CONVERSATION, title: "", parent: "child" },
     ]);
-    const source = createAgySource({ cliHome: home, modelOf: () => undefined });
+    const source = createAgySource({ appDirs: [{ dir: home, surface: "cli" }], modelOf: () => undefined });
     const read = await source.read(ref(home));
     expect(read.parentId).toBe("root");
     expect(read.title).toBeNull();
     const listed = await source.list();
     expect(listed.map((r) => r.conversationId)).toEqual([CONVERSATION]);
     expect(listed[0]?.workspacePaths).toEqual(["/tmp/agy-demo/ws"]);
+  });
+  test("lists conversations from every surface's app data dir, each under its own surface", async () => {
+    const cli = appDir();
+    const app = appDir();
+    const ide = path.join(appDir(), "absent");
+    const listed = await createAgySource({ appDirs: [{ dir: cli, surface: "cli" }, { dir: app, surface: "app" }, { dir: ide, surface: "ide" }], modelOf: () => undefined }).list();
+    expect(listed.map((r) => [r.surface, r.transcriptPath])).toEqual([
+      ["cli", ref(cli).transcriptPath],
+      ["app", ref(app).transcriptPath],
+    ]);
+    const read = await createAgySource({ appDirs: [{ dir: app, surface: "app" }], modelOf: () => undefined }).read(listed[1]!);
+    expect(read.problems).toEqual([]);
+    expect(read.steps.reduce((n, s) => n + s.outputTokens, 0)).toBe(2652);
   });
 });
