@@ -1,25 +1,32 @@
 # Copied from armoriq/.github .github/workflows/pr-size.yml (em dashes and
-# emoji shortcodes replaced). The org ruleset runs that workflow only on PRs
-# into main and dev; this copy also covers the stacked feature branches used
-# until dev exists (#9). It lives apart from ci.yml because it must rerun on
-# `edited`, which would otherwise cancel the test and CodeQL runs.
-name: PR size
+# emoji shortcodes replaced), to cover the stacked feature branches that the
+# org ruleset does not reach: it runs its own copy on PRs into main and dev.
+#
+# This copy must never run on a PR into main or dev, and must never share a
+# name or a concurrency group with the org's. When it did both, the two runs
+# landed in one group, cancel-in-progress cancelled one, and the required
+# `PR size` check reported `cancelled` and blocked an approved merge (#158).
+#
+# It lives apart from ci.yml because it must rerun on `edited`, which would
+# otherwise cancel the test and CodeQL runs.
+name: PR size (stacked)
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, edited]
+    branches-ignore: [main, dev]
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: pr-size-stacked-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   pr-size:
-    name: PR size
+    name: PR size (stacked)
     runs-on: ubuntu-latest
     permissions:
       contents: read
