@@ -75,8 +75,16 @@ function readProfile(backend: string): Identity | null {
   }
 }
 
+// Scanned rather than `.replace(/\/+$/, "")`, which backtracks quadratically on a
+// long run of slashes.
+function stripTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === "/") end--;
+  return end === url.length ? url : url.slice(0, end);
+}
+
 export function resolveBackend(env: Env, configured: string | null): string {
-  return (envValue(env, "ARMORIQ_BACKEND_URL") ?? configured ?? DEFAULT_BACKEND).replace(/\/+$/, "");
+  return stripTrailingSlashes(envValue(env, "ARMORIQ_BACKEND_URL") ?? configured ?? DEFAULT_BACKEND);
 }
 
 export function readLogin(env: Env, configuredBackend: string | null): Login | null {

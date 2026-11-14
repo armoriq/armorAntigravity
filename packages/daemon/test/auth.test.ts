@@ -34,6 +34,16 @@ test("backend order is ARMORIQ_BACKEND_URL, then config, then prod", () => {
   expect(resolveBackend({ ARMORIQ_BACKEND_URL: "  " }, null)).toBe("https://api.armoriq.ai");
 });
 
+test("every trailing slash is dropped, however many, without a slow scan", () => {
+  expect(resolveBackend({ ARMORIQ_BACKEND_URL: "http://localhost:3000///" }, null)).toBe("http://localhost:3000");
+  expect(resolveBackend({ ARMORIQ_BACKEND_URL: "http://localhost:3000/a/b/" }, null)).toBe("http://localhost:3000/a/b");
+  expect(resolveBackend({ ARMORIQ_BACKEND_URL: "/" }, null)).toBe("");
+  const padded = `http://x${"/".repeat(200_000)}a`;
+  const t = performance.now();
+  expect(resolveBackend({ ARMORIQ_BACKEND_URL: padded }, null)).toBe(padded);
+  expect(performance.now() - t).toBeLessThan(200);
+});
+
 test("only the armorantigravity profile for the resolved backend counts", () => {
   save(STAGING, "armoropencode", "ak_opencode");
   save("https://api.armoriq.ai", "armorantigravity", "ak_prod");

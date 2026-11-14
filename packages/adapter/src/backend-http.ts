@@ -12,6 +12,14 @@ export type BackendResult = { ok: true; status: number; data: unknown } | { ok: 
 
 const TIMEOUT_MS = 8000;
 
+// Scanned rather than `.replace(/\/+$/, "")`, which backtracks quadratically on a
+// long run of slashes.
+function stripTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === "/") end--;
+  return end === url.length ? url : url.slice(0, end);
+}
+
 // API-key call shaped like armorClaude backend-client.mjs, with the client header PRD 4a requires on every call.
 export async function backendRequest(
   access: BackendAccess,
@@ -21,7 +29,7 @@ export async function backendRequest(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), request.timeoutMs ?? TIMEOUT_MS);
   try {
-    const res = await doFetch(`${access.login.backend.replace(/\/+$/, "")}${request.path}`, {
+    const res = await doFetch(`${stripTrailingSlashes(access.login.backend)}${request.path}`, {
       method: request.method,
       headers: {
         "Content-Type": "application/json",

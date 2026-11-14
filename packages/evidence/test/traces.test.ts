@@ -168,4 +168,20 @@ describe("model ids", () => {
     expect(canonicalModel("models/gemini-3.6-flash")).toBe("gemini-3.6-flash");
     expect(canonicalModel("")).toBe("unknown");
   });
+
+  test("the display level is stripped with whatever whitespace precedes it", () => {
+    expect(canonicalModel("  Gemini 3.1 Pro (High)  ")).toBe("gemini-3.1-pro-preview");
+    expect(canonicalModel("Gemini 3.1 Pro\t(high)")).toBe("gemini-3.1-pro-preview");
+    expect(canonicalModel("Gemini 3.1 Pro  (HIGH)")).toBe("gemini-3.1-pro-preview");
+    expect(canonicalModel("gemini-3.6-flash(low)")).toBe("gemini-3.6-flash");
+    expect(canonicalModel("(high)")).toBe("unknown");
+    // Not a trailing level, so it stays part of the id.
+    expect(canonicalModel("Gemini (High) Pro")).toBe("gemini-(high)-pro");
+  });
+
+  test("stays fast on an id padded with whitespace before an unclosed level", () => {
+    const t = performance.now();
+    expect(canonicalModel(`x${" ".repeat(200_000)}(high`)).toBe("x-(high");
+    expect(performance.now() - t).toBeLessThan(200);
+  });
 });
