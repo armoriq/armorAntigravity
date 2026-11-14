@@ -4,7 +4,7 @@
   "type": "module",
   "bin": { "armorantigravity": "./src/main.ts" },
   "scripts": {
-    "build": "bun build src/main.ts --compile --outfile dist/armorantigravity"
+    "build": "bun ../../scripts/build-js.ts --cli --out dist"
   },
   "dependencies": {
     "@armorantigravity/daemon": "workspace:*",

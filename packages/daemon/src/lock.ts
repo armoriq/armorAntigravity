@@ -1,27 +1,43 @@
-import { dlopen, FFIType } from "bun:ffi";
-import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const LOCK_EX = 2;
-const LOCK_NB = 4;
-
-// flock(2) is released by the kernel when the process dies, so a crashed daemon never leaves a
-// stale lock behind, and concurrent hooks that each spawn a daemon race safely.
-const libc = dlopen(process.platform === "darwin" ? "libc.dylib" : "libc.so.6", {
-  flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
-});
-
+// SPIKE: node has no flock(2), so the kernel no longer releases the lock when the daemon dies.
+// A dead owner's lock is stolen after a liveness check instead.
 export interface InstanceLock {
   release(): void;
 }
 
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
+  }
+}
+
 export function acquireInstanceLock(file: string): InstanceLock | null {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const fd = openSync(file, "a+", 0o600);
-  if (libc.symbols.flock(fd, LOCK_EX | LOCK_NB) !== 0) {
-    closeSync(fd);
-    return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(file, "wx", 0o600);
+      writeFileSync(fd, `${process.pid}\n`);
+      return {
+        release: () => {
+          closeSync(fd);
+          try {
+            unlinkSync(file);
+          } catch {}
+        },
+      };
+    } catch (error) {
+      if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "EEXIST") throw error;
+    }
+    const owner = Number.parseInt(readFileSync(file, "utf8").trim(), 10);
+    if (Number.isInteger(owner) && owner > 1 && alive(owner)) return null;
+    try {
+      unlinkSync(file);
+    } catch {}
   }
-  writeFileSync(file, `${process.pid}\n`);
-  return { release: () => closeSync(fd) };
+  return null;
 }

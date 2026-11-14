@@ -54,6 +54,11 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: .bun-version
+      # armorantigravity and armoriq-agd are node bundles now, so the runner's node decides whether
+      # the archive runs at all. Pinned rather than inherited from the image.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
       - run: bun install --frozen-lockfile
       - name: Build and exercise the native archive
         run: |
@@ -77,6 +82,11 @@ jobs:
         with:
           bun-version-file: .bun-version
 
+      # armorantigravity and armoriq-agd are node bundles now, so the runner's node decides whether
+      # the archive runs at all. Pinned rather than inherited from the image.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
       - run: bun install --frozen-lockfile
       - run: (cd packages/daemon && bun run build) && (cd packages/hook && bun run build)
       - run: bun packages/hook/bench/latency.ts --samples 100
