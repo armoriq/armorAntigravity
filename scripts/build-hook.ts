@@ -7,7 +7,9 @@ import { parseArgs } from "node:util";
 
 const REPO = path.resolve(import.meta.dir, "..");
 const SOURCE = path.join(REPO, "packages", "hook", "src", "agd-hook.c");
-const COMMON = ["-std=c11", "-O2", "-Wall", "-Wextra", "-o"];
+// gnu11, not c11: under glibc, strict ISO mode hides the POSIX declarations this needs (clock_gettime,
+// readlink, nanosleep, PATH_MAX). Apple's headers expose them either way, so c11 built only on macOS.
+const COMMON = ["-std=gnu11", "-O2", "-Wall", "-Wextra", "-o"];
 
 export type HookTarget = "darwin-arm64" | "darwin-x64" | "linux-x64" | "linux-arm64";
 
