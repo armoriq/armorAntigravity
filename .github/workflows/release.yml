@@ -107,6 +107,10 @@ jobs:
           bun-version-file: .bun-version
           no-cache: true
       - run: bun install --frozen-lockfile
+      # agd-hook is C. Apple's cc emits both macOS slices on its own; the Linux runner needs the
+      # archive's aarch64 cross gcc for the linux-arm64 slice.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - run: bun scripts/build-release.ts ${{ matrix.targets }} --out dist/release
       - name: Smoke test the native archive
         run: |

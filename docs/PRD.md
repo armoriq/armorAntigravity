@@ -159,7 +159,7 @@ The auth, intent, token, session and drift flows must match ArmorOpenCode `dev` 
 
 ### 5.1 Hook client plus daemon
 
-- **`agd-hook`** is a small native binary: a Bun-compiled single file or Go, chosen by benchmark in P0. Every hook event runs it. It reads stdin, forwards the event over a unix socket to the daemon, and prints the decision. It loads no SDK and does no network I/O.
+- **`agd-hook`** is a small native binary, written in C with no dependencies. Every hook event runs it. It reads stdin, forwards the event over a unix socket to the daemon, and prints the decision. It loads no SDK and does no network I/O. It was a Bun-compiled single file until the embedded runtime made it 69 MB of a 60 MB download (armoriq/armorAntigravity#165); C removed that and measured about five times faster.
 - **`armoriq-agd`** is a long-lived daemon, one per user and shared by all three surfaces. It holds:
   - the compiled policy
   - session and plan state

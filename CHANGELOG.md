@@ -9,6 +9,10 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ### Changed
 
+- The install downloads about 2 MB instead of 60 MB on macOS and Linux alike. `agd-hook` is now a
+  34 KB C binary rather than a Bun-compiled one, which was 69 MB of embedded runtime around 3 KB of
+  logic. It is also faster: measured back to back on an M-series Mac, PreToolUse went from a p50 of
+  12.6 ms to 2.5 ms against the same daemon.
 - `armoriq-agd` publishes the answer each hook event gets while it is unreachable, one file per
   event in `~/.armoriq/armorantigravity/fallback`, beside the mode file it already wrote. The hook
   client reads one of those files instead of building the response itself, and a request that
