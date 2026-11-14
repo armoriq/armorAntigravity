@@ -9,6 +9,13 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ### Changed
 
+- The install downloads about 0.5 MB rather than 60 MB, which needs **node 22 or newer** on the
+  machine. `armorantigravity` and `armoriq-agd` are node bundles behind a shell wrapper instead of
+  compiled binaries carrying their own runtime; the installer checks for node before downloading, and
+  `armorantigravity install` writes the wrappers with the absolute interpreter that ran it, so launchd
+  and systemd find the same node a version manager put on your PATH. The daemon's instance lock is a
+  pid file with a liveness check, because node cannot call `flock(2)`: a daemon that is killed outright
+  now leaves a lock that the next start takes over, rather than one the kernel released.
 - The install downloads about 2 MB instead of 60 MB on macOS and Linux alike. `agd-hook` is now a
   34 KB C binary rather than a Bun-compiled one, which was 69 MB of embedded runtime around 3 KB of
   logic. It is also faster: measured back to back on an M-series Mac, PreToolUse went from a p50 of

@@ -6,7 +6,7 @@
   "bin": { "armoriq-agd": "./src/main.ts" },
   "exports": { ".": "./src/index.ts", "./main": "./src/main.ts", "./package.json": "./package.json", "./service/*": "./service/*" },
   "scripts": {
-    "build": "bun build src/main.ts --compile --outfile dist/armoriq-agd"
+    "build": "bun ../../scripts/build-js.ts --daemon --out dist"
   },
   "dependencies": {
     "@armorantigravity/adapter": "workspace:*",
