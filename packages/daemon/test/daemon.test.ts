@@ -1,5 +1,5 @@
 import { saveLoginProfile } from "@armoriq/sdk-dev/dist/credentials.js";
-import type { HookEvent } from "@armorantigravity/protocol";
+import { DAEMON_UNAVAILABLE_CODE, DAEMON_UNAVAILABLE_REASON, HOOK_FRAME_TAG, type HookEvent } from "@armorantigravity/protocol";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
@@ -193,4 +193,53 @@ test("stop does not wait on a client that connected and never sent a line", asyn
   await d.stop();
   expect(Date.now() - started).toBeLessThan(1_000);
   idle.destroy();
+});
+
+function sendRaw(socketPath: string, line: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const s = connect(socketPath);
+    let buf = "";
+    s.on("data", (c) => {
+      buf += c;
+      if (!buf.includes("\n")) return;
+      s.destroy();
+      resolve(buf.slice(0, buf.indexOf("\n")));
+    });
+    s.on("error", reject);
+    s.write(`${line}\n`);
+  });
+}
+
+const frame = (d: RunningDaemon, event: HookEvent, payload: string) => sendRaw(d.paths.socket, `${HOOK_FRAME_TAG} ${event} ${Date.now()} ${payload}`);
+
+test("a frame is answered with the bare response line, and a null response with an empty one", async () => {
+  const rec = recorder();
+  const d = await start([rec.plugin]);
+  expect(await frame(d, "PreToolUse", JSON.stringify(toolPayload("conv-f1")))).toBe('{"decision":"allow"}');
+  expect(await frame(d, "PostInvocation", JSON.stringify(payload("conv-f1")))).toBe("");
+  await settle();
+  expect(rec.events.map((e) => e.kind)).toEqual(["session_start", "hook", "hook"]);
+});
+
+test("a frame whose payload is not JSON reaches the mode, not the decision handler", async () => {
+  login();
+  const d = await start([]);
+  expect(await frame(d, "PreToolUse", "not json")).toBe(
+    JSON.stringify({ decision: "deny", reason: "ArmorIQ blocked this call [malformed_payload]: the hook payload is missing required fields" }),
+  );
+});
+
+test("the daemon pre-renders the fallback each event gets while it is unreachable", async () => {
+  const d = await start([]);
+  const read = (event: string) => readFileSync(path.join(d.paths.fallbackDir, event), "utf8");
+  expect(read("PreToolUse")).toBe('{"decision":"allow"}\n');
+  for (const event of ["PostToolUse", "PreInvocation", "PostInvocation", "Stop"]) expect(read(event)).toBe("");
+
+  await running.pop()?.stop();
+  login();
+  const enforcing = await start([]);
+  expect(readFileSync(path.join(enforcing.paths.fallbackDir, "PreToolUse"), "utf8")).toBe(
+    `${JSON.stringify({ decision: "deny", reason: `ArmorIQ blocked this call [${DAEMON_UNAVAILABLE_CODE}]: ${DAEMON_UNAVAILABLE_REASON}` })}\n`,
+  );
+  expect(readFileSync(enforcing.paths.modeFile, "utf8")).toBe("enforce\n");
 });
