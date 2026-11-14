@@ -297,7 +297,7 @@ The "Reference" column says which plugin to copy. The bold rows are the ones Arm
 
 | # | Requirement |
 |---|---|
-| N1 | `curl -fsSL https://armoriq.ai/install_armorantigravity.sh \| bash` (prod) and `_dev.sh` (staging), as thin wrappers on the landing site that fetch the repo's own installer. Plus `uninstall_armorantigravity.sh`. |
+| N1 | `curl -fsSL https://armoriq.ai/install_armorantigravity.sh \| bash` (prod) and `_dev.sh` (staging). The installer itself lives in armoriq/armorIQ-landing at `public/install_armorantigravity.sh`, which is the copy armoriq.ai serves and the only one there is; `_dev.sh` is a thin wrapper that fetches it with `ARMORANTIGRAVITY_CHANNEL=dev`. A change to how the release archive is built or unpacked has to land there to reach anyone. |
 | N2 | **Merge** into existing `~/.gemini/config/hooks.json` and `mcp_config.json` instead of overwriting them. `mcp_config.json` accepts comments and trailing commas, so a strict JSON parser won't work. Write `~/.gemini/config/rules/armoriq.md`. |
 | N3 | Also offer `agy plugin install https://github.com/armoriq/armorAntigravity` for CLI users, and the `~/.gemini/config/plugins/armoriq/` folder for 2.0 and the IDE (P0: confirm 2.0 and the IDE load plugin hooks; the docs disagree). |
 | N4 | Install and start the daemon (a launchd agent on macOS, a systemd user unit on Linux); uninstall removes them; `--purge` also removes data and keeps the login. |
@@ -332,7 +332,7 @@ Taken from today's sweep. Each line is an acceptance item; ArmorOpenCode missed 
   - wizard and session copy
 - **armoriq-admin:** product type, routes, nav.
 - **armorIQ-landing:**
-  - prod, dev and uninstall wrappers
+  - the installer itself, plus the dev and uninstall wrappers
   - product page and content
   - nav, footer, sitemap, SEO, support form
   - **brand kit, README route table, privacy-policy disclosures, installer CI** (OpenCode missing all of these)
