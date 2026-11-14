@@ -1,16 +1,26 @@
 import { saveLoginProfile } from "@armoriq/sdk-dev/dist/credentials.js";
 import { isHookEvent, PROTOCOL_VERSION, type HookEvent } from "@armorantigravity/protocol";
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
 import { armoriqPlugins } from "../src/armoriq.ts";
 import { startDaemon, type RunningDaemon } from "../src/daemon.ts";
+import { compileHook, hostTarget } from "../../../scripts/build-hook.ts";
 import { sandboxHome } from "./sandbox.ts";
 
-const HOOK = path.join(import.meta.dir, "../../hook/src/main.ts");
+const hookBuildDir = mkdtempSync(path.join(tmpdir(), "agd-hook-agy-"));
+const HOOK = path.join(hookBuildDir, "agd-hook");
 const CAPTURE = path.join(import.meta.dir, "../../../spike/payloads/cli/r3-shell-write-read-web-mcp.jsonl");
 const quiet = { info() {}, warn() {}, error() {} };
+
+beforeAll(() => {
+  compileHook(hostTarget(), HOOK);
+});
+afterAll(() => {
+  rmSync(hookBuildDir, { recursive: true, force: true });
+});
 
 type Capture = { event: HookEvent; stdin: Record<string, unknown> };
 
@@ -84,7 +94,7 @@ async function until(check: () => boolean, ms = 5_000): Promise<void> {
 }
 
 async function hook(c: Capture): Promise<unknown> {
-  const proc = Bun.spawn(["bun", HOOK, c.event], { stdin: new TextEncoder().encode(JSON.stringify(c.stdin)), stdout: "pipe", env: process.env });
+  const proc = Bun.spawn([HOOK, c.event], { stdin: new TextEncoder().encode(JSON.stringify(c.stdin)), stdout: "pipe", env: process.env });
   const out = await new Response(proc.stdout).text();
   expect(await proc.exited).toBe(0);
   return out === "" ? null : JSON.parse(out);

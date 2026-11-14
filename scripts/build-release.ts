@@ -5,13 +5,13 @@ import { createHash } from "node:crypto";
 import { linkSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { compileHook, type HookTarget } from "./build-hook.ts";
 
 const REPO = path.resolve(import.meta.dir, "..");
 const PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"] as const;
-const BINARIES = [
-  { name: "armorantigravity", entry: "packages/cli/src/release.ts", flags: ["--minify"] },
-  { name: "agd-hook", entry: "packages/hook/src/main.ts", flags: ["--bytecode", "--minify"] },
-] as const;
+// agd-hook is C, not a compiled Bun binary: its own logic is 3 KB and an embedded runtime for it cost
+// 69 MB of the download. See scripts/build-hook.ts and armoriq/armorAntigravity#165.
+const BINARIES = [{ name: "armorantigravity", entry: "packages/cli/src/release.ts", flags: ["--minify"] }] as const;
 
 const { values } = parseArgs({
   options: { target: { type: "string", multiple: true }, out: { type: "string" }, "sums-only": { type: "boolean" } },
@@ -29,6 +29,7 @@ if (!values["sums-only"]) {
     for (const bin of BINARIES) {
       run([process.execPath, "build", bin.entry, "--compile", `--target=bun-${platform}`, ...bin.flags, "--outfile", path.join(stage, bin.name)]);
     }
+    compileHook(platform as HookTarget, path.join(stage, "agd-hook"));
     // tar stores this second entry as a hardlink, so CLI and daemon share one Bun runtime in the download.
     linkSync(path.join(stage, "armorantigravity"), path.join(stage, "armoriq-agd"));
     const archive = path.join(out, `armorantigravity-${platform}.tar.gz`);
