@@ -28,6 +28,27 @@ describe("redactText", () => {
     }
   });
 
+  test("redacts the same key block spans the pattern used to", () => {
+    const begin = (label: string) => `-----BEGIN ${label}${KEY}-----`;
+    const end = (label: string) => `-----END ${label}${KEY}-----`;
+    expect(redactText(`${begin("")}\nabc\n${end("")}`)).toBe("<redacted>");
+    expect(redactText(`a ${begin("EC ")}\nb\n${end("")} c`)).toBe("a <redacted> c");
+    expect(redactText(`${begin("")}\n1\n${end("")}\n${begin("")}\n2\n${end("")}`)).toBe("<redacted>\n<redacted>");
+    // No END marker, so nothing is a block and the text survives unchanged.
+    expect(redactText(`${begin("")}\nabc`)).toBe(`${begin("")}\nabc`);
+    expect(redactText(`${end("")} ${begin("")}`)).toBe(`${end("")} ${begin("")}`);
+    // A lowercase label is not `[A-Z ]*`, so the marker does not open a block.
+    expect(redactText(`-----BEGIN rsa ${KEY}-----\nx\n${end("")}`)).toBe(`-----BEGIN rsa ${KEY}-----\nx\n${end("")}`);
+  });
+
+  test("stays fast on long text dense with key begin markers", () => {
+    // redactText runs uncapped on trace output, unlike sanitizeParams.
+    const text = `-----BEGIN ${KEY}-----`.repeat(20_000);
+    const t = performance.now();
+    expect(redactText(text)).toBe(text);
+    expect(performance.now() - t).toBeLessThan(200);
+  });
+
   test("leaves ordinary text alone", () => {
     expect(redactText("bun test && git status")).toBe("bun test && git status");
   });

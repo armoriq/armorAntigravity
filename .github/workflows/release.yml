@@ -77,6 +77,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
+          # This job runs repository code, and `publish` below holds `contents: write`.
+          # A shared bun cache would carry anything this job wrote into that job.
+          no-cache: true
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test
@@ -101,6 +104,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
+          no-cache: true
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-release.ts ${{ matrix.targets }} --out dist/release
       - name: Smoke test the native archive
@@ -130,6 +134,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
+          # This job holds `contents: write`, so it restores no cache at all.
+          no-cache: true
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*

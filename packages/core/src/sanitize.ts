@@ -14,8 +14,11 @@ const SECRET_PATTERNS = [
   /\b(?:sk|rk|pk)[-_](?:live|test|proj|ant)?[-_]?[A-Za-z0-9_\-]{16,}/g,
   /\bak_[A-Za-z0-9_\-]{16,}\b/g,
   /\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b/g,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
 ];
+
+const PEM_BEGIN = "-----BEGIN ";
+const PEM_END = "-----END ";
+const PEM_TAIL = "PRIVATE KEY-----";
 
 const SECRET_KEYWORD = /api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key|private[_-]?key|credential|authorization/gi;
 
@@ -56,12 +59,64 @@ function redactAssignments(text: string): string {
   return last === 0 ? text : out + text.slice(last);
 }
 
+// End of `<marker><[A-Z ]*>PRIVATE KEY-----` at `at`, or -1. The label run is
+// greedy, as `[A-Z ]*` was, so the tail is taken as late in the run as it fits.
+function pemMarkerEnd(text: string, at: number, marker: string): number {
+  if (!text.startsWith(marker, at)) return -1;
+  const label = at + marker.length;
+  let i = label;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c !== " " && (c < "A" || c > "Z")) break;
+    i++;
+  }
+  for (let start = i; start >= label; start--) {
+    if (text.startsWith(PEM_TAIL, start)) return start + PEM_TAIL.length;
+  }
+  return -1;
+}
+
+// A PEM private key block. Scanned rather than matched: the regex form searched
+// for the END marker again from every BEGIN marker, which is quadratic on text
+// carrying many BEGIN markers and no END. A missing END ends the scan, since no
+// later BEGIN can find one either.
+function redactPrivateKeys(text: string): string {
+  let out = "";
+  let last = 0;
+  let from = 0;
+  for (;;) {
+    const begin = text.indexOf(PEM_BEGIN, from);
+    if (begin < 0) break;
+    const body = pemMarkerEnd(text, begin, PEM_BEGIN);
+    if (body < 0) {
+      from = begin + 1;
+      continue;
+    }
+    let end = -1;
+    for (let at = body; ; ) {
+      const marker = text.indexOf(PEM_END, at);
+      if (marker < 0) break;
+      const finish = pemMarkerEnd(text, marker, PEM_END);
+      if (finish >= 0) {
+        end = finish;
+        break;
+      }
+      at = marker + 1;
+    }
+    if (end < 0) break;
+    out += `${text.slice(last, begin)}<redacted>`;
+    last = end;
+    from = end;
+  }
+  return out === "" ? text : out + text.slice(last);
+}
+
 export function redactText(text: string): string {
   let out = redactAssignments(text);
   for (const pattern of SECRET_PATTERNS) {
     out = out.replace(pattern, (_match, prefix: unknown) => `${typeof prefix === "string" ? prefix : ""}<redacted>`);
   }
-  return out;
+  return redactPrivateKeys(out);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
