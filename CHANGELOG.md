@@ -7,6 +7,15 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ## [Unreleased]
 
+### Fixed
+
+- The dev channel installed against `staging-api.armoriq.io`, which is not the
+  hostname the rest of ArmorIQ uses. Credential profiles are keyed on the backend
+  host, so the stray spelling split the namespace, and under `ARMORIQ_ENV=production`
+  the SDK could not pair the backend to its dashboard and refused to open the
+  approval page. The dev default is now `staging-api.armoriq.ai`. Existing dev
+  installs keep the old host until their next install and sign in once more then.
+
 ## [0.1.0]
 
 ### Added

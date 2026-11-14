@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { BINARIES, hooksValue, install, layout, mcpValue, uninstall, type Deps } from "../src/install.ts";
+import { BINARIES, DEFAULT_BACKENDS, hooksValue, install, layout, mcpValue, uninstall, type Deps } from "../src/install.ts";
 import { parseJsonc } from "../src/jsonc.ts";
 import type { Run } from "../src/service.ts";
 
@@ -61,6 +61,22 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
+describe("DEFAULT_BACKENDS", () => {
+  test("each channel points at its own ArmorIQ backend", () => {
+    expect(DEFAULT_BACKENDS).toEqual({ stable: "https://api.armoriq.ai", dev: "https://staging-api.armoriq.ai" });
+  });
+
+  // A profile is keyed on the backend host, so a stray hostname silently splits the
+  // credentials namespace instead of failing.
+  test("every default is an https origin on armoriq.ai", () => {
+    for (const backend of Object.values(DEFAULT_BACKENDS)) {
+      const url = new URL(backend);
+      expect(url.protocol).toBe("https:");
+      expect(url.host.endsWith(".armoriq.ai")).toBe(true);
+    }
+  });
+});
+
 describe("install", () => {
   test("merges into existing JSONC files without touching the user's bytes", async () => {
     seed();
@@ -98,9 +114,9 @@ describe("install", () => {
 
   test("writes the rule, the daemon config and a launchd agent, then starts it", async () => {
     seed();
-    const result = await install(opts({ channel: "dev", backend: "https://staging-api.armoriq.io/" }), deps());
+    const result = await install(opts({ channel: "dev", backend: "https://staging-api.armoriq.ai/" }), deps());
     expect(read(L().rulesFile)).toStartWith("---\ntrigger: always_on\n---\n");
-    expect(JSON.parse(read(L().configFile))).toEqual({ backendUrl: "https://staging-api.armoriq.io", channel: "dev" });
+    expect(JSON.parse(read(L().configFile))).toEqual({ backendUrl: "https://staging-api.armoriq.ai", channel: "dev" });
     const unitPath = path.join(home, "Library", "LaunchAgents", `${LABEL}.plist`);
     expect(result.service).toEqual({ kind: "launchd", label: LABEL, unitPath });
     const plist = read(unitPath);
