@@ -8,7 +8,7 @@ const REF = { surface: "app" as const, conversationId: "conv-1" };
 const KEY = conversationKey(REF);
 const plan: Plan = { id: "plan-1", hash: "h", goal: "g", steps: [{ action: "run_command", tool: "run_command" }], revision: 1, registeredInMessage: "turn-1" };
 
-function setup(mintResult: () => CallResult<Minted>) {
+function setup(mintResult: () => CallResult<Minted>, onUnauthorized?: () => void) {
   let clock = 1_000_000;
   const now = () => clock;
   const registry = createRegistry(now);
@@ -32,7 +32,7 @@ function setup(mintResult: () => CallResult<Minted>) {
       return { ok: false, retryable: false, reason: "unused" };
     },
   };
-  const pump = createTokenPump({ registry, backend, login: () => LOGIN, log: silentLog, now, idleAfterStopMs: 1000 });
+  const pump = createTokenPump({ registry, backend, login: () => LOGIN, log: silentLog, now, idleAfterStopMs: 1000, ...(onUnauthorized ? { onUnauthorized } : {}) });
   registry.open(REF);
   const token = (expiresAt: number) => ({ status: "active" as const, jwt: "j", expiresAt, deniedTools: new Set<string>(), heldTools: new Set<string>() });
   registry.setPlan(KEY, plan, token(clock + 3_600_000));
@@ -54,6 +54,18 @@ function setup(mintResult: () => CallResult<Minted>) {
 }
 
 describe("token pump", () => {
+  test("a 401 on refresh reports signed out and keeps the plan and its token for when the key is accepted again", async () => {
+    let unauthorized = 0;
+    const s = setup(() => ({ ok: true, value: { planId: "", token: { status: "refused", code: "account_revoked" } } }), () => unauthorized++);
+    const before = s.registry.get(KEY)?.token;
+    s.advance(3_600_000 - 59_000);
+    await s.cycle();
+    expect(s.mints).toEqual(["conv-1"]);
+    expect(unauthorized).toBe(1);
+    expect(s.registry.get(KEY)?.token).toBe(before);
+    expect(s.registry.get(KEY)?.plan?.id).toBe("plan-1");
+  });
+
   test("re-mints within 60 s of expiry with the raw conversationId and keeps the step cursor", async () => {
     const s = setup(() => ({ ok: true, value: { planId: "plan-2", token: { status: "active", jwt: "j2", expiresAt: 9e12, deniedTools: new Set(), heldTools: new Set() } } }));
     s.registry.advance(KEY, 0);

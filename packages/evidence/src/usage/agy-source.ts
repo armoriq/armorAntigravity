@@ -3,12 +3,14 @@ import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRecord, parseJson } from "../io/http.ts";
+import type { Surface } from "@armorantigravity/protocol";
 import { canonicalModel } from "../model.ts";
 import type { ConversationRef, SourceRead, SourceStep, UsageSource } from "./source.ts";
 
 export type AgySourceOptions = {
-  // agy's app data dir, ~/.gemini/antigravity-cli.
-  readonly cliHome: string;
+  // Each surface's app data dir: ~/.gemini/antigravity-cli, ~/.gemini/antigravity (Antigravity 2.0)
+  // and ~/.gemini/antigravity-ide. Discovery and history read conversations from all of them.
+  readonly appDirs: readonly { readonly dir: string; readonly surface: Surface }[];
   // The transcript names no model; hook payloads carry it as `modelName`.
   readonly modelOf: (conversationId: string) => string | undefined;
 };
@@ -26,42 +28,49 @@ const MAX_NESTING = 16;
 // Reads agy's own files: token counts from transcript_full.jsonl, titles and subagent parents
 // from conversation_summaries.db, with cache/conversation_metadata.json as the title fallback.
 export function createAgySource(options: AgySourceOptions): UsageSource {
-  const { cliHome, modelOf } = options;
+  const { appDirs, modelOf } = options;
   return {
     async read(ref) {
       const problems: string[] = [];
       const steps = await readSteps(ref.transcriptPath, canonicalModel(modelOf(ref.conversationId) ?? ""), problems);
-      const appDir = appDirOf(ref.transcriptPath) ?? cliHome;
-      const summaries = openSummaries(appDir, problems);
+      const appDir = appDirOf(ref.transcriptPath) ?? appDirs.find((a) => a.surface === ref.surface)?.dir;
+      const summaries = appDir ? openSummaries(appDir, problems) : null;
       try {
         const own = summaries?.get(ref.conversationId) ?? null;
-        const title = own?.title ? { text: own.title, at: own.at } : await metadataTitle(appDir, ref.conversationId);
+        const title = own?.title ? { text: own.title, at: own.at } : appDir ? await metadataTitle(appDir, ref.conversationId) : null;
         return { steps, title, parentId: summaries ? rootAncestor(summaries, ref.conversationId) : null, problems };
       } finally {
         summaries?.close();
       }
     },
     async list() {
-      const brain = path.join(cliHome, "brain");
-      const entries = await readdir(brain, { withFileTypes: true }).catch(() => []);
-      const summaries = openSummaries(cliHome, []);
-      const metadata = await readMetadata(cliHome);
-      try {
-        const refs: ConversationRef[] = [];
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          const transcriptPath = path.join(brain, entry.name, TRANSCRIPT);
-          // A brain dir with no transcript would count as unread and keep a history run open forever.
-          if (!(await exists(transcriptPath))) continue;
-          const workspacePaths = summaries?.get(entry.name)?.workspacePaths ?? metadataSummary(metadata, entry.name)?.workspacePaths ?? [];
-          refs.push({ conversationId: entry.name, transcriptPath, workspacePaths, surface: "cli" });
-        }
-        return refs;
-      } finally {
-        summaries?.close();
-      }
+      const refs: ConversationRef[] = [];
+      for (const { dir, surface } of appDirs) refs.push(...(await listDir(dir, surface)));
+      return refs;
     },
   };
+}
+
+async function listDir(appDir: string, surface: Surface): Promise<ConversationRef[]> {
+  const brain = path.join(appDir, "brain");
+  const entries = await readdir(brain, { withFileTypes: true }).catch(() => []);
+  if (!entries.length) return [];
+  const summaries = openSummaries(appDir, []);
+  const metadata = await readMetadata(appDir);
+  try {
+    const refs: ConversationRef[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const transcriptPath = path.join(brain, entry.name, TRANSCRIPT);
+      // A brain dir with no transcript would count as unread and keep a history run open forever.
+      if (!(await exists(transcriptPath))) continue;
+      const workspacePaths = summaries?.get(entry.name)?.workspacePaths ?? metadataSummary(metadata, entry.name)?.workspacePaths ?? [];
+      refs.push({ conversationId: entry.name, transcriptPath, workspacePaths, surface });
+    }
+    return refs;
+  } finally {
+    summaries?.close();
+  }
 }
 
 async function readSteps(transcriptPath: string, model: string, problems: string[]): Promise<SourceStep[]> {

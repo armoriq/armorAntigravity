@@ -86,6 +86,8 @@ export interface OwnToolDeps {
   policy(): PolicyView;
   audit(row: AuditRow): void;
   onRelogin?(reason: string): void;
+  // A 401 on mint: the key is not accepted, which spec 0002 treats as signed out, not as a revoked account.
+  onUnauthorized?(): void;
   readonly log: Log;
   readonly now?: () => number;
 }
@@ -188,6 +190,10 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       return `Plan not registered: ArmorIQ could not issue an intent token (${minted.reason}).${kept} Try again shortly.`;
     }
     const { token, planId } = minted.value;
+    if (token.status === "refused" && token.code === "account_revoked" && deps.onUnauthorized) {
+      deps.onUnauthorized();
+      return "Plan not registered: ArmorIQ did not accept the API key, so this session runs in local-only mode on local rules. Run `armorantigravity status` to check the login.";
+    }
     if (token.status === "refused") {
       registry.setToken(conv.key, token);
       return token.code === "account_revoked"

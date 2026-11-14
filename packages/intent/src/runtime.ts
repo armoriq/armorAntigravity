@@ -33,6 +33,7 @@ export interface IntentRuntimeOptions {
   mintPolicy(): Record<string, unknown> | undefined;
   audit(row: AuditRow): void;
   onRelogin?(reason: string): void;
+  onUnauthorized?(): void;
   readonly log: Log;
   readonly backend?: IntentBackend;
   readonly now?: () => number;
@@ -69,8 +70,9 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     log: opts.log,
     now,
     ...(opts.onRelogin ? { onRelogin: opts.onRelogin } : {}),
+    ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}),
   });
-  const pump = createTokenPump({ registry, backend, login: opts.login, log: opts.log, now });
+  const pump = createTokenPump({ registry, backend, login: opts.login, log: opts.log, now, ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}) });
   const linker = createSubagentLinker(registry, now, opts.fileExists);
   const drafts = new Map<ConversationKey, string>();
   const childMessagedAt = new Map<ConversationKey, number>();

@@ -26,8 +26,13 @@ export type ShellParse = { readonly ok: true; readonly segments: readonly ShellS
 
 // `{` and `}` only delimit a group as standalone words; inside a word they are brace expansion.
 const SEPARATOR = /^(&&|\|\||[;|&\n(){}])$/;
-const TOKEN =
-  /[ \t]*(?:(&&|\|\||&>>?|\d*>&(?:\d+|-)|\d*>>?\|?|\d*<<<|\d*<<-?|\d*<&(?:\d+|-)|\d*<>?|[;|&\n()]|\{(?=[ \t\n])|\}(?=[ \t\n;|&)]|$))|((?:\$'(?:\\[^]|[^'\\])*'|\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|"(?:\\.|[^"\\])*"|'[^']*'|\\[^]|[^\s"'`\\;&|<>()$]|\$)+))/y;
+// A character a bare word may contain, as the lexer's word alternative spelled it.
+const WORD_CHAR = /[^\s"'`\\;&|<>()$]/;
+const OPERATOR_CHAR = ";|&\n()";
+const GROUP_OPEN_FOLLOW = " \t\n";
+const GROUP_CLOSE_FOLLOW = " \t\n;|&)";
+// `.` in `\\.` does not match a line terminator, so a `\` before one ends a double-quoted run.
+const LINE_TERMINATOR = "\n\r\u2028\u2029";
 
 type Wrapper = { readonly withValue?: ReadonlySet<string>; readonly positional?: number; readonly stdin?: boolean };
 const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
@@ -71,23 +76,204 @@ function ansiC(body: string): string {
   });
 }
 
-function unquote(raw: string): string {
-  return raw.replace(
-    /\$'((?:\\[^]|[^'\\])*)'|\\([^])|\$?"((?:\\.|[^"\\])*)"|'([^']*)'/g,
-    (_m, ansi?: string, escaped?: string, dq?: string, sq?: string) => (ansi !== undefined ? ansiC(ansi) : (escaped ?? dq?.replace(/\\(.)/g, "$1") ?? sq ?? "")),
-  );
+// Index of the `'` closing a `$'...'` run, or -1. Mirrors `(?:\\[^]|[^'\\])*'`.
+function ansiCEnd(text: string, from: number): number {
+  for (let i = from; i < text.length; ) {
+    const c = text[i];
+    if (c === "\\") {
+      if (i + 1 >= text.length) return -1;
+      i += 2;
+    } else if (c === "'") return i;
+    else i++;
+  }
+  return -1;
 }
 
-function lex(command: string): Token[] | null {
-  const text = command.replace(/[ \t]+$/, "");
+// Index of the `"` closing a double-quoted run, or -1. Mirrors `(?:\\.|[^"\\])*"`.
+function doubleQuoteEnd(text: string, from: number): number {
+  for (let i = from; i < text.length; ) {
+    const c = text[i];
+    if (c === "\\") {
+      const next = text[i + 1];
+      if (next === undefined || LINE_TERMINATOR.includes(next)) return -1;
+      i += 2;
+    } else if (c === '"') return i;
+    else i++;
+  }
+  return -1;
+}
+
+function unquote(raw: string): string {
+  let out = "";
+  let i = 0;
+  while (i < raw.length) {
+    const c = raw[i];
+    if (c === "$" && raw[i + 1] === "'") {
+      const end = ansiCEnd(raw, i + 2);
+      if (end >= 0) {
+        out += ansiC(raw.slice(i + 2, end));
+        i = end + 1;
+        continue;
+      }
+    }
+    if (c === "\\" && i + 1 < raw.length) {
+      out += raw[i + 1];
+      i += 2;
+      continue;
+    }
+    if (c === '"' || (c === "$" && raw[i + 1] === '"')) {
+      const open = c === "$" ? i + 2 : i + 1;
+      const end = doubleQuoteEnd(raw, open);
+      if (end >= 0) {
+        out += raw.slice(open, end).replace(/\\(.)/g, "$1");
+        i = end + 1;
+        continue;
+      }
+    }
+    if (c === "'") {
+      const end = raw.indexOf("'", i + 1);
+      if (end >= 0) {
+        out += raw.slice(i + 1, end);
+        i = end + 1;
+        continue;
+      }
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+const digitsEnd = (text: string, from: number): number => {
+  let i = from;
+  while (i < text.length) {
+    const c = text.charCodeAt(i);
+    if (c < 48 || c > 57) break;
+    i++;
+  }
+  return i;
+};
+
+// End of the operator token at `at`, or -1. The alternatives are tried in the
+// order the grammar lists them, so a `\d*>&` without an fd falls back to `\d*>`.
+function operatorEnd(text: string, at: number): number {
+  const c = text[at];
+  if (c === undefined) return -1;
+  if (c === "&" && text[at + 1] === "&") return at + 2;
+  if (c === "|" && text[at + 1] === "|") return at + 2;
+  if (c === "&" && text[at + 1] === ">") return text[at + 2] === ">" ? at + 3 : at + 2;
+  const d = digitsEnd(text, at);
+  const head = text[d];
+  if (head === ">" && text[d + 1] === "&") {
+    const fd = digitsEnd(text, d + 2);
+    if (fd > d + 2) return fd;
+    if (text[d + 2] === "-") return d + 3;
+  }
+  if (head === ">") {
+    let end = d + 1;
+    if (text[end] === ">") end++;
+    if (text[end] === "|") end++;
+    return end;
+  }
+  if (head === "<") {
+    if (text[d + 1] === "<") return text[d + 2] === "<" ? d + 3 : text[d + 2] === "-" ? d + 3 : d + 2;
+    if (text[d + 1] === "&") {
+      const fd = digitsEnd(text, d + 2);
+      if (fd > d + 2) return fd;
+      if (text[d + 2] === "-") return d + 3;
+    }
+    return text[d + 1] === ">" ? d + 2 : d + 1;
+  }
+  if (OPERATOR_CHAR.includes(c)) return at + 1;
+  const next = text[at + 1];
+  if (c === "{") return next !== undefined && GROUP_OPEN_FOLLOW.includes(next) ? at + 1 : -1;
+  if (c === "}") return next === undefined || GROUP_CLOSE_FOLLOW.includes(next) ? at + 1 : -1;
+  return -1;
+}
+
+// `}` and `)` are searched for from every `$` in a word, and a search that fails
+// at one offset fails at every later one, so the first miss is remembered.
+type Absent = { brace: number; paren: number };
+
+function closerAt(text: string, from: number, closer: "}" | ")", absent: Absent): number {
+  const key = closer === "}" ? "brace" : "paren";
+  if (from >= absent[key]) return -1;
+  const found = text.indexOf(closer, from);
+  if (found < 0) absent[key] = from;
+  return found;
+}
+
+// End of the bare word starting at `at`; equal to `at` when no word starts there.
+function wordEnd(text: string, at: number, absent: Absent): number {
+  let i = at;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === "$") {
+      const next = text[i + 1];
+      if (next === "'") {
+        const end = ansiCEnd(text, i + 2);
+        if (end >= 0) {
+          i = end + 1;
+          continue;
+        }
+      } else if (next === "{" || next === "(") {
+        const end = closerAt(text, i + 2, next === "{" ? "}" : ")", absent);
+        if (end >= 0) {
+          i = end + 1;
+          continue;
+        }
+      }
+      i++;
+      continue;
+    }
+    if (c === "`" || c === "'") {
+      const end = text.indexOf(c, i + 1);
+      if (end < 0) break;
+      i = end + 1;
+      continue;
+    }
+    if (c === '"') {
+      const end = doubleQuoteEnd(text, i + 1);
+      if (end < 0) break;
+      i = end + 1;
+      continue;
+    }
+    if (c === "\\") {
+      if (i + 1 >= text.length) break;
+      i += 2;
+      continue;
+    }
+    if (!WORD_CHAR.test(c)) break;
+    i++;
+  }
+  return i;
+}
+
+function trimTrailingBlanks(text: string): string {
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === " " || text[end - 1] === "\t")) end--;
+  return end === text.length ? text : text.slice(0, end);
+}
+
+// Exported for the parity test that checks this scan against the regex lexer it replaced.
+export function lex(command: string): Token[] | null {
+  const text = trimTrailingBlanks(command);
   const tokens: Token[] = [];
-  TOKEN.lastIndex = 0;
-  while (TOKEN.lastIndex < text.length) {
-    const m = TOKEN.exec(text);
-    if (!m) return null;
-    if (m[1] !== undefined) tokens.push({ kind: "op", op: m[1] });
-    else if (m[2] !== undefined) tokens.push({ kind: "word", word: unquote(m[2]) });
-    else return null;
+  const absent: Absent = { brace: text.length + 1, paren: text.length + 1 };
+  let i = 0;
+  while (i < text.length) {
+    while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
+    if (i >= text.length) break;
+    const op = operatorEnd(text, i);
+    if (op >= 0) {
+      tokens.push({ kind: "op", op: text.slice(i, op) });
+      i = op;
+      continue;
+    }
+    const end = wordEnd(text, i, absent);
+    if (end === i) return null;
+    tokens.push({ kind: "word", word: unquote(text.slice(i, end)) });
+    i = end;
   }
   return tokens;
 }
@@ -192,6 +378,26 @@ export function isShellWithScript(argv: readonly string[]): boolean {
 
 export function expandHome(word: string, home: string): string {
   return word.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, home);
+}
+
+// `{a,b}` brace expansion: a `{` with a `,` before the first `}` after it. Scanned
+// rather than matched, because `\{[^}]*,[^}]*\}` backtracks quadratically on `{{{...`.
+export function hasBraceList(text: string): boolean {
+  let open = -1;
+  let comma = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "{") {
+      if (open < 0) open = i;
+    } else if (c === ",") {
+      if (open >= 0) comma = true;
+    } else if (c === "}") {
+      if (comma) return true;
+      open = -1;
+      comma = false;
+    }
+  }
+  return false;
 }
 
 function resolveDir(word: string, base: string | null, home: string): string | null {

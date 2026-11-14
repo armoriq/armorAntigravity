@@ -75,7 +75,8 @@ The auth, intent, token, session and drift flows must match ArmorOpenCode `dev` 
   - plans are kept locally with `id:""`;
   - the intent directive is not injected.
 - **Errors:**
-  - A 401 on mint means `account_revoked`; a 402 means `billing_blocked`. After either, every non-read-only call is denied.
+  - A 401 on mint or on the reachability probe means signed out: the daemon runs in local-only mode (monitor, nothing recorded) until the key checks out again. A 402 on mint means `billing_blocked`, and every non-read-only call is denied.
+  - Backend unreachable while signed in (spec 0002, AC-11): a probe of `POST /iap/validate-key` that gets no answer in 2 seconds, a network error or a 5xx marks the backend unreachable for 30 seconds. While unreachable, write, shell, MCP, web and other calls are blocked with `backend_unreachable` and a pointer to `armorantigravity status`; read calls run, and audit rows queue in the outbox until the backend is back.
   - `403 relogin_required` writes the marker `~/.armoriq/armorantigravity/relogin-required-<sha16>`, warns once, and pauses the audit, usage and trace pumps until the key changes.
 
 ### Intent flow

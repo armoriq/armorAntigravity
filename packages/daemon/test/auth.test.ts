@@ -34,6 +34,16 @@ test("backend order is ARMORIQ_BACKEND_URL, then config, then prod", () => {
   expect(resolveBackend({ ARMORIQ_BACKEND_URL: "  " }, null)).toBe("https://api.armoriq.ai");
 });
 
+test("every trailing slash is dropped, however many, without a slow scan", () => {
+  expect(resolveBackend({ ARMORIQ_BACKEND_URL: "http://localhost:3000///" }, null)).toBe("http://localhost:3000");
+  expect(resolveBackend({ ARMORIQ_BACKEND_URL: "http://localhost:3000/a/b/" }, null)).toBe("http://localhost:3000/a/b");
+  expect(resolveBackend({ ARMORIQ_BACKEND_URL: "/" }, null)).toBe("");
+  const padded = `http://x${"/".repeat(200_000)}a`;
+  const t = performance.now();
+  expect(resolveBackend({ ARMORIQ_BACKEND_URL: padded }, null)).toBe(padded);
+  expect(performance.now() - t).toBeLessThan(200);
+});
+
 test("only the armorantigravity profile for the resolved backend counts", () => {
   save(STAGING, "armoropencode", "ak_opencode");
   save("https://api.armoriq.ai", "armorantigravity", "ak_prod");
@@ -117,13 +127,29 @@ test("403 relogin_required writes the marker, pauses uploads, and survives a res
   expect(restarted.uploadLogin()?.apiKey).toBe("ak_2");
 });
 
-test("401 and 402 on mint refuse until a mint succeeds; uploads never refuse", () => {
+test("a 401 on mint or probe means local-only until the key checks out; uploads never change state", () => {
   save(STAGING, "armorantigravity", "ak_1");
   const a = start();
   a.reportStatus(401, {}, "upload");
   expect(a.state().kind).toBe("active");
+  a.reportStatus(401, {}, "probe");
+  expect(a.state().kind).toBe("local_only");
+  expect(a.mode()).toBe("monitor");
+  expect(a.uploadLogin()).toBeNull();
+  a.reportStatus(200, {}, "probe");
+  expect(a.state().kind).toBe("active");
+  expect(a.mode()).toBe("enforce");
   a.reportStatus(401, {}, "mint");
-  expect(a.state()).toMatchObject({ kind: "refused", code: "account_revoked" });
+  expect(a.state().kind).toBe("local_only");
+  a.reportStatus(200, {}, "mint");
+  expect(a.state().kind).toBe("active");
+});
+
+test("402 on mint refuses until a mint succeeds", () => {
+  save(STAGING, "armorantigravity", "ak_1");
+  const a = start();
+  a.reportStatus(402, {}, "probe");
+  expect(a.state().kind).toBe("active");
   a.reportStatus(402, {}, "mint");
   expect(a.state()).toMatchObject({ kind: "refused", code: "billing_blocked" });
   expect(a.uploadLogin()?.apiKey).toBe("ak_1");

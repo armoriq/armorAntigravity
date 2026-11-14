@@ -2,7 +2,7 @@ import type { Surface } from "@armorantigravity/protocol";
 
 // App data dirs from https://antigravity.google/docs/hooks/: the transcript sits at
 // <app_data_dir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl.
-const APP_DATA_DIRS: Readonly<Record<string, Surface>> = {
+export const APP_DATA_DIRS: Readonly<Record<string, Surface>> = {
   antigravity: "app",
   "antigravity-cli": "cli",
   "antigravity-ide": "ide",

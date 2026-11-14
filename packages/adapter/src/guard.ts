@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { expandHome, isShellWithScript, parseShell, type ShellSegment } from "./shell.ts";
+import { expandHome, hasBraceList, isShellWithScript, parseShell, type ShellSegment } from "./shell.ts";
 import type { MappedCall } from "./tools.ts";
 
 export type GuardContext = {
@@ -226,7 +226,7 @@ class Matcher {
     const expanded = expandHome(word.replace(/^file:\/\/(localhost)?/i, ""), this.ctx.home);
     // An unknown variable, a loop variable, a substitution or a brace
     // expansion: what it names is only visible in the rest of the line.
-    if (/[$`]|\{[^}]*,[^}]*\}/.test(expanded)) return this.mentions(word) ?? this.mentions(this.line);
+    if (/[$`]/.test(expanded) || hasBraceList(expanded)) return this.mentions(word) ?? this.mentions(this.line);
     const absolute = path.isAbsolute(expanded) ? expanded : base ? path.join(base, expanded) : null;
     if (absolute === null) return this.named(word);
     if (/[*?[]/.test(absolute)) {

@@ -74,9 +74,13 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: .bun-version
+          # Disables the bun EXECUTABLE cache only, per the action's own input
+          # description. It is not a cache-poisoning control: nothing this job
+          # writes reaches `publish` through it either way.
+          no-cache: true
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run test
@@ -98,9 +102,10 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: .bun-version
+          no-cache: true
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-release.ts ${{ matrix.targets }} --out dist/release
       - name: Smoke test the native archive
@@ -127,9 +132,10 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: .bun-version
+          no-cache: true
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*

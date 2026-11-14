@@ -1,6 +1,6 @@
 import type { ProductConfig } from "./product.ts";
 import { MAX_PARAM_CHARS, redactText, sanitizeParams } from "./sanitize.ts";
-import type { AuditRow, AuditStatus, Decision, Session, ToolCall } from "./types.ts";
+import type { AuditRow, AuditStatus, Capability, Decision, Session, ToolCall } from "./types.ts";
 
 export type AuditInput = {
   call: ToolCall;
@@ -14,6 +14,7 @@ export type AuditInput = {
   at: number;
   userId?: string | undefined;
   userEmail?: string | undefined;
+  capability?: Capability | undefined;
 };
 
 export type AuditProduct = Pick<ProductConfig, "slug" | "agentId" | "childSessionKey">;
@@ -65,6 +66,7 @@ function optionalFields(input: AuditInput): Partial<AuditRow> {
   const error = errorText(input);
   if (error) out.error_message = error;
   if (input.durationMs !== null) out.duration_ms = input.durationMs;
+  if (input.capability) out.capability = input.capability;
   return out;
 }
 

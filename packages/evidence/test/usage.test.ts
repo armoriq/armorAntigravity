@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
 import path from "node:path";
-import { createUsageClient, scopeDir, type UsageBatch, type UsageClient } from "../src/io/backend-usage.ts";
+import { createUsageClient, scopeDir, setGeneration, type UsageBatch, type UsageClient } from "../src/io/backend-usage.ts";
 import { createUsagePump } from "../src/pumps/usage.ts";
 import { observeConversation } from "../src/usage/observe.ts";
 import type { ConversationRef, SourceRead, SourceStep, UsageSource } from "../src/usage/source.ts";
@@ -106,6 +106,20 @@ describe("usage pump", () => {
     expect(backend.hits("POST", "/dashboard/token-usage/stream")).toHaveLength(2);
     expect(second?.generation).not.toBe(first?.generation ?? "");
     expect(second?.snapshots.map((s) => s.sessionId)).toEqual([ROOT]);
+  });
+
+  test("a generation saved for a stream conmap no longer has is replaced, not refused", async () => {
+    const { backend, tmp, usage } = setup();
+    const stale = crypto.randomUUID();
+    await setGeneration(scopeDir(tmp.dir, login(backend.url)), stale);
+    const source = sourceOf({ [ROOT]: { steps: [step("s1", Date.UTC(2026, 9, 11, 17))], title: null, parentId: null, problems: [] } });
+    await observeConversation({ usage, source, ref: ref(ROOT), rootOf: (id) => id });
+    usage.start();
+    await until(() => backend.batches().some((b) => b.generation !== stale));
+    await usage.stop();
+    expect(backend.hits("POST", "/dashboard/token-usage/stream")).toHaveLength(1);
+    const accepted = backend.batches().filter((b) => b.generation !== stale);
+    expect(accepted.flatMap((b) => b.snapshots.map((s) => s.sessionId))).toEqual([ROOT]);
   });
 
   test("titles wait while the SDK refuses the title source, and go out once it accepts it", async () => {

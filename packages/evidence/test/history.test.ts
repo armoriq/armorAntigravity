@@ -79,3 +79,34 @@ describe("discovery", () => {
     expect(backend.requests.filter((r) => r.method === "PUT")).toHaveLength(2);
   });
 });
+
+// conmap refuses every run report until POST /stream has created the stream, and the live pump
+// creates it only once a turn has token counts to send.
+describe("a device with no usage stream yet", () => {
+  for (const [label, reads] of [
+    ["no conversations", {}],
+    ["one readable conversation", { [ROOT]: { steps: [step("a", Date.UTC(2026, 9, 1, 9))], title: null, parentId: null, problems: [] } }],
+  ] as const) {
+    test(`discovery creates the stream before its first run report: ${label}`, async () => {
+      const backend = usageBackend({ "GET /api-keys/device-history-sync": () => ({ body: { requestId: null, requestedAt: null } }) });
+      const tmp = tempDir();
+      cleanups.push(backend.stop, tmp.cleanup);
+      const up = uploads(() => login(backend.url));
+      const usage = createUsagePump({ dataDir: tmp.dir, uploads: up, log: quietLog }, { intervalMs: 60_000, persistDelayMs: 10 });
+      const pump = createHistoryPump({ dataDir: tmp.dir, uploads: up, log: quietLog, usage, source: sourceOf(reads), rootOf: (id) => id }, { firstDelayMs: 0, intervalMs: 60_000 });
+      usage.start();
+      pump.start();
+      await until(() => [...backend.runs.values()].some((r) => r.completedAt));
+      await pump.stop();
+      await usage.stop();
+
+      const calls = backend.requests.filter((r) => r.path.startsWith("/dashboard/token-usage/")).map((r) => `${r.method} ${r.path.split("/")[3]}`);
+      expect(calls[0]).toBe("POST stream");
+      const runs = backend.requests.filter((r) => r.method === "PUT").map((r) => r.body as { phase: string; total?: number });
+      expect(runs.map((r) => r.phase)).toEqual(["discovering", "complete"]);
+      const hours = backend.batches().flatMap((b) => b.snapshots);
+      expect(hours).toHaveLength(Object.keys(reads).length);
+      expect(runs[1]?.total).toBe(hours.length);
+    });
+  }
+});
