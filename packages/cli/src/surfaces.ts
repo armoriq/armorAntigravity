@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants } from "node:fs";
 import path from "node:path";
 
 export interface SurfaceReport {
@@ -21,7 +22,17 @@ export interface DetectOptions {
 // The agy binary is only located, never run: running it can trigger its self-updater.
 export function detectSurfaces(opts: DetectOptions): SurfaceReport[] {
   const { platform, home, PATH } = opts;
-  const which = (cmd: string) => Bun.which(cmd, { PATH }) ?? null;
+  const which = (cmd: string) => {
+    for (const dir of (PATH ?? "").split(path.delimiter)) {
+      if (!dir) continue;
+      const candidate = path.join(dir, cmd);
+      try {
+        accessSync(candidate, constants.X_OK);
+        return candidate;
+      } catch {}
+    }
+    return null;
+  };
   const agy = which("agy") ?? firstExisting([path.join(home, ".local", "bin", "agy")]);
   const cli: SurfaceReport = { id: "cli", name: "agy CLI", where: agy, version: null };
 

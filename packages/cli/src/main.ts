@@ -2,6 +2,8 @@ import pkg from "@armorantigravity/daemon/package.json" with { type: "json" };
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { MIN_NODE_MAJOR } from "./wrapper.ts";
 import { parseArgs } from "node:util";
 import { DEFAULT_BACKENDS, install, layout, normalizeBackend, preflight, uninstall, waitForSocket, type Channel, type Deps } from "./install.ts";
 import { deviceLogin, hasLogin, logout } from "./login.ts";
@@ -93,7 +95,7 @@ async function cmdInstall(args: string[]): Promise<number> {
   const channel = values.channel ?? "stable";
   if (channel !== "stable" && channel !== "dev") throw new Error(`--channel must be stable or dev, got ${channel}`);
   const backend = normalizeBackend(values.backend || DEFAULT_BACKENDS[channel]);
-  const sourceDir = path.resolve(values.from ?? path.dirname(process.execPath));
+  const sourceDir = path.resolve(values.from ?? path.dirname(fileURLToPath(import.meta.url)));
 
   if (process.env.ARMORANTIGRAVITY_INSTALLER_UI !== "1") banner(channel);
   section("Checking configuration");
@@ -201,12 +203,18 @@ function installedBackend(): string | null {
 
 const PRODUCT_AT = (backend: string) => `armorantigravity@${new URL(backend).host}`;
 
+const nodeMajor = Number.parseInt(process.versions.node?.split(".")[0] ?? "0", 10);
+if (Number.isInteger(nodeMajor) && nodeMajor > 0 && nodeMajor < MIN_NODE_MAJOR) {
+  console.error(`${red("[error]")} ArmorAntigravity needs node ${MIN_NODE_MAJOR} or newer; this is node ${process.versions.node}. Upgrade node and re-run.`);
+  process.exit(1);
+}
+
 try {
-  const code = await main(Bun.argv.slice(2));
+  const code = await main(process.argv.slice(2));
   if (code >= 0) process.exit(code);
 } catch (error) {
   console.error(`${red("[error]")} ${error instanceof Error ? error.message : String(error)}`);
-  if (Bun.argv[2] === "install") {
+  if (process.argv[2] === "install") {
     console.error(red(installStarted ? "\nArmorAntigravity install did not finish. Re-run it, or run uninstall to remove what it wrote." : "\nArmorAntigravity was NOT installed. Nothing was changed."));
   }
   process.exit(1);

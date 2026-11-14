@@ -127,20 +127,38 @@ sha256() {
   fi
 }
 
+# The bundles are in here, not just the wrappers: the wrappers are the same in every release, so a
+# fingerprint over them alone would report a new version as already installed.
 installed_fingerprint() {
   local name file
   printf '%s\n' "$1"
-  for name in armorantigravity armoriq-agd agd-hook; do
+  for name in armorantigravity armoriq-agd agd-hook cli.js agd.js; do
     file="${INSTALLED%/*}/${name}"
-    [[ -x "${file}" ]] || return 1
+    [[ -r "${file}" ]] || return 1
     printf '%s  %s\n' "$(sha256 "${file}")" "${name}"
   done
+}
+
+# armorantigravity and armoriq-agd are node bundles; agd-hook is a native binary and needs nothing.
+# Checked before the download, so a machine without node is told that instead of a failure later.
+MIN_NODE_MAJOR=22
+require_node() {
+  local version major
+  command -v node >/dev/null 2>&1 || die "node ${MIN_NODE_MAJOR} or newer is required (https://nodejs.org); install it and re-run."
+  version="$(node --version 2>/dev/null)" || die "node is on PATH but did not run; fix the installation and re-run."
+  major="${version#v}"
+  major="${major%%.*}"
+  case "${major}" in
+    ''|*[!0-9]*) die "could not read the node version (${version}); node ${MIN_NODE_MAJOR} or newer is required." ;;
+  esac
+  [ "${major}" -ge "${MIN_NODE_MAJOR}" ] || die "node ${MIN_NODE_MAJOR} or newer is required; this is ${version} at $(command -v node)."
 }
 
 # Prints the directory holding the verified, unpacked binaries.
 fetch_release() {
   command -v curl >/dev/null 2>&1 || die "curl is required"
   command -v tar >/dev/null 2>&1 || die "tar is required"
+  require_node
   local base archive want got fingerprint
   base="$(release_base)"
   archive="armorantigravity-$(platform).tar.gz"
@@ -162,7 +180,7 @@ fetch_release() {
   [[ "${got}" == "${want}" ]] || die "checksum mismatch for ${archive}: expected ${want}, got ${got}"
   ok "Download verified (${archive})" >&2
   mkdir -p "${WORK}/bin"
-  tar -xzf "${WORK}/${archive}" -C "${WORK}/bin" armoriq-agd agd-hook armorantigravity || die "could not unpack ${archive}"
+  tar -xzf "${WORK}/${archive}" -C "${WORK}/bin" || die "could not unpack ${archive}"
   printf '%s' "${WORK}/bin"
 }
 

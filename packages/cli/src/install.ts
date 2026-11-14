@@ -1,14 +1,22 @@
 import rules from "@armorantigravity/mcp/rules/armoriq.md" with { type: "text" };
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
+import { setTimeout as sleep } from "node:timers/promises";
 import path from "node:path";
 import { isEmptyObjectAt, removeMember, setMember, type Json, type JsonObject } from "./jsonc.ts";
 import { renderUnit, serviceFor, startService, stopService, type Run, type Service } from "./service.ts";
+import { wrapperText } from "./wrapper.ts";
 
 export const PRODUCT = "armorantigravity";
 export type Channel = "stable" | "dev";
 export const DEFAULT_BACKENDS: Readonly<Record<Channel, string>> = { stable: "https://api.armoriq.ai", dev: "https://staging-api.armoriq.ai" };
-export const BINARIES = ["armoriq-agd", "agd-hook", "armorantigravity"] as const;
+// What the archive carries. The wrappers are not copied from it: install writes them, so they name the
+// node that ran this install rather than whatever a service manager happens to have on PATH.
+export const DAEMON_WRAPPER = "armoriq-agd";
+export const DAEMON_BUNDLE = "agd.js";
+export const PAYLOAD = ["agd-hook", "cli.js", DAEMON_BUNDLE] as const;
+export const WRAPPERS = ["armorantigravity", DAEMON_WRAPPER] as const;
+export const BINARIES = [...PAYLOAD, ...WRAPPERS] as const;
 
 const EVENTS = ["PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop"] as const;
 const TOOL_EVENTS: ReadonlySet<string> = new Set(["PreToolUse", "PostToolUse"]);
@@ -141,7 +149,7 @@ export function preflight(home: string): void {
 export async function install(opts: InstallOptions, deps: Deps): Promise<InstallResult> {
   const l = layout(opts.home);
   const backend = normalizeBackend(opts.backend);
-  for (const name of BINARIES) if (!existsSync(path.join(opts.sourceDir, name))) throw new Error(`${name} is missing from ${opts.sourceDir}`);
+  for (const name of PAYLOAD) if (!existsSync(path.join(opts.sourceDir, name))) throw new Error(`${name} is missing from ${opts.sourceDir}`);
   preflight(opts.home);
 
   const previous = existsSync(l.manifestFile) ? readManifest(l.manifestFile) : null;
@@ -149,7 +157,16 @@ export async function install(opts: InstallOptions, deps: Deps): Promise<Install
   const changed: string[] = [];
 
   ensureDir(manifest, l.binDir);
-  for (const name of BINARIES) if (copyBinary(path.join(opts.sourceDir, name), path.join(l.binDir, name))) changed.push(path.join(l.binDir, name));
+  for (const name of PAYLOAD) if (copyBinary(path.join(opts.sourceDir, name), path.join(l.binDir, name))) changed.push(path.join(l.binDir, name));
+  for (const name of WRAPPERS) {
+    const file = path.join(l.binDir, name);
+    const text = wrapperText(name, process.execPath);
+    if (!existsSync(file) || readFileSync(file, "utf8") !== text) {
+      writeFileSync(file, text, { mode: 0o755 });
+      chmodSync(file, 0o755);
+      changed.push(file);
+    }
+  }
 
   const config = readConfigFile(l.configFile);
   const nextConfig = { ...config, backendUrl: backend, channel: opts.channel };
@@ -329,16 +346,18 @@ function removeService(service: Service, run: Run): void {
 }
 
 // The daemon writes its pid into the lock it holds. The pid is checked against the process name
-// first, because a stale lock file can name a pid the system has since reused.
+// first, because a stale lock file can name a pid the system has since reused. The daemon runs as
+// `node .../bin/agd.js`, so the command line carries the bundle's path rather than the wrapper's name.
 export async function stopDaemon(l: Layout, run: Run, log: (line: string) => void): Promise<void> {
   if (!existsSync(l.lockFile)) return;
   const pid = Number.parseInt(readFileSync(l.lockFile, "utf8"), 10);
   if (!Number.isInteger(pid) || pid <= 1 || !alive(pid)) return;
   const command = run(["ps", "-o", "command=", "-p", String(pid)]).output;
-  if (!command.includes("armoriq-agd")) return;
+  const ours = [DAEMON_WRAPPER, path.join(l.binDir, DAEMON_BUNDLE)];
+  if (!ours.some((name) => command.includes(name))) return;
   signalProcess(pid, "SIGTERM");
   const deadline = Date.now() + 10_000;
-  while (alive(pid) && Date.now() < deadline) await Bun.sleep(50);
+  while (alive(pid) && Date.now() < deadline) await sleep(50);
   if (alive(pid)) signalProcess(pid, "SIGKILL");
   log(`stopped armoriq-agd (pid ${pid})`);
 }
@@ -365,7 +384,7 @@ export async function waitForSocket(socket: string, timeoutMs: number): Promise<
   for (;;) {
     if (await connects(socket)) return true;
     if (Date.now() >= deadline) return false;
-    await Bun.sleep(100);
+    await sleep(100);
   }
 }
 
@@ -401,7 +420,7 @@ function copyBinary(from: string, to: string): boolean {
 
 function sameBytes(a: string, b: string): boolean {
   if (statSync(a).size !== statSync(b).size) return false;
-  return Bun.hash(readFileSync(a)) === Bun.hash(readFileSync(b));
+  return readFileSync(a).equals(readFileSync(b));
 }
 
 // Same-directory rename, keeping the target's mode and following a symlinked config to its target.

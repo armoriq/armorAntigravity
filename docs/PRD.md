@@ -159,12 +159,15 @@ The auth, intent, token, session and drift flows must match ArmorOpenCode `dev` 
 
 ### 5.1 Hook client plus daemon
 
-- **`agd-hook`** is a small native binary: a Bun-compiled single file or Go, chosen by benchmark in P0. Every hook event runs it. It reads stdin, forwards the event over a unix socket to the daemon, and prints the decision. It loads no SDK and does no network I/O.
+- **`agd-hook`** is a small native binary, written in C with no dependencies. Every hook event runs it. It reads stdin, forwards the event over a unix socket to the daemon, and prints the decision. It loads no SDK and does no network I/O. It was a Bun-compiled single file until the embedded runtime made it 69 MB of a 60 MB download (armoriq/armorAntigravity#165); C removed that and measured about five times faster.
+- **`armorantigravity` and `armoriq-agd`** are node bundles behind a small shell wrapper, and need node 22 or newer (node 22 for `node:sqlite`, which reads agy's own conversation database). The wrapper written at install time names the absolute interpreter that ran the install, because launchd and systemd do not carry a version manager's node on PATH. They were `bun build --compile` binaries, which is where the rest of the 60 MB download went.
 - **`armoriq-agd`** is a long-lived daemon, one per user and shared by all three surfaces. It holds:
   - the compiled policy
   - session and plan state
   - intent tokens
   - all upload pumps
+
+  The daemon's instance lock is a pid file with a liveness check rather than `flock(2)`, which node cannot call: a daemon killed outright leaves its lock behind, and the next start takes it over once it sees the owner is gone.
 
   It reuses ArmorOpenCode's TypeScript core (`decide`, `policy`, `intent`, `builtin-rules`, `sanitize`, outbox, pumps) behind an Antigravity adapter. It is not a fresh rewrite.
 - **When the daemon isn't running:** the first hook starts it. The hook waits for it up to a budget, then prints the answer the daemon pre-rendered for that event beside its socket, which fails **closed** in enforce mode and open in monitor mode. The daemon renders those answers because it owns the mode; the hook only copies bytes, and a missing or unreadable file denies the tool call. Nothing here depends on Antigravity's own undocumented timeout behavior.

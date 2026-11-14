@@ -1,1 +1,1 @@
-{ "extends": "../../tsconfig.base.json", "compilerOptions": { "allowImportingTsExtensions": true, "noEmit": true, "types": ["bun"] }, "include": ["src", "test", "bench", "../daemon/test/sandbox.ts"] }
+{ "extends": "../../tsconfig.base.json", "compilerOptions": { "allowImportingTsExtensions": true, "noEmit": true, "types": ["bun"] }, "include": ["test", "bench", "../daemon/test/sandbox.ts", "../../scripts/build-hook.ts"] }

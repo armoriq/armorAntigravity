@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { DatabaseSync as Database } from "node:sqlite";
 import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -146,19 +146,19 @@ function openSummaries(appDir: string, problems: string[]): Summaries | null {
   const file = path.join(appDir, "conversation_summaries.db");
   let db: Database;
   try {
-    db = new Database(file, { readonly: true });
+    db = new Database(file, { readOnly: true });
   } catch {
     // The db is in WAL mode: a read-only open needs agy's -shm file, which exists only while agy
     // runs. With agy stopped nothing is writing, so reading it as immutable is safe.
     try {
-      db = new Database(`file:${file}?immutable=1`, { readonly: true });
+      db = new Database(`file:${file}?immutable=1`, { readOnly: true, allowExtension: false });
     } catch (error) {
       if (!String(error).includes("unable to open")) problems.push(`${file}: ${String(error)}`);
       return null;
     }
   }
   try {
-    const query = db.query("SELECT title, parent_conversation_id, workspace_uris, last_modified_time FROM conversation_summaries WHERE conversation_id = ?");
+    const query = db.prepare("SELECT title, parent_conversation_id, workspace_uris, last_modified_time FROM conversation_summaries WHERE conversation_id = ?");
     return {
       get: (conversationId) => toSummary(query.get(conversationId)),
       close: () => db.close(),
