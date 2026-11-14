@@ -167,7 +167,7 @@ The auth, intent, token, session and drift flows must match ArmorOpenCode `dev` 
   - all upload pumps
 
   It reuses ArmorOpenCode's TypeScript core (`decide`, `policy`, `intent`, `builtin-rules`, `sanitize`, outbox, pumps) behind an Antigravity adapter. It is not a fresh rewrite.
-- **When the daemon isn't running:** the first hook starts it. The hook waits for it up to a budget, then fails **closed** in enforce mode and open in monitor mode, so the guard never depends on Antigravity's own undocumented timeout behavior.
+- **When the daemon isn't running:** the first hook starts it. The hook waits for it up to a budget, then prints the answer the daemon pre-rendered for that event beside its socket, which fails **closed** in enforce mode and open in monitor mode. The daemon renders those answers because it owns the mode; the hook only copies bytes, and a missing or unreadable file denies the tool call. Nothing here depends on Antigravity's own undocumented timeout behavior.
 - **Hook timeout:** set an explicit `timeout` in `hooks.json` well above our budget. The default is 30 s.
 
 ArmorClaude's daemon saved only about 15 ms, because its hook still loaded the SDK before calling the daemon. The rule here is that the hook binary must never load the SDK or Node.

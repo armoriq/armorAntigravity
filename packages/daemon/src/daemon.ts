@@ -1,6 +1,12 @@
 import {
+  DAEMON_UNAVAILABLE_CODE,
+  DAEMON_UNAVAILABLE_REASON,
   fallbackResponse,
+  HOOK_EVENTS,
+  hookReplyLine,
+  hookResponseLine,
   isHookEvent,
+  parseHookFrame,
   parseHookPayload,
   PROTOCOL_VERSION,
   type DaemonResponse,
@@ -97,10 +103,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   };
   const kickAll = () => pumps.forEach((p) => p.kick());
 
-  writeMode(paths.modeFile, auth.mode(), log);
+  publishMode(paths, auth.mode(), log);
   let lastUploadLogin = auth.uploadLogin();
   const unsubscribe = auth.onChange((state) => {
-    writeMode(paths.modeFile, auth.mode(), log);
+    publishMode(paths, auth.mode(), log);
     emit({ kind: "auth", state, at: Date.now() });
     const uploadLogin = auth.uploadLogin();
     if (uploadLogin && uploadLogin !== lastUploadLogin) kickAll();
@@ -136,7 +142,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
         const line = buffer.slice(0, nl);
         buffer = buffer.slice(nl + 1);
         const done = handleLine(line).then((res) => {
-          if (!socket.destroyed) socket.write(`${JSON.stringify(res.reply)}\n`);
+          if (!socket.destroyed) socket.write(res.reply);
           if (res.event) setImmediate(emit, res.event);
         });
         inflight.add(done);
@@ -145,7 +151,19 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     });
   }
 
-  async function handleLine(line: string): Promise<{ reply: DaemonResponse | McpOutcomeResponse; event: DaemonEvent | null }> {
+  // The hook client's reply is the response on its own line, so a client with no JSON reader can print it
+  // unchanged. An empty line is the null response, which it prints as nothing.
+  async function handleLine(line: string): Promise<{ reply: string; event: DaemonEvent | null }> {
+    const frame = parseHookFrame(line);
+    if (frame) {
+      const { response, event } = await handleHook(crypto.randomUUID(), frame.event, frame.receivedAt, frame.payload);
+      return { reply: hookReplyLine(response), event };
+    }
+    const json = await handleJsonLine(line);
+    return { reply: `${JSON.stringify(json.reply)}\n`, event: json.event };
+  }
+
+  async function handleJsonLine(line: string): Promise<{ reply: DaemonResponse | McpOutcomeResponse; event: DaemonEvent | null }> {
     const mode = auth.mode();
     let raw: unknown;
     try {
@@ -166,12 +184,16 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
       return { reply: { v: PROTOCOL_VERSION, id: envelope.id, response }, event: null };
     }
     const { id, event, receivedAt } = envelope;
-    const reply = (response: HookResponse): DaemonResponse => ({ v: PROTOCOL_VERSION, id, response });
+    const handled = await handleHook(id, event, receivedAt, envelope.payload);
+    return { reply: { v: PROTOCOL_VERSION, id, response: handled.response }, event: handled.event };
+  }
 
-    const payload = parseHookPayload(event, envelope.payload);
+  async function handleHook(id: string, event: HookEvent, receivedAt: number, rawPayload: unknown): Promise<{ response: HookResponse; event: DaemonEvent | null }> {
+    const mode = auth.mode();
+    const payload = parseHookPayload(event, rawPayload);
     if (!payload) {
       log.warn("malformed hook payload", { id, event });
-      return { reply: reply(fallbackResponse(event, mode, "malformed_payload", "the hook payload is missing required fields")), event: null };
+      return { response: fallbackResponse(event, mode, "malformed_payload", "the hook payload is missing required fields"), event: null };
     }
 
     const now = Date.now();
@@ -206,7 +228,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
         kickAll();
       });
     }
-    return { reply: reply(response), event: { kind: "hook", hook, response, at: Date.now() } };
+    return { response, event: { kind: "hook", hook, response, at: Date.now() } };
   }
 
   let stopping: Promise<void> | null = null;
@@ -271,13 +293,28 @@ function listen(socketPath: string, onConnection: (socket: Socket) => void): Pro
   });
 }
 
-function writeMode(file: string, mode: Mode, log: Log): void {
+// The mode, and the answer the hook prints for each event while the daemon is unreachable. Both are
+// published here so they cannot drift: the hook never builds a response, it copies one of these files.
+function publishMode(paths: Paths, mode: Mode, log: Log): void {
+  writeAtomic(paths.modeFile, `${mode}\n`, log);
+  try {
+    mkdirSync(paths.fallbackDir, { recursive: true, mode: 0o700 });
+  } catch (error) {
+    return log.error("fallback directory create failed", { dir: paths.fallbackDir, error: String(error) });
+  }
+  for (const event of HOOK_EVENTS) {
+    const line = hookResponseLine(fallbackResponse(event, mode, DAEMON_UNAVAILABLE_CODE, DAEMON_UNAVAILABLE_REASON));
+    writeAtomic(path.join(paths.fallbackDir, event), line, log);
+  }
+}
+
+function writeAtomic(file: string, contents: string, log: Log): void {
   const tmp = `${file}.${process.pid}.tmp`;
   try {
-    writeFileSync(tmp, `${mode}\n`, { mode: 0o600 });
+    writeFileSync(tmp, contents, { mode: 0o600 });
     renameSync(tmp, file);
   } catch (error) {
-    log.error("mode file write failed", { file, error: String(error) });
+    log.error("state file write failed", { file, error: String(error) });
   }
 }
 

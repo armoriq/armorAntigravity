@@ -15,6 +15,14 @@ notes from the matching section, so add the section, with its date, in the relea
   daemon with nothing to guard. `--force` installs anyway, for an Antigravity somewhere this does not
   look. When one is found, the install prints which.
 
+### Changed
+
+- `armoriq-agd` publishes the answer each hook event gets while it is unreachable, one file per
+  event in `~/.armoriq/armorantigravity/fallback`, beside the mode file it already wrote. The hook
+  client reads one of those files instead of building the response itself, and a request that
+  arrives in the client's own frame is answered with the response on a line of its own. A missing
+  or unreadable file still denies the tool call.
+
 ### Fixed
 
 - The dev channel installed against `staging-api.armoriq.io`, which is not the
