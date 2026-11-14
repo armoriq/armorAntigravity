@@ -7,6 +7,13 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ## [Unreleased]
 
+### Changed
+
+- The curl installer lives in armoriq/armorIQ-landing only, at
+  `public/install_armorantigravity.sh`, which is the copy armoriq.ai serves. This repo kept a second
+  copy that nothing referenced from the site; the two drifted 115 lines apart, and a fix applied here
+  reached nobody. Its tests moved to that repo with it, and run in its installer CI.
+
 ### Added
 
 - `armorantigravity install` refuses to run when no Antigravity installation is found: not the

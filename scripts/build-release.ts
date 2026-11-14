@@ -2,6 +2,8 @@
 // per target holding armoriq-agd, agd-hook, armorantigravity and the two node bundles the wrappers run,
 // plus SHA256SUMS over every archive in --out.
 // Usage: bun scripts/build-release.ts [--target darwin-arm64 ...] [--out dist/release] [--sums-only]
+// To install what it built, point the served installer at the output; this repo keeps no copy of it:
+//   ARMORANTIGRAVITY_RELEASE_URL="file://$PWD/dist/release" bash <(curl -fsSL https://armoriq.ai/install_armorantigravity.sh)
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
