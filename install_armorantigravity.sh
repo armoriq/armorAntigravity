@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Usage:
 #   curl -fsSL https://armoriq.ai/install_armorantigravity.sh | bash
-#   bash install_armorantigravity.sh [--uninstall [--purge] [--logout]] [--force-login] [--skip-login]
+#   bash install_armorantigravity.sh [--uninstall [--purge] [--logout]] [--force-login] [--skip-login] [--force]
 #
 # Downloads the release archive for this platform from GitHub, checks it against the release's
 # SHA256SUMS, and runs `armorantigravity install` from it. That copies armoriq-agd, agd-hook and
@@ -20,6 +20,7 @@ set -euo pipefail
 #   --logout       with --uninstall, also remove the ArmorAntigravity login profile
 #   --force-login  sign in again even when a login exists
 #   --skip-login   install without signing in (the daemon runs in monitor mode until you do)
+#   --force        install even when no Antigravity installation is found
 #
 # Environment:
 #   ARMORANTIGRAVITY_CHANNEL      stable (default) or dev
@@ -56,11 +57,12 @@ ArmorAntigravity installer
 Usage:
   curl -fsSL https://armoriq.ai/install_armorantigravity.sh | bash
   curl -fsSL https://armoriq.ai/install_armorantigravity_dev.sh | bash
-  bash install_armorantigravity.sh [--force-login] [--skip-login]
+  bash install_armorantigravity.sh [--force-login] [--skip-login] [--force]
   bash install_armorantigravity.sh --uninstall [--purge] [--logout]
 
 --force-login  reconnect your ArmorIQ account once
 --skip-login   install without connecting ArmorIQ
+--force        install even when no Antigravity installation is found
 --purge        remove product configuration, logs and queued uploads on uninstall
 --logout       also remove this product's login on uninstall
 HELP
@@ -75,7 +77,7 @@ for arg in "$@"; do
   case "${arg}" in
     --uninstall) DO_UNINSTALL=1 ;;
     --purge|--logout) UNINSTALL_ARGS+=("${arg}") ;;
-    --force-login|--skip-login) INSTALL_ARGS+=("${arg}") ;;
+    --force-login|--skip-login|--force) INSTALL_ARGS+=("${arg}") ;;
     -h|--help) help; exit 0 ;;
     *) err "unknown argument: ${arg}"; exit 2 ;;
   esac
