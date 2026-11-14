@@ -3,6 +3,7 @@ import {
   DAEMON_UNAVAILABLE_REASON,
   fallbackResponse,
   HOOK_EVENTS,
+  hookReplyLine,
   hookResponseLine,
   isHookEvent,
   parseHookFrame,
@@ -156,7 +157,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     const frame = parseHookFrame(line);
     if (frame) {
       const { response, event } = await handleHook(crypto.randomUUID(), frame.event, frame.receivedAt, frame.payload);
-      return { reply: hookResponseLine(response) || "\n", event };
+      return { reply: hookReplyLine(response), event };
     }
     const json = await handleJsonLine(line);
     return { reply: `${JSON.stringify(json.reply)}\n`, event: json.event };

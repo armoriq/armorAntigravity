@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { HOOK_FRAME_TAG, hookResponseLine, parseHookFrame, parseHookPayload } from "../src/index.ts";
+import { HOOK_FRAME_TAG, hookReplyLine, hookResponseLine, parseHookFrame, parseHookPayload } from "../src/index.ts";
 
 const base = {
   conversationId: "c1",
@@ -77,4 +77,9 @@ test("lines that are not frames are left to the JSON path", () => {
 test("the null response prints as nothing", () => {
   expect(hookResponseLine(null)).toBe("");
   expect(hookResponseLine({ decision: "allow" })).toBe('{"decision":"allow"}\n');
+});
+
+test("a frame reply carries the tag, so a line from anything else is not one", () => {
+  expect(hookReplyLine(null)).toBe(`${HOOK_FRAME_TAG}\n`);
+  expect(hookReplyLine({ decision: "allow" })).toBe(`${HOOK_FRAME_TAG} {"decision":"allow"}\n`);
 });

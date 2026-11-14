@@ -117,10 +117,17 @@ export function parseHookFrame(line: string): HookFrame | null {
   return { event, receivedAt: Number.isFinite(receivedAt) && receivedAt > 0 ? receivedAt : Date.now(), payload };
 }
 
-// The reply to a frame, and the contents of a pre-rendered fallback file: the bytes the hook writes to
-// stdout. Empty for the null response, which is the only thing Antigravity may not see printed.
+// The contents of a pre-rendered fallback file: the bytes the hook writes to stdout. Empty for the
+// null response, which is the only thing Antigravity may not see printed.
 export function hookResponseLine(response: HookResponse): string {
   return response === null ? "" : `${JSON.stringify(response)}\n`;
+}
+
+// The reply to a frame. It repeats the tag so the hook can tell this daemon's answer from any other
+// line the socket might carry, such as the id envelope an older daemon replies with. A reply without
+// the tag is not printed, it falls back.
+export function hookReplyLine(response: HookResponse): string {
+  return response === null ? `${HOOK_FRAME_TAG}\n` : `${HOOK_FRAME_TAG} ${JSON.stringify(response)}\n`;
 }
 
 export const SOCKET_PATH_ENV = "ARMORANTIGRAVITY_SOCKET";

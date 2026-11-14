@@ -215,8 +215,8 @@ const frame = (d: RunningDaemon, event: HookEvent, payload: string) => sendRaw(d
 test("a frame is answered with the bare response line, and a null response with an empty one", async () => {
   const rec = recorder();
   const d = await start([rec.plugin]);
-  expect(await frame(d, "PreToolUse", JSON.stringify(toolPayload("conv-f1")))).toBe('{"decision":"allow"}');
-  expect(await frame(d, "PostInvocation", JSON.stringify(payload("conv-f1")))).toBe("");
+  expect(await frame(d, "PreToolUse", JSON.stringify(toolPayload("conv-f1")))).toBe(`${HOOK_FRAME_TAG} {"decision":"allow"}`);
+  expect(await frame(d, "PostInvocation", JSON.stringify(payload("conv-f1")))).toBe(HOOK_FRAME_TAG);
   await settle();
   expect(rec.events.map((e) => e.kind)).toEqual(["session_start", "hook", "hook"]);
 });
@@ -225,7 +225,7 @@ test("a frame whose payload is not JSON reaches the mode, not the decision handl
   login();
   const d = await start([]);
   expect(await frame(d, "PreToolUse", "not json")).toBe(
-    JSON.stringify({ decision: "deny", reason: "ArmorIQ blocked this call [malformed_payload]: the hook payload is missing required fields" }),
+    `${HOOK_FRAME_TAG} ${JSON.stringify({ decision: "deny", reason: "ArmorIQ blocked this call [malformed_payload]: the hook payload is missing required fields" })}`,
   );
 });
 
