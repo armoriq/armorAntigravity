@@ -59,9 +59,9 @@ test("verifies the archive and runs the stable install from it", () => {
 });
 
 test("the dev channel passes the backend and login flags through", () => {
-  const { code } = runScript(["--skip-login"], { ARMORANTIGRAVITY_CHANNEL: "dev", ARMORIQ_BACKEND_URL: "https://staging-api.armoriq.io" });
+  const { code } = runScript(["--skip-login"], { ARMORANTIGRAVITY_CHANNEL: "dev", ARMORIQ_BACKEND_URL: "https://staging-api.armoriq.ai" });
   expect(code).toBe(0);
-  expect(calls()).toEqual(["release-cli install --channel dev --backend https://staging-api.armoriq.io --skip-login"]);
+  expect(calls()).toEqual(["release-cli install --channel dev --backend https://staging-api.armoriq.ai --skip-login"]);
 });
 
 test("refuses an archive whose checksum does not match", () => {
