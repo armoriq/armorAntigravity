@@ -7,6 +7,14 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ## [Unreleased]
 
+### Added
+
+- `armorantigravity install` refuses to run when no Antigravity installation is found: not the
+  Antigravity 2.0 app, the Antigravity IDE, or the `agy` CLI on PATH. Installing into
+  `~/.gemini/config` on a machine with no Antigravity to read it leaves hooks that never fire and a
+  daemon with nothing to guard. `--force` installs anyway, for an Antigravity somewhere this does not
+  look. When one is found, the install prints which.
+
 ### Changed
 
 - The install downloads about 0.5 MB rather than 60 MB, which needs **node 22 or newer** on the

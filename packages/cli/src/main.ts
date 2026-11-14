@@ -8,12 +8,12 @@ import { parseArgs } from "node:util";
 import { DEFAULT_BACKENDS, install, layout, normalizeBackend, preflight, uninstall, waitForSocket, type Channel, type Deps } from "./install.ts";
 import { deviceLogin, hasLogin, logout } from "./login.ts";
 import { realRun } from "./service.ts";
-import { detectSurfaces } from "./surfaces.ts";
+import { describeSurfaces, detectSurfaces, foundSurfaces, NO_SURFACE } from "./surfaces.ts";
 
 const HELP = `armorantigravity ${pkg.version}: ArmorIQ intent assurance for Google Antigravity
 
 Usage:
-  armorantigravity install [--channel stable|dev] [--backend <url>] [--force-login] [--skip-login]
+  armorantigravity install [--channel stable|dev] [--backend <url>] [--force-login] [--skip-login] [--force]
   armorantigravity uninstall [--purge] [--logout]
   armorantigravity login [--backend <url>] [--force]
   armorantigravity status
@@ -22,6 +22,7 @@ Usage:
 install    copies the binaries to ~/.armoriq/armorantigravity/bin, signs in to ArmorIQ, adds the
            armoriq hooks and MCP server to ~/.gemini/config, writes the always-on rule and starts
            armoriq-agd as a launchd agent (macOS) or systemd user unit (Linux). Safe to re-run.
+           Requires an Antigravity installation; --force installs without one.
 uninstall  removes all of that and stops the daemon. --purge also deletes ~/.armoriq/armorantigravity
            (config, logs, queued uploads). The ArmorIQ login is kept unless --logout is given.
 `;
@@ -86,6 +87,7 @@ async function cmdInstall(args: string[]): Promise<number> {
       backend: { type: "string" },
       "force-login": { type: "boolean" },
       "skip-login": { type: "boolean" },
+      force: { type: "boolean" },
       from: { type: "string" },
     },
     strict: true,
@@ -97,6 +99,13 @@ async function cmdInstall(args: string[]): Promise<number> {
 
   if (process.env.ARMORANTIGRAVITY_INSTALLER_UI !== "1") banner(channel);
   section("Checking configuration");
+  const surfaces = detectSurfaces({ platform: process.platform, home, PATH: process.env.PATH ?? "" });
+  if (foundSurfaces(surfaces).length === 0) {
+    if (!values.force) throw new Error(NO_SURFACE);
+    warn("No Antigravity installation was found; installing anyway because --force was given");
+  } else {
+    ok(`Found ${describeSurfaces(surfaces)}`);
+  }
   preflight(home);
   ok("Existing Antigravity settings can be preserved");
 
