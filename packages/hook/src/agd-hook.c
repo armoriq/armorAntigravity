@@ -75,6 +75,33 @@ static void write_all(int fd, const char *data, size_t n) {
   }
 }
 
+static long monotonic_ms(void);
+
+// The socket is non-blocking, so a request larger than the socket buffer cannot park here while a
+// stalled daemon fails to drain it: the response budget bounds the write as well as the read.
+static int write_all_before(int fd, const char *data, size_t n, long deadline) {
+  while (n > 0) {
+    ssize_t wrote = write(fd, data, n);
+    if (wrote > 0) {
+      data += wrote;
+      n -= (size_t)wrote;
+      continue;
+    }
+    if (wrote < 0 && errno == EINTR) continue;
+    if (wrote < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      long remaining = deadline - monotonic_ms();
+      if (remaining <= 0) return 0;
+      struct pollfd p = {.fd = fd, .events = POLLOUT, .revents = 0};
+      int ready = poll(&p, 1, (int)remaining);
+      if (ready > 0) continue;
+      if (ready < 0 && errno == EINTR) continue;
+      return 0;
+    }
+    return 0;
+  }
+  return 1;
+}
+
 static long monotonic_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -156,42 +183,74 @@ static void spawn_daemon(void) {
   _exit(127);
 }
 
-// The daemon writes one file per event holding the exact bytes to print. Missing or unreadable fails
-// closed, which for a tool call means the deny above and for every other event means printing nothing.
+// The daemon writes one file per event holding the exact bytes to print. The file is read whole before
+// anything is printed, because a tool call that would print nothing has to become the deny instead:
+// Antigravity reads empty PreToolUse output as no opinion and runs the call. Missing, unreadable, empty
+// and unopenable all land there, so nothing short of a file with content in it can fail open.
 static int print_fallback(const char *socket_path, const char *event) {
+  int tool_call = strcmp(event, "PreToolUse") == 0;
   char path[PATH_MAX];
   const char *slash = strrchr(socket_path, '/');
   size_t dir_len = slash ? (size_t)(slash - socket_path) : 0;
+  Buffer file = {0};
   int ok = snprintf(path, sizeof path, "%.*s/fallback/%s", (int)dir_len, socket_path, event) < (int)sizeof path;
   int fd = ok ? open(path, O_RDONLY) : -1;
-  if (fd < 0) {
-    if (strcmp(event, "PreToolUse") == 0) write_all(STDOUT_FILENO, ENFORCE_DENY, sizeof ENFORCE_DENY - 1);
-    return 0;
+  if (fd >= 0) {
+    for (;;) {
+      if (!reserve(&file, 4096)) break;
+      ssize_t got = read(fd, file.data + file.len, file.cap - file.len);
+      if (got > 0) file.len += (size_t)got;
+      else if (got < 0 && errno == EINTR) continue;
+      else break;
+    }
+    close(fd);
   }
-  char chunk[4096];
-  for (;;) {
-    ssize_t got = read(fd, chunk, sizeof chunk);
-    if (got > 0) write_all(STDOUT_FILENO, chunk, (size_t)got);
-    else if (got < 0 && errno == EINTR) continue;
-    else break;
-  }
-  close(fd);
+  if (file.len > 0) write_all(STDOUT_FILENO, file.data, file.len);
+  else if (tool_call) write_all(STDOUT_FILENO, ENFORCE_DENY, sizeof ENFORCE_DENY - 1);
   return 0;
 }
 
-static int connect_socket(const char *socket_path) {
+static int dial_address(int fd, const char *path) {
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof addr);
   addr.sun_family = AF_UNIX;
   // sun_path is 104 bytes on macOS, and a temp directory under /var/folders reaches exactly that, so the
   // address length is computed rather than fixed: a path that fills sun_path travels without a terminator.
-  size_t len = strlen(socket_path);
+  size_t len = strlen(path);
   if (len > sizeof addr.sun_path) return -1;
-  memcpy(addr.sun_path, socket_path, len);
+  memcpy(addr.sun_path, path, len);
   socklen_t size = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + len + (len < sizeof addr.sun_path ? 1 : 0));
+  return connect(fd, (struct sockaddr *)&addr, size);
+}
+
+// A path too long for sun_path is reached from its own directory instead, which is the only way to
+// address it at all. ARMORIQ_HOME or ARMORANTIGRAVITY_SOCKET can put the socket that deep, and refusing
+// it would take every tool call to the fallback while a healthy daemon sat on the socket.
+static int dial_from_directory(int fd, const char *socket_path) {
+  const char *slash = strrchr(socket_path, '/');
+  if (!slash || slash == socket_path) return -1;
+  char dir[PATH_MAX];
+  if ((size_t)(slash - socket_path) >= sizeof dir) return -1;
+  memcpy(dir, socket_path, (size_t)(slash - socket_path));
+  dir[slash - socket_path] = '\0';
+  int here = open(".", O_RDONLY);
+  if (chdir(dir) != 0) {
+    if (here >= 0) close(here);
+    return -1;
+  }
+  int result = dial_address(fd, slash + 1);
+  if (here >= 0) {
+    if (fchdir(here) != 0) result = -1;
+    close(here);
+  }
+  return result;
+}
+
+static int connect_socket(const char *socket_path) {
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) return -1;
-  if (connect(fd, (struct sockaddr *)&addr, size) == 0) return fd;
+  int connected = strlen(socket_path) > sizeof(((struct sockaddr_un *)0)->sun_path) ? dial_from_directory(fd, socket_path) : dial_address(fd, socket_path);
+  if (connected == 0 && fcntl(fd, F_SETFL, O_NONBLOCK) == 0) return fd;
   close(fd);
   return -1;
 }
@@ -213,10 +272,10 @@ static int dial(const char *socket_path) {
   }
 }
 
-// One line in, one line out. An empty line is the null response, which Antigravity must not see printed.
+// One line in, one line out, both inside RESPONSE_BUDGET_MS.
 static int exchange(int fd, const Buffer *request, Buffer *reply) {
   long deadline = monotonic_ms() + RESPONSE_BUDGET_MS;
-  write_all(fd, request->data, request->len);
+  if (!write_all_before(fd, request->data, request->len, deadline)) return 0;
   for (;;) {
     long remaining = deadline - monotonic_ms();
     if (remaining <= 0) return 0;
@@ -230,7 +289,7 @@ static int exchange(int fd, const Buffer *request, Buffer *reply) {
     if (!reserve(reply, 4096)) return 0;
     ssize_t got = read(fd, reply->data + reply->len, reply->cap - reply->len);
     if (got < 0) {
-      if (errno == EINTR) continue;
+      if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
       return 0;
     }
     if (got == 0) return 0;
@@ -279,10 +338,16 @@ int main(int argc, char **argv) {
   Buffer reply = {0};
   int answered = exchange(fd, &request, &reply);
   close(fd);
-  if (!answered) return print_fallback(socket_path, event);
-  if (reply.len > 0) {
+  // Only this daemon's own answer is printed. The reply repeats the frame tag, so the id envelope an
+  // older daemon answers with, or anything else that reaches the socket, goes to the fallback instead
+  // of to Antigravity, which reads whatever arrives on stdout as the decision.
+  int tagged = answered && reply.len >= sizeof FRAME_TAG - 1 && memcmp(reply.data, FRAME_TAG, sizeof FRAME_TAG - 1) == 0 &&
+               (reply.len == sizeof FRAME_TAG - 1 || reply.data[sizeof FRAME_TAG - 1] == ' ');
+  if (!tagged) return print_fallback(socket_path, event);
+  size_t offset = reply.len == sizeof FRAME_TAG - 1 ? reply.len : sizeof FRAME_TAG;
+  if (reply.len > offset) {
     append(&reply, "\n", 1);
-    write_all(STDOUT_FILENO, reply.data, reply.len);
+    write_all(STDOUT_FILENO, reply.data + offset, reply.len - offset);
   }
   return 0;
 }

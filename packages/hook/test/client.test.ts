@@ -8,6 +8,7 @@ import {
 } from "@armorantigravity/protocol";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { compileHook, hostTarget } from "../../../scripts/build-hook.ts";
@@ -122,4 +123,63 @@ test("a missing fallback file denies the tool call with the protocol's own enfor
     hookResponseLine(fallbackResponse("PreToolUse", "enforce", DAEMON_UNAVAILABLE_CODE, DAEMON_UNAVAILABLE_REASON)),
   );
   expect(await run(["PostToolUse"], JSON.stringify(toolPayload("c")), env)).toBe("");
+}, 20_000);
+
+// A socket the hook can reach that is not this daemon: a stalled peer, a peer on an older protocol.
+function peer(socketPath: string, onLine: (socket: Socket) => void): Promise<Server> {
+  mkdirSync(path.dirname(socketPath), { recursive: true });
+  const server = createServer(onLine);
+  return new Promise((resolve) => server.listen(socketPath, () => resolve(server)));
+}
+
+test("a peer that never drains the socket cannot park the hook past the response budget", async () => {
+  const socketPath = path.join(dataDir(), "agd.sock");
+  const server = await peer(socketPath, () => {});
+  const fallbackDir = path.join(dataDir(), "fallback");
+  mkdirSync(fallbackDir, { recursive: true });
+  writeFileSync(path.join(fallbackDir, "PreToolUse"), hookResponseLine({ decision: "ask", reason: "fallback" }));
+  // Larger than the socket buffer, which is where an unbounded write would block forever.
+  const huge = { ...toolPayload("c-huge"), toolCall: { name: "write_to_file", args: { TargetFile: "/w/a", CodeContent: "x".repeat(256 * 1024) } } };
+
+  const started = Date.now();
+  const out = await run(["PreToolUse"], JSON.stringify(huge));
+  const elapsed = Date.now() - started;
+  server.close();
+  expect(JSON.parse(out)).toEqual({ decision: "ask", reason: "fallback" });
+  expect(elapsed).toBeLessThan(20_000);
+}, 30_000);
+
+test("a reply that is not this daemon's own is never printed", async () => {
+  const socketPath = path.join(dataDir(), "agd.sock");
+  // What an agd-hook from an older install gets back, which is not a hook response at all.
+  const server = await peer(socketPath, (socket) => socket.end(`${JSON.stringify({ v: 1, id: "", response: null })}\n`));
+  const fallbackDir = path.join(dataDir(), "fallback");
+  mkdirSync(fallbackDir, { recursive: true });
+  writeFileSync(path.join(fallbackDir, "PreToolUse"), hookResponseLine({ decision: "ask", reason: "fallback" }));
+
+  expect(await hook(["PreToolUse"], JSON.stringify(toolPayload("c-skew")))).toEqual({ decision: "ask", reason: "fallback" });
+  server.close();
+}, 20_000);
+
+test("an empty fallback file denies the tool call rather than printing nothing", async () => {
+  const env = { ARMORANTIGRAVITY_DAEMON: path.join(sandbox.home, "missing-agd") };
+  const fallbackDir = path.join(dataDir(), "fallback");
+  mkdirSync(fallbackDir, { recursive: true });
+  writeFileSync(path.join(fallbackDir, "PreToolUse"), "");
+  expect(await run(["PreToolUse"], JSON.stringify(toolPayload("c")), env)).toBe(
+    hookResponseLine(fallbackResponse("PreToolUse", "enforce", DAEMON_UNAVAILABLE_CODE, DAEMON_UNAVAILABLE_REASON)),
+  );
+  expect(await run(["Stop"], JSON.stringify(stopPayload("c")), env)).toBe("");
+}, 20_000);
+
+test("a socket path too long for sun_path still reaches the daemon", async () => {
+  const deep = path.join(sandbox.home, "d".repeat(40), "e".repeat(40), "f".repeat(30));
+  mkdirSync(deep, { recursive: true });
+  const socketPath = path.join(deep, "agd.sock");
+  expect(socketPath.length).toBeGreaterThan(104);
+  daemon = await startDaemon({ env: { ARMORANTIGRAVITY_SOCKET: socketPath }, plugins: [decider], log: quiet });
+
+  const started = Date.now();
+  expect(await hook(["PreToolUse"], JSON.stringify(toolPayload("c-deep")), { ARMORANTIGRAVITY_SOCKET: socketPath })).toEqual(FROM_DAEMON);
+  expect(Date.now() - started).toBeLessThan(3_000);
 }, 20_000);
