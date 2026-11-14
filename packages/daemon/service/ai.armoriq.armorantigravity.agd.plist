@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Installer template. Replace @LABEL@ with the job label (ai.armoriq.armorantigravity.agd),
+  @AGD_BIN@ with the absolute path of armoriq-agd and @HOME@ with the user's home, write to
+  ~/Library/LaunchAgents/@LABEL@.plist, then launchctl bootstrap gui/$(id -u) <that file>.
+  armoriq-agd exits 0 when another instance holds its lock, so KeepAlive restarts it only after
+  a crash. HOME is pinned so the daemon reads the same ~/.armoriq the hooks talk to.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@AGD_BIN@</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>@HOME@</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>ExitTimeOut</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>@HOME@/.armoriq/armorantigravity/logs/agd.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/.armoriq/armorantigravity/logs/agd.stderr.log</string>
+</dict>
+</plist>

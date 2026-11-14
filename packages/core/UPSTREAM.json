@@ -1,0 +1,31 @@
+{
+  "repo": "armoriq/armorOpenCode",
+  "ref": "dev",
+  "commit": "29bec8c4d89ee078b724ef3d31b5ce49ea840092",
+  "files": [
+    {"upstream": "src/types.ts", "local": "packages/core/src/types.ts", "blob": "83f3f28efcf4632288bef14618d3070a4d4b386b"},
+    {"upstream": "src/core/tools.ts", "local": "packages/core/src/products/opencode.ts", "blob": "95d0a21117c568d990181d7dc98f92c5b8117983"},
+    {"upstream": "src/core/sanitize.ts", "local": "packages/core/src/sanitize.ts", "blob": "702964440ab5bdf2f51f4c05fe7d21b83ac362a4"},
+    {"upstream": "test/core/sanitize.test.ts", "local": "packages/core/test/sanitize.test.ts", "blob": "593cacf228f546e14525939aa109684ab843a4a9"},
+    {"upstream": "src/core/linear-regex.ts", "local": "packages/core/src/linear-regex.ts", "blob": "232e240c2aa8254755c15f1171988dc2b2e6d11f"},
+    {"upstream": "test/core/linear-regex.test.ts", "local": "packages/core/test/linear-regex.test.ts", "blob": "e85024e6cb31e0ffdc8a5e08f10c910443218b7c"},
+    {"upstream": "src/core/policy.ts", "local": "packages/core/src/policy.ts", "blob": "aad837ce40a8df96895bbc6ef7b1b8a14b9b9f1a"},
+    {"upstream": "test/core/policy.test.ts", "local": "packages/core/test/policy.test.ts", "blob": "b3caad1fd75ea54b7fa907f7e9b7e4f52e4a76f9"},
+    {"upstream": "src/core/intent.ts", "local": "packages/core/src/intent.ts", "blob": "ed0e2065e62f09b905715109dae4ea515b267a4e"},
+    {"upstream": "test/core/intent.test.ts", "local": "packages/core/test/intent.test.ts", "blob": "d1f084b9954dccafb603a7b125c52aadcd6089e4"},
+    {"upstream": "src/core/builtin-rules.ts", "local": "packages/core/src/builtin-rules.ts", "blob": "897bfa74a98fe3339820ca713f5706f96bedff24"},
+    {"upstream": "test/core/builtin-rules.test.ts", "local": "packages/core/test/builtin-rules.test.ts", "blob": "12af9f97f481f29891336d9e7087eacb3308df4f"},
+    {"upstream": "src/core/decide.ts", "local": "packages/core/src/decide.ts", "blob": "ffffadac8cae942b0e3086c1e779dc44a7fe2c3b"},
+    {"upstream": "test/core/decide.test.ts", "local": "packages/core/test/decide.test.ts", "blob": "cb3d2d0b5b85f69c05e21568ae6fbbae39d70a04"},
+    {"upstream": "src/core/audit.ts", "local": "packages/core/src/audit.ts", "blob": "7056202fd4cf6dfc05d8a739a3a50ed06a7b4564"},
+    {"upstream": "test/core/audit.test.ts", "local": "packages/core/test/audit.test.ts", "blob": "f4ef00b9046b319a47ca81cd1969ab10b7ce76f6"},
+    {"upstream": "src/core/usage.ts", "local": "packages/core/src/usage.ts", "blob": "1db9e0c57df28a3e74f6048faef62a883c50e49e"},
+    {"upstream": "test/core/usage.test.ts", "local": "packages/core/test/usage.test.ts", "blob": "8c63fa501ae90c1108f8d1272e0f0677b32e79fc"},
+    {"upstream": "src/io/outbox.ts", "local": "packages/core/src/outbox.ts", "blob": "c5f5253f3eca990be000944a58892371313fcc27"},
+    {"upstream": "src/io/shared-lock.ts", "local": "packages/core/src/shared-lock.ts", "blob": "b5f4e9d6c28e970fd6c41bd3b97f57f0e81682de"},
+    {"upstream": "test/io/outbox.test.ts", "local": "packages/core/test/outbox.test.ts", "blob": "54f54cc9b90f887d861d0aca1fe0c00ed117dbc0"},
+    {"upstream": "test/io/shared-lock.test.ts", "local": "packages/core/test/shared-lock.test.ts", "blob": "dd250255b517755f9073694e1e96d6c3d8e9ab7a"},
+    {"upstream": "test/io/helpers/outbox-child.ts", "local": "packages/core/test/helpers/outbox-child.ts", "blob": "96f8b138de99ca0100a55f7862c57d5513691d41"},
+    {"upstream": "test/io/helpers/stub.ts", "local": "packages/core/test/helpers/stub.ts", "blob": "d7f4185e3cf188421659487426c3593a129975ea"}
+  ]
+}

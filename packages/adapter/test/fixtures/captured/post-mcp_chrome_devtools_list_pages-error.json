@@ -1,0 +1,20 @@
+{
+  "event": "PostToolUse",
+  "stdin": {
+    "artifactDirectoryPath": "/Users/dev/.gemini/antigravity-cli/brain/3afe252b-10dc-4b17-85fc-e3f3a5f5c391",
+    "conversationId": "3afe252b-10dc-4b17-85fc-e3f3a5f5c391",
+    "error": "Could not connect to Chrome. Check if Chrome is running.\nCause: Could not find DevToolsActivePort for chrome at /Users/dev/Library/Application Support/Google/Chrome/DevToolsActivePort",
+    "modelName": "gemini-3.8-flash-high",
+    "stepIdx": 3,
+    "toolCall": {
+      "args": {
+        "toolSummary": "Listing open browser pages"
+      },
+      "name": "mcp_chrome_devtools_list_pages"
+    },
+    "transcriptPath": "/Users/dev/.gemini/antigravity-cli/brain/3afe252b-10dc-4b17-85fc-e3f3a5f5c391/.system_generated/logs/transcript_full.jsonl",
+    "workspacePaths": [
+      "/Users/dev/src/ws"
+    ]
+  }
+}

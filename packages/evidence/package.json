@@ -1,0 +1,12 @@
+{
+  "name": "@armorantigravity/evidence",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@armorantigravity/core": "workspace:*",
+    "@armorantigravity/protocol": "workspace:*",
+    "@armoriq/sdk-dev": "^0.8.17"
+  }
+}

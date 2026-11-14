@@ -1,0 +1,16 @@
+{
+  "event": "Stop",
+  "stdin": {
+    "artifactDirectoryPath": "/Users/dev/.gemini/antigravity-cli/brain/ef59e687-e00f-44c2-9724-a00d0abf24d4",
+    "conversationId": "ef59e687-e00f-44c2-9724-a00d0abf24d4",
+    "error": "",
+    "executionNum": 0,
+    "fullyIdle": true,
+    "modelName": "gemini-3.8-flash-high",
+    "terminationReason": "NO_TOOL_CALL",
+    "transcriptPath": "/Users/dev/.gemini/antigravity-cli/brain/ef59e687-e00f-44c2-9724-a00d0abf24d4/.system_generated/logs/transcript_full.jsonl",
+    "workspacePaths": [
+      "/Users/dev/src/ws"
+    ]
+  }
+}

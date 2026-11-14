@@ -1,0 +1,29 @@
+{
+  "event": "PreToolUse",
+  "stdin": {
+    "artifactDirectoryPath": "/Users/dev/.gemini/antigravity-cli/brain/95c0238a-147e-4adc-942e-376c18a16f42",
+    "conversationId": "95c0238a-147e-4adc-942e-376c18a16f42",
+    "modelName": "gemini-3.8-flash-high",
+    "stepIdx": 2,
+    "toolCall": {
+      "args": {
+        "Subagents": [
+          {
+            "Model": "inherit",
+            "Prompt": "Run the shell command `echo from-subagent` and write a file sub.txt containing sub",
+            "Role": "Task Runner",
+            "TypeName": "self",
+            "Workspace": "inherit"
+          }
+        ],
+        "toolAction": "Delegating file and command task",
+        "toolSummary": "Invoke subagent for shell command and file write"
+      },
+      "name": "invoke_subagent"
+    },
+    "transcriptPath": "/Users/dev/.gemini/antigravity-cli/brain/95c0238a-147e-4adc-942e-376c18a16f42/.system_generated/logs/transcript_full.jsonl",
+    "workspacePaths": [
+      "/Users/dev/src/ws"
+    ]
+  }
+}

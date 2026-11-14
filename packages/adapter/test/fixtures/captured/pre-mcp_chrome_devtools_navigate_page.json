@@ -1,0 +1,22 @@
+{
+  "event": "PreToolUse",
+  "stdin": {
+    "artifactDirectoryPath": "/Users/dev/.gemini/antigravity-cli/brain/3afe252b-10dc-4b17-85fc-e3f3a5f5c391",
+    "conversationId": "3afe252b-10dc-4b17-85fc-e3f3a5f5c391",
+    "modelName": "gemini-3.8-flash-high",
+    "stepIdx": 15,
+    "toolCall": {
+      "args": {
+        "pageId": 1,
+        "toolSummary": "Navigating to example.com",
+        "type": "url",
+        "url": "https://example.com"
+      },
+      "name": "mcp_chrome_devtools_navigate_page"
+    },
+    "transcriptPath": "/Users/dev/.gemini/antigravity-cli/brain/3afe252b-10dc-4b17-85fc-e3f3a5f5c391/.system_generated/logs/transcript_full.jsonl",
+    "workspacePaths": [
+      "/Users/dev/src/ws"
+    ]
+  }
+}

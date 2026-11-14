@@ -1,0 +1,13 @@
+{
+  "name": "@armorantigravity/adapter",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@armorantigravity/core": "workspace:*",
+    "@armorantigravity/protocol": "workspace:*",
+    "zod": "^4.6.6"
+  }
+}

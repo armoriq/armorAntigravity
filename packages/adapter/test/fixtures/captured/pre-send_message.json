@@ -1,0 +1,22 @@
+{
+  "event": "PreToolUse",
+  "stdin": {
+    "artifactDirectoryPath": "/Users/dev/.gemini/antigravity-cli/brain/b82464e5-3392-4925-8772-4bda03973e9f",
+    "conversationId": "b82464e5-3392-4925-8772-4bda03973e9f",
+    "modelName": "gemini-3.8-flash-high",
+    "stepIdx": 6,
+    "toolCall": {
+      "args": {
+        "Message": "The shell command `echo from-subagent` was executed successfully (output: `from-subagent`), and the file `/Users/dev/src/ws/sub.txt` containing `sub` has been created.",
+        "Recipient": "95c0238a-147e-4adc-942e-376c18a16f42",
+        "toolAction": "Reporting task completion",
+        "toolSummary": "Report completion to parent agent"
+      },
+      "name": "send_message"
+    },
+    "transcriptPath": "/Users/dev/.gemini/antigravity-cli/brain/b82464e5-3392-4925-8772-4bda03973e9f/.system_generated/logs/transcript_full.jsonl",
+    "workspacePaths": [
+      "/Users/dev/src/ws"
+    ]
+  }
+}

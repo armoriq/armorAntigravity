@@ -1,0 +1,18 @@
+# Installer template. Replace @AGD_BIN@ with the absolute path of armoriq-agd, write to
+# ~/.config/systemd/user/armoriq-agd.service, then: systemctl --user daemon-reload &&
+# systemctl --user enable --now armoriq-agd. armoriq-agd exits 0 when another instance holds its
+# lock, so Restart=on-failure restarts it only after a crash.
+[Unit]
+Description=ArmorIQ ArmorAntigravity daemon (armoriq-agd)
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=@AGD_BIN@
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

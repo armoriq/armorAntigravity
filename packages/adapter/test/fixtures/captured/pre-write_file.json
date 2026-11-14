@@ -1,0 +1,20 @@
+{
+  "event": "PreToolUse",
+  "stdin": {
+    "artifactDirectoryPath": "/Users/dev/.gemini/antigravity-cli/brain/ebc4cb7d-cf4a-4ccd-9390-fe97fcd2bca2",
+    "conversationId": "ebc4cb7d-cf4a-4ccd-9390-fe97fcd2bca2",
+    "modelName": "gemini-3.8-flash-high",
+    "stepIdx": 6,
+    "toolCall": {
+      "args": {
+        "Content": "hello",
+        "Path": "/Users/dev/src/ws/enum/new.txt"
+      },
+      "name": "write_file"
+    },
+    "transcriptPath": "/Users/dev/.gemini/antigravity-cli/brain/ebc4cb7d-cf4a-4ccd-9390-fe97fcd2bca2/.system_generated/logs/transcript_full.jsonl",
+    "workspacePaths": [
+      "/Users/dev/src/ws"
+    ]
+  }
+}

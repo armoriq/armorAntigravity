@@ -1,0 +1,17 @@
+2026-10-12, spike/bench/run.sh 300, two consecutive runs, variants interleaved per iteration.
+Machine was shared with other agent work; load averages are printed after each run.
+
+Darwin arm64, Apple M5, go go1.26.4, bun 1.4.3
+binary sizes: agd-hook-go 2608466 bytes, agd-hook-bun 70862450 bytes
+
+run 1
+baseline-sh  n=300 p50=11.30ms p95=25.78ms p99=50.25ms max=87.61ms
+go           n=300 p50=11.87ms p95=26.70ms p99=42.23ms max=200.82ms
+bun          n=300 p50=34.77ms p95=83.41ms p99=105.98ms max=137.18ms
+load: 29.31 41.88 49.08
+
+run 2
+baseline-sh  n=300 p50=9.72ms p95=16.70ms p99=34.58ms max=39.28ms
+go           n=300 p50=10.27ms p95=17.25ms p99=30.73ms max=48.36ms
+bun          n=300 p50=30.17ms p95=44.27ms p99=77.49ms max=124.79ms
+load: 23.92 39.85 48.19
