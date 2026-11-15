@@ -37,7 +37,7 @@ const realPs: Run = (cmd) => {
   const r = Bun.spawnSync([...cmd]);
   return { code: r.exitCode ?? 1, output: r.stdout.toString().trim() };
 };
-const deps = (over: Partial<Deps> = {}): Deps => ({ run, log: (l) => logs.push(l), platform: "darwin", serviceLabel: LABEL, socketWaitMs: 0, ...over });
+const deps = (over: Partial<Deps> = {}): Deps => ({ env: {}, run, log: (l) => logs.push(l), platform: "darwin", serviceLabel: LABEL, socketWaitMs: 0, ...over });
 const opts = (over: Partial<Parameters<typeof install>[0]> = {}) => ({ home, sourceDir: source, version: "0.1.0", channel: "stable" as const, backend: "https://api.armoriq.ai", ...over });
 const L = () => layout(home);
 const read = (file: string) => readFileSync(file, "utf8");
@@ -249,13 +249,13 @@ describe("uninstall", () => {
 
     await uninstall({ home, purge: true }, deps());
     expect(existsSync(L().dataDir)).toBe(false);
-    expect(tree(home)).toEqual([".armoriq", ".armoriq/armoropencode", ".armoriq/credentials.json"]);
+    expect(tree(home)).toEqual([".armoriq", ".armoriq/armoropencode", ".armoriq/credentials.json", ".armoriq/reach", ".armoriq/reach/v1", ".armoriq/reach/v1/armorantigravity", ".armoriq/reach/v1/armorantigravity/notice-shown"]);
   });
 
-  test("on a fresh home, install then uninstall --purge leaves nothing behind", async () => {
+  test("on a fresh home, install then uninstall --purge keeps only the shared notice marker", async () => {
     await install(opts(), deps());
     await uninstall({ home, purge: true }, deps());
-    expect(tree(home)).toEqual([]);
+    expect(tree(home)).toEqual([".armoriq", ".armoriq/reach", ".armoriq/reach/v1", ".armoriq/reach/v1/armorantigravity", ".armoriq/reach/v1/armorantigravity/notice-shown"]);
   });
 
   test("stops a running armoriq-agd and leaves an unrelated pid alone", async () => {
