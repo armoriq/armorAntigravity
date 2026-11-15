@@ -1,8 +1,9 @@
 import { armoriqPlugins } from "./armoriq.ts";
 import { AlreadyRunning, startDaemon } from "./daemon.ts";
+import { reachPlugin } from "./reach.ts";
 
 try {
-  const daemon = await startDaemon({ env: process.env, plugins: armoriqPlugins() });
+  const daemon = await startDaemon({ env: process.env, plugins: [...armoriqPlugins(), reachPlugin()] });
   const shutdown = () => void daemon.stop().then(() => process.exit(0));
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);

@@ -1,6 +1,7 @@
 import { checkCall, planToolName } from "./plan.ts";
 import type { Conversation } from "./registry.ts";
 import { AGENT_ID, CLIENT_ID, type AuditRow, type Plan } from "./types.ts";
+import { loginCommand } from "./login-command.ts";
 
 export type IntentDenyCode =
   | "intent_plan_missing"
@@ -42,7 +43,7 @@ export function checkIntent({ root, tool, args, readOnly, now }: IntentCheckInpu
 
   if (token?.status === "refused") {
     return token.code === "account_revoked"
-      ? { kind: "deny", code: "account_revoked", reason: "the ArmorIQ API key was revoked; run `armoriq login` again" }
+      ? { kind: "deny", code: "account_revoked", reason: `the ArmorIQ API key was revoked; run \`${loginCommand(undefined, undefined, true)}\` again` }
       : { kind: "deny", code: "billing_blocked", reason: "the ArmorIQ subscription is inactive or over quota" };
   }
 

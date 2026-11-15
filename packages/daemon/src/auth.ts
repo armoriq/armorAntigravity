@@ -1,14 +1,17 @@
 import { clientHeaders, type ClientIdentity } from "@armoriq/sdk-dev/dist/client_identity.js";
+import { loginCommand, resolveBackend } from "@armorantigravity/intent";
 import { getCredentialsPath, isReloginRequired, loadLoginContext } from "@armoriq/sdk-dev/dist/credentials.js";
 import type { Mode } from "@armorantigravity/protocol";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import type { Config } from "./config.ts";
 import type { Log } from "./log.ts";
 import { PRODUCT, type Env } from "./paths.ts";
+
+export { loginCommand, resolveBackend };
 
 export const DEFAULT_BACKEND = "https://api.armoriq.ai";
 const RELOAD_DEBOUNCE_MS = 100;
@@ -75,18 +78,6 @@ function readProfile(backend: string): Identity | null {
   }
 }
 
-// Scanned rather than `.replace(/\/+$/, "")`, which backtracks quadratically on a
-// long run of slashes.
-function stripTrailingSlashes(url: string): string {
-  let end = url.length;
-  while (end > 0 && url[end - 1] === "/") end--;
-  return end === url.length ? url : url.slice(0, end);
-}
-
-export function resolveBackend(env: Env, configured: string | null): string {
-  return stripTrailingSlashes(envValue(env, "ARMORIQ_BACKEND_URL") ?? configured ?? DEFAULT_BACKEND);
-}
-
 export function readLogin(env: Env, configuredBackend: string | null): Login | null {
   const backend = resolveBackend(env, configuredBackend);
   const saved = readProfile(backend);
@@ -111,7 +102,9 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
   const listeners = new Set<(state: AuthState) => void>();
   const warned = new Set<string>();
   const markerPath = (login: Login) => path.join(dataDir, `relogin-required-${loginBinding(login)}`);
+  const refusalPath = (login: Login) => path.join(dataDir, `login-refused-${loginBinding(login)}`);
   let state = fromLogin(load());
+  if (state.kind === "active") { try { unlinkSync(refusalPath(state.login)); } catch {} }
   let watcher: FSWatcher | null = null;
   let debounce: ReturnType<typeof setTimeout> | undefined;
   let poll: ReturnType<typeof setInterval> | undefined;
@@ -132,6 +125,14 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
 
   function set(next: AuthState): void {
     if (sameState(state, next)) return;
+    if ("login" in next) {
+      try {
+        if (next.kind === "local_only") {
+          mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+          writeFileSync(refusalPath(next.login), "", { mode: 0o600 });
+        } else if (existsSync(refusalPath(next.login))) unlinkSync(refusalPath(next.login));
+      } catch (error) { log.error("login refusal marker update failed", { error: String(error) }); }
+    }
     state = next;
     log.info("auth state", { kind: next.kind, ...(next.kind === "refused" ? { code: next.code } : {}) });
     for (const listener of listeners) listener(next);
@@ -194,11 +195,7 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
     const binding = loginBinding(login);
     if (!warned.has(binding)) {
       warned.add(binding);
-      const cli = path.join(dataDir, "bin", "armorantigravity");
-      const backendArg = `'${login.backend.replaceAll("'", "'\\''")}'`;
-      const command = existsSync(cli)
-        ? `'${cli.replaceAll("'", "'\\''")}' login --backend ${backendArg} --force`
-        : `armoriq login --product ${PRODUCT} --backend ${backendArg} --force`;
+      const command = loginCommand(dataDir, login.backend, true);
       log.warn(`ArmorIQ login expired; run \`${command}\``);
     }
     try {
