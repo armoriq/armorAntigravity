@@ -1,5 +1,6 @@
 import rules from "@armorantigravity/mcp/rules/armoriq.md" with { type: "text" };
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { REACH_NOTICE, pingDisabled, reminderDisabled, reachEnvironment } from "@armorantigravity/daemon";
+import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import path from "node:path";
 import { isEmptyObjectAt, removeMember, setMember, type Json, type JsonObject } from "./jsonc.ts";
@@ -68,6 +69,7 @@ export interface Manifest {
 }
 
 export interface Deps {
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly run: Run;
   readonly log: (line: string) => void;
   readonly platform: NodeJS.Platform;
@@ -152,10 +154,23 @@ export async function install(opts: InstallOptions, deps: Deps): Promise<Install
   for (const name of BINARIES) if (copyBinary(path.join(opts.sourceDir, name), path.join(l.binDir, name))) changed.push(path.join(l.binDir, name));
 
   const config = readConfigFile(l.configFile);
-  const nextConfig = { ...config, backendUrl: backend, channel: opts.channel };
+  const env = deps.env ?? process.env;
+  const nextConfig = {
+    ...config, backendUrl: backend, channel: opts.channel,
+    ...(pingDisabled(env) ? { usagePing: false } : {}),
+    ...(reminderDisabled(env) ? { signInReminder: false } : {}),
+  };
   if (JSON.stringify(nextConfig) !== JSON.stringify(config) || !existsSync(l.configFile)) {
     writeAtomic(l.configFile, `${JSON.stringify(nextConfig, null, 2)}\n`);
     changed.push(l.configFile);
+  }
+  if (!pingDisabled(env) && nextConfig.usagePing !== false && reachEnvironment(backend) && sharedPingEnabled(opts.home)) {
+    try {
+      const reachDir = path.join(opts.home, ".armoriq/reach/v1/armorantigravity");
+      mkdirSync(reachDir, { recursive: true, mode: 0o700 });
+      closeSync(openSync(path.join(reachDir, "notice-shown"), "wx", 0o600));
+      deps.log(REACH_NOTICE);
+    } catch { /* The daemon can show the notice if the installer cannot claim it. */ }
   }
 
   ensureDir(manifest, l.geminiConfig);
@@ -199,6 +214,19 @@ export async function install(opts: InstallOptions, deps: Deps): Promise<Install
   const daemonUp = service ? await waitForSocket(l.socket, deps.socketWaitMs ?? SOCKET_WAIT_MS) : false;
   const notStrictJson = [l.hooksFile, l.mcpFile].filter((f) => !isStrictJson(readFileSync(f, "utf8")));
   return { changed, service, daemonUp, notStrictJson };
+}
+
+function sharedPingEnabled(home: string): boolean {
+  const file = path.join(home, ".armoriq/settings.json");
+  try {
+    const stat = statSync(file);
+    if (!stat.isFile() || !(stat.mode & 0o444) || stat.size > 65536) return false;
+    const settings: unknown = JSON.parse(readFileSync(file, "utf8"));
+    return settings !== null && typeof settings === "object" && !Array.isArray(settings) &&
+      (!Object.hasOwn(settings, "usagePing") || (settings as Record<string, unknown>).usagePing === true);
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT";
+  }
 }
 
 function isStrictJson(text: string): boolean {

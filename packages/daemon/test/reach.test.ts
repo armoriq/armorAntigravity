@@ -3,7 +3,12 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync,
 import * as fs from "node:fs/promises";
 import { createConnection } from "node:net";
 import { hostname } from "node:os";
+import { EventEmitter } from "node:events";
 import path from "node:path";
+import { fileLog } from "../src/log.ts";
+import { createAuth } from "../src/auth.ts";
+import { readConfig } from "../src/config.ts";
+import { resolvePaths } from "../src/paths.ts";
 import type { HookEvent, HookResponse } from "@armorantigravity/protocol";
 import type { PluginRegistration } from "../src/plugin.ts";
 import { startDaemon, type RunningDaemon } from "../src/daemon.ts";
@@ -19,6 +24,8 @@ let registration: PluginRegistration;
 let clock: number;
 let verdict: HookResponse;
 let sent: { url: string; init: RequestInit; body: Record<string, any> }[];
+let messages: string[];
+let conversationId: string;
 const quiet = { info() {}, warn() {}, error() {} };
 const day = "2026-11-15";
 const previous = "2026-11-14";
@@ -37,18 +44,23 @@ beforeEach(async () => {
   clock = Date.parse(`${day}T23:59:59.000Z`);
   verdict = { decision: "allow" };
   sent = [];
+  messages = [];
   const module = await import("../src/reach.ts").catch(() => null);
   expect(module?.reachPlugin).toBeFunction();
   reach = module!;
 });
 afterEach(async () => { await stop(); box?.cleanup(); });
 
-async function boot(env: Record<string, string | undefined> = {}, send?: (url: string, init: RequestInit) => Promise<Response>) {
-  const plugin = reach.reachPlugin({ env, now: () => clock, fetch: send ?? (async (url, init) => {
+async function boot(env: Record<string, string | undefined> = {}, send?: (url: string, init: RequestInit) => Promise<Response>, notifier = (message: string) => { messages.push(message); }) {
+  // A new conversation produces session_start even when the daemon restores older snapshots.
+  conversationId = `private-conversation-${crypto.randomUUID()}`;
+  // Existing ping cases isolate the independent reminder. Reminder cases explicitly enable it.
+  env = { ARMORIQ_SIGNIN_REMINDER_DISABLED: "1", ...env };
+  const plugin = reach.reachPlugin({ env, now: () => clock, notifier, fetch: send ?? (async (url, init) => {
     sent.push({ url, init, body: JSON.parse(String(init.body)) });
     return new Response(null, { status: 204 });
   }) });
-  daemon = await startDaemon({ env, log: quiet, plugins: [
+  daemon = await startDaemon({ env, log: fileLog(path.join(armoriq(), "armorantigravity/logs/agd.log"), false), plugins: [
     { name: "decision", setup: () => ({ decide: () => verdict }) },
     { ...plugin, async setup(ctx) { registration = await plugin.setup(ctx); return registration; } },
   ] });
@@ -70,7 +82,7 @@ function hook(event: HookEvent = "PreToolUse"): Promise<unknown> {
       if (buffer.includes("\n")) { socket.end(); resolve(JSON.parse(buffer).response); }
     });
     socket.on("connect", () => socket.write(`${JSON.stringify({ v: 1, id: "reach-test", event, receivedAt: clock, payload: {
-      conversationId: "private-conversation", workspacePaths: ["/planted/private/repo"], transcriptPath: "/planted/private/transcript",
+      conversationId, workspacePaths: ["/planted/private/repo"], transcriptPath: "/planted/private/transcript",
       artifactDirectoryPath: "/planted/private/artifacts", modelName: hostname(),
       toolCall: { name: "private_tool_name", args: { key: "planted-secret" } }, stepIdx: 1,
       invocationNum: 0, initialNumSteps: 0, error: "",
@@ -123,6 +135,7 @@ for (const [index, vector] of contract.optOut.testVectors.entries()) {
     expect(sent.length).toBe(v.enabled ? 1 : 0);
     expect(existsSync(path.join(armoriq(), "install-id"))).toBe(v.enabled);
     expect(existsSync(path.join(armoriq(), "reach"))).toBe(v.enabled);
+    expect(messages).toEqual(v.enabled ? [contract.notice] : []);
   });
 }
 
@@ -249,6 +262,7 @@ test("observe only schedules work and stays below 20 ms at p95 with file calls g
       samples.push(performance.now() - start);
     }
     expect(open).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled(); expect(mkdir).not.toHaveBeenCalled(); expect(sent).toEqual([]);
+    expect(messages).toEqual([]);
     expect(samples.sort((a, b) => a - b)[94]!).toBeLessThan(20);
   } finally { open.mockRestore(); read.mockRestore(); mkdir.mockRestore(); }
   await stop(); expect(sent).toHaveLength(1);
@@ -387,7 +401,7 @@ test("two racing plugin workers share one install id and one daily claim", async
     return new Response(null, { status: 204 });
   };
   await boot({}, send);
-  const other = await reach.reachPlugin({ env: {}, now: () => clock, fetch: send }).setup({
+  const other = await reach.reachPlugin({ env: { ARMORIQ_SIGNIN_REMINDER_DISABLED: "1" }, now: () => clock, fetch: send, notifier() {} }).setup({
     log: quiet, paths: daemon!.paths, auth: daemon!.auth, sessions: { get: () => undefined, all: () => [] },
   });
   try {
@@ -398,4 +412,313 @@ test("two racing plugin workers share one install id and one daily claim", async
     expect(sent[0]!.body.installId).toBe(readFileSync(path.join(armoriq(), "install-id"), "utf8").trim());
     expect(readdirSync(armoriq()).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   } finally { await other.pumps![0]!.stop(); }
+});
+
+const reminderOn = { ARMORIQ_SIGNIN_REMINDER_DISABLED: "0" };
+const noticeFile = () => path.join(armoriq(), "reach/v1/armorantigravity/notice-shown");
+const reminderFile = (date = day, environment = "production") => path.join(dir(environment), `reminder-${date}`);
+const loggedMessages = () => readFileSync(path.join(armoriq(), "armorantigravity/logs/agd.log"), "utf8").trim().split("\n").map((line) => JSON.parse(line).message as string);
+const sessionStart = () => registration.observe!({ kind: "session_start", session: {} as never, at: clock });
+function installedCli() {
+  const cli = path.join(armoriq(), "armorantigravity/bin/armorantigravity");
+  mkdirSync(path.dirname(cli), { recursive: true });
+  writeFileSync(cli, "#!/bin/sh\n", { mode: 0o755 });
+  return `'${cli.replaceAll("'", "'\\''")}'`;
+}
+
+test("first session shows two separate notifications, then notice stays claimed across days and channels", async () => {
+  const cli = installedCli();
+  await boot(reminderOn); await hook(); await stop();
+  expect(messages).toEqual([contract.notice, `ArmorAntigravity is not signed in to ArmorIQ. Sign in to see your plans and blocks on your dashboard: ${cli} login --backend 'https://api.armoriq.ai' (hide this reminder: ARMORIQ_SIGNIN_REMINDER_DISABLED=1)`]);
+  expect(lstatSync(noticeFile()).mode & 0o777).toBe(0o600);
+  expect(lstatSync(reminderFile()).mode & 0o777).toBe(0o600);
+  config({ channel: "dev" });
+  await boot(reminderOn); await hook(); await stop(); expect(messages).toHaveLength(2);
+  clock += 1000;
+  await boot(reminderOn); await hook(); await stop();
+  expect(messages).toHaveLength(3);
+  expect(messages.filter((text) => text === contract.notice)).toHaveLength(1);
+  expect(existsSync(reminderFile("2026-11-16"))).toBe(true);
+  clock -= 1000;
+  await boot(reminderOn); await hook(); await stop(); expect(messages).toHaveLength(3);
+});
+
+test("notice and reminder claims are independent and a previous installer notice is respected", async () => {
+  mkdirSync(path.dirname(noticeFile()), { recursive: true });
+  writeFileSync(noticeFile(), "");
+  await boot(reminderOn); await hook(); await stop();
+  expect(messages).toHaveLength(1); expect(messages[0]).toContain("is not signed in");
+});
+
+test("a failed notice claim does not suppress the reminder", async () => {
+  mkdirSync(noticeFile(), { recursive: true });
+  await boot(reminderOn); await hook(); await stop();
+  expect(messages).toHaveLength(1); expect(messages[0]).toContain("is not signed in");
+});
+
+test("a failed reminder claim does not suppress the notice", async () => {
+  mkdirSync(reminderFile(), { recursive: true });
+  await boot(reminderOn); await hook(); await stop();
+  expect(messages).toEqual([contract.notice]);
+});
+
+for (const env of [{ DO_NOT_TRACK: "1" }, { ARMORIQ_USAGE_PING_DISABLED: " YeS " }]) {
+  test(`ping opt out ${JSON.stringify(env)} leaves reminder enabled without an install id or request`, async () => {
+    await boot({ ...reminderOn, ...env }); await hook(); await stop();
+    expect(messages).toHaveLength(1); expect(messages[0]).toContain("is not signed in");
+    expect(sent).toEqual([]); expect(existsSync(noticeFile())).toBe(false);
+    expect(existsSync(path.join(armoriq(), "install-id"))).toBe(false);
+  });
+}
+for (const source of ["config", "settings"]) {
+  test(`${source} usagePing false leaves reminder enabled`, async () => {
+    if (source === "config") config({ usagePing: false });
+    else { mkdirSync(armoriq(), { recursive: true }); writeFileSync(path.join(armoriq(), "settings.json"), '{"usagePing":false}'); }
+    await boot(reminderOn); await hook(); await stop();
+    expect(messages).toHaveLength(1); expect(messages[0]).toContain("is not signed in"); expect(sent).toEqual([]);
+  });
+}
+
+for (const value of ["1", "true", "yes", " TRUE ", " YeS "]) {
+  test(`reminder env opt out ${value} leaves ping and notice enabled`, async () => {
+    await boot({ ARMORIQ_SIGNIN_REMINDER_DISABLED: value }); await hook(); await stop();
+    expect(messages).toEqual([contract.notice]); expect(sent).toHaveLength(1);
+    expect(existsSync(reminderFile())).toBe(false);
+  });
+}
+for (const value of ["0", "false", "no", "", "unknown"]) {
+  test(`unrecognised reminder env value ${value} does not disable it`, async () => {
+    await boot({ DO_NOT_TRACK: "1", ARMORIQ_SIGNIN_REMINDER_DISABLED: value }); await hook(); await stop();
+    expect(messages).toHaveLength(1); expect(messages[0]).toContain("is not signed in");
+  });
+}
+
+for (const value of [false, "false", 0, null, {}, []]) {
+  test(`shared signInReminder ${JSON.stringify(value)} fails closed independently of the ping`, async () => {
+    mkdirSync(armoriq(), { recursive: true });
+    writeFileSync(path.join(armoriq(), "settings.json"), JSON.stringify({ signInReminder: value }));
+    await boot(reminderOn); await hook(); await stop();
+    expect(messages).toEqual([contract.notice]); expect(sent).toHaveLength(1);
+    expect(existsSync(reminderFile())).toBe(false);
+  });
+}
+for (const kind of ["malformed", "unreadable", "directory", "null", "array"]) {
+  test(`${kind} shared settings suppress both messages`, async () => {
+    mkdirSync(armoriq(), { recursive: true });
+    const file = path.join(armoriq(), "settings.json");
+    if (kind === "directory") mkdirSync(file);
+    else writeFileSync(file, kind === "malformed" ? "{" : kind === "null" ? "null" : kind === "array" ? "[]" : "{}", { mode: kind === "unreadable" ? 0 : 0o600 });
+    await boot(reminderOn); await hook(); await stop();
+    expect(messages).toEqual([]); expect(existsSync(noticeFile())).toBe(false); expect(existsSync(reminderFile())).toBe(false);
+  });
+}
+
+test("config reminder opt out is reread at each session and enabled sources cannot override it", async () => {
+  config({ signInReminder: false });
+  mkdirSync(armoriq(), { recursive: true });
+  writeFileSync(path.join(armoriq(), "settings.json"), '{"signInReminder":true}');
+  await boot(reminderOn); await hook();
+  await registration.pumps![0]!.stop();
+  expect(messages).toEqual([contract.notice]); expect(existsSync(reminderFile())).toBe(false);
+  await stop();
+  config({ signInReminder: true });
+  await boot(reminderOn); await hook(); await stop();
+  expect(messages).toHaveLength(2); expect(existsSync(reminderFile())).toBe(true);
+});
+
+test("signed in and cached relogin postures use uploadLogin for the reminder", async () => {
+  await boot({ ...reminderOn, ARMORIQ_API_KEY: "test-key" }); await hook();
+  await registration.pumps![0]!.stop();
+  expect(messages).toEqual([contract.notice]); expect(existsSync(reminderFile())).toBe(false);
+  await stop();
+  await boot({ ...reminderOn, ARMORIQ_API_KEY: "test-key" });
+  daemon!.auth.reportStatus(401, {}, "probe");
+  expect(daemon!.auth.uploadLogin()).toBeNull();
+  await hook(); await stop();
+  expect(messages).toHaveLength(2); expect(messages[1]).toContain("is not signed in");
+});
+
+test("reminder uses environment backend, has independent environment claims and prunes only expired reminders", async () => {
+  installedCli();
+  config({ backendUrl: "https://api.armoriq.ai", usagePing: false });
+  mkdirSync(dir("staging"), { recursive: true });
+  for (const name of ["reminder-2026-10-15", "reminder-2026-10-16", "reminder-invalid", "ping-2026-10-15", "counts-2026-10-15.ndjson"]) writeFileSync(path.join(dir("staging"), name), "");
+  await boot({ ...reminderOn, ARMORIQ_BACKEND_URL: "https://staging-api.armoriq.io/" }); await hook(); await stop();
+  expect(messages[0]).toContain("login --backend 'https://staging-api.armoriq.io'");
+  expect(readdirSync(dir("staging")).sort()).toEqual(["reminder-2026-10-16", "reminder-invalid", "ping-2026-10-15", "counts-2026-10-15.ndjson", `reminder-${day}`].sort());
+  await boot(reminderOn); await hook(); await stop(); expect(messages).toHaveLength(2);
+  expect(existsSync(reminderFile())).toBe(true);
+});
+
+test("non contract backend suppresses notice and reminder", async () => {
+  config({ backendUrl: "https://api.armoriq.ai/prefix" });
+  await boot(reminderOn); await hook(); await stop();
+  expect(messages).toEqual([]); expect(existsSync(noticeFile())).toBe(false); expect(existsSync(reminderFile())).toBe(false);
+});
+
+test("hook events alone do not show messages and observe returns before notifications and file work", async () => {
+  await boot(reminderOn);
+  registration.observe!({ kind: "hook", hook: { event: "PostToolUse" } as never, response: null, at: clock });
+  await turn(); await Bun.sleep(20); expect(messages).toEqual([]);
+  const open = spyOn(fs, "open"); const mkdir = spyOn(fs, "mkdir");
+  try {
+    const start = performance.now(); sessionStart();
+    expect(performance.now() - start).toBeLessThan(20);
+    expect(messages).toEqual([]); expect(open).not.toHaveBeenCalled(); expect(mkdir).not.toHaveBeenCalled();
+  } finally { open.mockRestore(); mkdir.mockRestore(); }
+  await stop(); expect(messages).toHaveLength(2);
+});
+
+test("racing workers share the notice and reminder claims", async () => {
+  config({ usagePing: false });
+  await boot(reminderOn);
+  const other = await reach.reachPlugin({ env: reminderOn, now: () => clock, notifier: (text) => { messages.push(text); } }).setup({
+    log: quiet, paths: daemon!.paths, auth: daemon!.auth, sessions: { get: () => undefined, all: () => [] },
+  });
+  sessionStart(); other.observe!({ kind: "session_start", session: {} as never, at: clock });
+  await Promise.all([registration.pumps![0]!.stop(), other.pumps![0]!.stop()]);
+  expect(messages).toHaveLength(1);
+});
+
+async function notifierModule() {
+  const module = await import("../src/notify.ts").catch(() => null);
+  expect(module?.desktopNotifier).toBeFunction();
+  return module!;
+}
+
+function notificationChild() {
+  return Object.assign(new EventEmitter(), { unref() {}, kill: (_signal?: string) => true });
+}
+
+test("macOS notifier passes message only as an argument, detached without a shell, and always logs it", async () => {
+  const { desktopNotifier } = await notifierModule();
+  const calls: unknown[][] = [];
+  const child = notificationChild();
+  const unref = spyOn(child, "unref");
+  const text = 'quotes " \' ` $(touch /tmp/never) \\ and\na new line';
+  const notify = desktopNotifier(fileLog(path.join(armoriq(), "armorantigravity/logs/agd.log"), false), { platform: "darwin", env: {}, spawn: (...args) => { calls.push(args); return child; } });
+  const result = notify(text);
+  expect(result).toBeUndefined(); expect(unref).toHaveBeenCalled();
+  expect(calls).toEqual([["osascript", ["-e", "on run argv", "-e", 'display notification (item 1 of argv) with title "ArmorIQ"', "-e", "end run", text], { detached: true, stdio: "ignore", shell: false }]]);
+  expect(loggedMessages()).toContain(text);
+  child.emit("exit", 0);
+});
+
+for (const display of ["DISPLAY", "WAYLAND_DISPLAY"]) {
+  test(`Linux notifier requires PATH binary and ${display}`, async () => {
+    const { desktopNotifier } = await notifierModule();
+    const bin = path.join(armoriq(), "test-bin"); mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, "notify-send"), "#!/bin/sh\n", { mode: 0o755 });
+    const calls: unknown[][] = [];
+    const child = notificationChild();
+    const notify = desktopNotifier(fileLog(path.join(armoriq(), "armorantigravity/logs/agd.log"), false), {
+      platform: "linux", env: { PATH: bin, [display]: ":0" }, spawn: (...args) => { calls.push(args); return child; },
+    });
+    notify(contract.notice);
+    expect(calls).toEqual([[path.join(bin, "notify-send"), ["ArmorIQ", contract.notice], { detached: true, stdio: "ignore", shell: false }]]);
+    expect(loggedMessages()).toContain(contract.notice); child.emit("exit", 0);
+  });
+}
+
+for (const failure of ["missing", "headless", "throw", "error", "nonzero", "timeout"]) {
+  test(`notifier ${failure} retains the full message in agd.log`, async () => {
+    const { desktopNotifier } = await notifierModule();
+    const calls: unknown[][] = [];
+    const child = notificationChild();
+    const kill = spyOn(child, "kill");
+    const text = `${contract.notice} full message with \"quotes\"`;
+    const notify = desktopNotifier(fileLog(path.join(armoriq(), "armorantigravity/logs/agd.log"), false), {
+      platform: failure === "missing" || failure === "headless" ? "linux" : "darwin",
+      env: failure === "missing" ? { PATH: box.home, DISPLAY: ":0" } : {},
+      spawn: (...args) => { calls.push(args); if (failure === "throw") throw new Error("spawn failed"); return child; },
+    });
+    expect(notify(text)).toBeUndefined();
+    if (failure === "missing" || failure === "headless") expect(calls).toEqual([]);
+    if (failure === "error") child.emit("error", new Error("missing executable"));
+    if (failure === "nonzero") child.emit("exit", 1);
+    if (failure === "timeout") { await Bun.sleep(5100); expect(kill).toHaveBeenCalledWith("SIGKILL"); }
+    expect(loggedMessages().filter((line) => line === text)).toEqual([text]);
+    if (failure !== "timeout") expect(kill).not.toHaveBeenCalled();
+  }, 7000);
+}
+
+test("Linux notifier ignores a directory named notify-send on PATH", async () => {
+  const { desktopNotifier } = await notifierModule();
+  const bin = path.join(armoriq(), "test-bin");
+  mkdirSync(path.join(bin, "notify-send"), { recursive: true });
+  let spawned = false;
+  desktopNotifier(fileLog(path.join(armoriq(), "armorantigravity/logs/agd.log"), false), {
+    platform: "linux", env: { PATH: bin, DISPLAY: ":0" }, spawn: () => { spawned = true; return notificationChild(); },
+  })(contract.notice);
+  expect(spawned).toBe(false); expect(loggedMessages()).toContain(contract.notice);
+});
+
+// Exercise the same queued worker without a socket as well as the daemon integration above.
+async function worker(env: Record<string, string> = {}, observe = (reg: PluginRegistration) => reg.observe!({ kind: "session_start", session: {} as never, at: clock }), notifier = (text: string) => { messages.push(text); }) {
+  const paths = resolvePaths(env);
+  const log = fileLog(paths.logFile, false);
+  const auth = createAuth(log, { env, config: readConfig(paths.configFile, log), dataDir: paths.dataDir });
+  const reg = await reach.reachPlugin({ env, now: () => clock, notifier, fetch: async () => new Response(null, { status: 204 }) }).setup({
+    paths, auth, log, sessions: { get: () => undefined, all: () => [] },
+  });
+  try { observe(reg); }
+  finally { await reg.pumps![0]!.stop(); auth.stop(); }
+}
+
+test("worker shows and logs two messages, shares claims across restarts, and rolls over at UTC midnight", async () => {
+  installedCli();
+  await worker(); expect(messages).toHaveLength(2); expect(messages[0]).toBe(contract.notice);
+  expect(loggedMessages()).toContain(messages[0]!); expect(loggedMessages()).toContain(messages[1]!);
+  await worker(); expect(messages).toHaveLength(2);
+  clock += 1000; await worker(); expect(messages).toHaveLength(3);
+  expect(existsSync(reminderFile("2026-11-16"))).toBe(true);
+  clock -= 1000; await worker(); expect(messages).toHaveLength(3);
+});
+
+test("worker preserves full messages and both claims when the injected notifier throws", async () => {
+  await worker({}, undefined, () => { throw new Error("notification failed"); });
+  expect(loggedMessages()).toContain(contract.notice);
+  expect(loggedMessages().some((text) => text.startsWith("ArmorAntigravity is not signed in"))).toBe(true);
+  expect(existsSync(noticeFile())).toBe(true); expect(existsSync(reminderFile())).toBe(true);
+});
+
+for (const source of ["DO_NOT_TRACK", "ARMORIQ_USAGE_PING_DISABLED", "config", "settings"]) {
+  test(`worker ping opt out ${source} leaves the reminder enabled and never creates an install id`, async () => {
+    if (source === "config") config({ usagePing: false });
+    else if (source === "settings") { mkdirSync(armoriq(), { recursive: true }); writeFileSync(path.join(armoriq(), "settings.json"), '{"usagePing":false}'); }
+    await worker(source === "config" || source === "settings" ? {} : { [source]: "true" });
+    expect(messages).toHaveLength(1); expect(messages[0]).toContain("is not signed in");
+    expect(existsSync(noticeFile())).toBe(false); expect(existsSync(path.join(armoriq(), "install-id"))).toBe(false);
+  });
+}
+
+for (const source of ["environment", "config", "settings", "malformed", "unreadable", "wrong type", "signed in"]) {
+  test(`worker suppresses the reminder for ${source}`, async () => {
+    config({ usagePing: false, ...(source === "config" ? { signInReminder: false } : {}) });
+    if (["settings", "malformed", "unreadable", "wrong type"].includes(source)) {
+      writeFileSync(path.join(armoriq(), "settings.json"), source === "malformed" ? "{" : JSON.stringify({ signInReminder: source === "wrong type" ? "false" : false }), { mode: source === "unreadable" ? 0 : 0o600 });
+    }
+    await worker(source === "environment" ? { ARMORIQ_SIGNIN_REMINDER_DISABLED: " YeS " } : source === "signed in" ? { ARMORIQ_API_KEY: "test-key" } : {});
+    expect(messages).toEqual([]); expect(existsSync(reminderFile())).toBe(false);
+  });
+}
+
+test("worker claims each message independently and respects an installer notice", async () => {
+  mkdirSync(noticeFile(), { recursive: true });
+  await worker(); expect(messages).toHaveLength(1); expect(messages[0]).toContain("is not signed in");
+});
+
+test("worker captures clock and auth before scheduling without doing file or notification work in observe", async () => {
+  await worker({}, (reg) => {
+    const open = spyOn(fs, "open"); const mkdir = spyOn(fs, "mkdir");
+    try {
+      const start = performance.now();
+      reg.observe!({ kind: "session_start", session: {} as never, at: clock });
+      clock += 1000;
+      expect(performance.now() - start).toBeLessThan(20);
+      expect(messages).toEqual([]); expect(open).not.toHaveBeenCalled(); expect(mkdir).not.toHaveBeenCalled();
+    } finally { open.mockRestore(); mkdir.mockRestore(); }
+  });
+  expect(messages).toHaveLength(2); expect(existsSync(reminderFile(day))).toBe(true);
+  expect(existsSync(reminderFile("2026-11-16"))).toBe(false);
 });

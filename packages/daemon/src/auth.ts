@@ -102,6 +102,15 @@ export function readLogin(env: Env, configuredBackend: string | null): Login | n
 
 export const loginBinding = (login: Login) => createHash("sha256").update(`${login.backend}\n${login.apiKey}`).digest("hex").slice(0, 16);
 
+export function loginCommand(dataDir: string, backend: string, force = false): string {
+  const cli = path.join(dataDir, "bin", "armorantigravity");
+  const backendArg = `'${backend.replaceAll("'", "'\\''")}'`;
+  const command = existsSync(cli)
+    ? `'${cli.replaceAll("'", "'\\''")}' login --backend ${backendArg}`
+    : `armoriq login --product ${PRODUCT} --backend ${backendArg}`;
+  return force ? `${command} --force` : command;
+}
+
 // Reads credentials at startup and on directory change; state() never touches disk.
 export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: string; pollMs?: number }): Auth {
   const { env, config, dataDir } = opts;
@@ -194,11 +203,7 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
     const binding = loginBinding(login);
     if (!warned.has(binding)) {
       warned.add(binding);
-      const cli = path.join(dataDir, "bin", "armorantigravity");
-      const backendArg = `'${login.backend.replaceAll("'", "'\\''")}'`;
-      const command = existsSync(cli)
-        ? `'${cli.replaceAll("'", "'\\''")}' login --backend ${backendArg} --force`
-        : `armoriq login --product ${PRODUCT} --backend ${backendArg} --force`;
+      const command = loginCommand(dataDir, login.backend, true);
       log.warn(`ArmorIQ login expired; run \`${command}\``);
     }
     try {

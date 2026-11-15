@@ -4,15 +4,12 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { onPlanSuccess } from "@armorantigravity/intent";
 import pkg from "../package.json" with { type: "json" };
-import { resolveBackend } from "./auth.ts";
+import { loginCommand, resolveBackend } from "./auth.ts";
+import { desktopNotifier } from "./notify.ts";
 import type { Env } from "./paths.ts";
 import type { DaemonPlugin } from "./plugin.ts";
+import { REACH_NOTICE, pingDisabled, reminderDisabled, reachEnvironment } from "./reach-settings.ts";
 
-const ORIGINS = new Map<string, "production" | "staging">([
-  ["https://api.armoriq.ai", "production"],
-  ["https://staging-api.armoriq.ai", "staging"],
-  ["https://staging-api.armoriq.io", "staging"],
-]);
 const INSTALL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n$/;
 const COUNT_FILE = /^counts-(\d{4}-\d{2}-\d{2})\.ndjson(\.sending)?$/;
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -25,6 +22,7 @@ export interface ReachOptions {
   readonly env?: Env;
   readonly now?: () => number;
   readonly fetch?: (url: string, init: RequestInit) => Promise<Response>;
+  readonly notifier?: (message: string) => void;
 }
 
 const missing = (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT";
@@ -56,14 +54,13 @@ async function readObject(file: string): Promise<Record<string, unknown> | null>
 }
 
 async function eligibility(root: string, configFile: string, env: Env) {
-  if (["1", "true"].includes(env.DO_NOT_TRACK?.trim().toLowerCase() ?? "") ||
-      ["1", "true", "yes"].includes(env.ARMORIQ_USAGE_PING_DISABLED?.trim().toLowerCase() ?? "")) return null;
+  if (pingDisabled(env)) return null;
   const config = await readObject(configFile);
   if (!config || config.usagePing === false) return null;
   const settings = await readObject(path.join(root, "settings.json"));
   if (!settings || (Object.hasOwn(settings, "usagePing") && settings.usagePing !== true)) return null;
   const origin = resolveBackend(env, typeof config.backendUrl === "string" && config.backendUrl.trim() ? config.backendUrl.trim() : null);
-  const environment = ORIGINS.get(origin);
+  const environment = reachEnvironment(origin);
   return environment ? { origin, environment } : null;
 }
 
@@ -106,16 +103,18 @@ function dayTime(day: string): number {
   return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === day ? time : NaN;
 }
 
-async function claimDay(dir: string, day: string): Promise<boolean> {
+async function claimDay(dir: string, day: string, prefix = "ping-"): Promise<boolean> {
   try {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    const handle = await fs.open(path.join(dir, `ping-${day}`), "wx", 0o600);
+    const handle = await fs.open(path.join(dir, `${prefix}${day}`), "wx", 0o600);
     await handle.close();
-    for (const name of await fs.readdir(dir)) {
-      if (!name.startsWith("ping-") || !(dayTime(day) - dayTime(name.slice(5)) > 30 * DAY_MS)) continue;
-      const file = path.join(dir, name);
-      try { if ((await fs.lstat(file)).isFile()) await fs.unlink(file); } catch {}
-    }
+    try {
+      for (const name of await fs.readdir(dir)) {
+        if (!name.startsWith(prefix) || !(dayTime(day) - dayTime(name.slice(prefix.length)) > 30 * DAY_MS)) continue;
+        const file = path.join(dir, name);
+        try { if ((await fs.lstat(file)).isFile()) await fs.unlink(file); } catch {}
+      }
+    } catch { /* Cleanup cannot cancel a claim that was already made. */ }
     return true;
   } catch { return false; }
 }
@@ -228,10 +227,40 @@ export function reachPlugin(opts: ReachOptions = {}): DaemonPlugin {
   return {
     name: "reach",
     setup(ctx) {
+      const notify = opts.notifier
+        ? (message: string) => { ctx.log.info(message); opts.notifier!(message); }
+        : desktopNotifier(ctx.log, { env });
       let stopped = false;
       let queued = Promise.resolve();
 
-      async function work(day: string, signedIn: boolean, trigger: boolean, metric: Metric | null) {
+      async function messages(day: string, signedIn: boolean, active: () => boolean) {
+        const root = path.join(ctx.paths.armoriqDir, "reach/v1/armorantigravity");
+        // Each message owns its claim. Neither ping consent nor a failed claim hides the other.
+        try {
+          if (await eligibility(ctx.paths.armoriqDir, ctx.paths.configFile, env) && active()) {
+            await fs.mkdir(root, { recursive: true, mode: 0o700 });
+            const handle = await fs.open(path.join(root, "notice-shown"), "wx", 0o600);
+            await handle.close();
+            if (active()) notify(REACH_NOTICE);
+          }
+        } catch { /* A notice failure does not suppress the reminder. */ }
+        try {
+          if (signedIn || reminderDisabled(env) || !active()) return;
+          const config = await readObject(ctx.paths.configFile);
+          const settings = await readObject(path.join(ctx.paths.armoriqDir, "settings.json"));
+          if (!config || config.signInReminder === false || !settings ||
+              (Object.hasOwn(settings, "signInReminder") && settings.signInReminder !== true)) return;
+          const origin = resolveBackend(env, typeof config.backendUrl === "string" && config.backendUrl.trim() ? config.backendUrl.trim() : null);
+          const environment = reachEnvironment(origin);
+          if (!environment || !active()) return;
+          const command = loginCommand(ctx.paths.dataDir, origin);
+          if (await claimDay(path.join(root, environment), day, "reminder-") && active()) {
+            notify(`ArmorAntigravity is not signed in to ArmorIQ. Sign in to see your plans and blocks on your dashboard: ${command} (hide this reminder: ARMORIQ_SIGNIN_REMINDER_DISABLED=1)`);
+          }
+        } catch { /* Notification work never changes a hook result. */ }
+      }
+
+      async function work(day: string, signedIn: boolean, trigger: boolean, metric: Metric | null, sessionStart: boolean) {
         const controller = new AbortController();
         let active = true;
         let acknowledged = false;
@@ -248,6 +277,7 @@ export function reachPlugin(opts: ReachOptions = {}): DaemonPlugin {
         });
         const perform = async () => {
           try {
+            if (sessionStart) await messages(day, signedIn, () => active);
             const eligible = await eligibility(ctx.paths.armoriqDir, ctx.paths.configFile, env);
             if (!eligible || !active) return;
             const dir = path.join(ctx.paths.armoriqDir, "reach/v1/armorantigravity", eligible.environment);
@@ -283,20 +313,20 @@ export function reachPlugin(opts: ReachOptions = {}): DaemonPlugin {
         }
       }
 
-      function enqueue(trigger: boolean, metric: Metric | null) {
+      function enqueue(trigger: boolean, metric: Metric | null, sessionStart = false) {
         if (stopped) return;
         // Only memory and scheduling on the caller's path. Capture one clock and auth observation.
         const day = new Date(now()).toISOString().slice(0, 10);
         const signedIn = ctx.auth.uploadLogin() !== null;
         queued = queued.then(() => new Promise<void>((resolve) => {
-          setImmediate(() => { void work(day, signedIn, trigger, metric).catch(() => {}).finally(resolve); });
+          setImmediate(() => { void work(day, signedIn, trigger, metric, sessionStart).catch(() => {}).finally(resolve); });
         }));
       }
 
       const unsubscribe = onPlanSuccess(() => enqueue(false, "plan"));
       return {
         observe(event) {
-          if (event.kind === "session_start") enqueue(true, null);
+          if (event.kind === "session_start") enqueue(true, null, true);
           else if (event.kind === "hook") {
             let metric: Metric | null = null;
             if (event.hook.event === "PreToolUse" && event.response && "decision" in event.response) {
