@@ -1,4 +1,5 @@
 export * from "./types.ts";
+export { emitPlanSuccess, onPlanSuccess } from "./plan-events.ts";
 export { checkCall, mcpPlanName, parsePlan, planToolName, type ParsePlanResult, type PlanCheck } from "./plan.ts";
 export { createRegistry, type Conversation, type Registry } from "./registry.ts";
 export {
