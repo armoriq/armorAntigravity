@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { install, layout, PAYLOAD, type Deps } from "../src/install.ts";
+import { BINARIES, install, layout, type Deps } from "../src/install.ts";
 import contract from "../../daemon/test/fixtures/install-ping-v1.json";
 
 const CLI = path.resolve(import.meta.dir, "../src/main.ts");
@@ -19,7 +19,7 @@ beforeEach(() => {
   root = mkdtempSync("/tmp/agr-cli-");
   home = path.join(root, "O'Neil home"); source = path.join(root, "release"); lines = [];
   mkdirSync(home); mkdirSync(source);
-  for (const name of PAYLOAD) writeFileSync(path.join(source, name), "// fixture\n", { mode: 0o755 });
+  for (const name of BINARIES) writeFileSync(path.join(source, name), "// fixture\n", { mode: 0o755 });
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
@@ -111,12 +111,12 @@ const command = (backend: string) => `'${path.join(layout(home).binDir, "armoran
 test("--skip-login prints a quoted, executable command with the chosen backend and the installer notice", async () => {
   const l = layout(home); mkdirSync(l.dataDir, { recursive: true });
   const backend = "https://staging-api.armoriq.io";
-  const result = await cli(["install", "--force", "--skip-login", "--backend", backend, "--from", source]);
+  const result = await cli(["install", "--skip-login", "--backend", backend, "--from", source]);
   expect(result.code).toBe(0); expect(result.stdout).toContain(command(backend));
   expect(result.stdout).toContain(contract.notice); expect(existsSync(marker())).toBe(true);
   // Run the printed shell command from another directory and inspect its arguments.
-  writeFileSync(path.join(source, "cli.js"), "console.log(JSON.stringify(process.argv.slice(2)));\n");
-  writeFileSync(path.join(l.binDir, "cli.js"), readFileSync(path.join(source, "cli.js")));
+  // On main the installed CLI is one executable, so the fake prints its own arguments.
+  writeFileSync(path.join(l.binDir, "armorantigravity"), `#!${process.execPath}\nconsole.log(JSON.stringify(process.argv.slice(2)));\n`, { mode: 0o755 });
   const proc = Bun.spawn(["/bin/sh", "-c", command(backend)], { cwd: root, env: { PATH: process.env.PATH ?? "", HOME: home }, stdout: "pipe", stderr: "pipe" });
   expect(await proc.exited).toBe(0);
   expect(JSON.parse(await new Response(proc.stdout).text())).toEqual(["login", "--backend", backend]);
