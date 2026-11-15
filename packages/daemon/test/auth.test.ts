@@ -1,6 +1,6 @@
 import { removeProfile, saveLoginProfile } from "@armoriq/sdk-dev/dist/credentials.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { createAuth, loginBinding, readLogin, resolveBackend, type Auth, type AuthState } from "../src/auth.ts";
 import { DEFAULT_CONFIG, type Config } from "../src/config.ts";
@@ -143,6 +143,19 @@ test("a 401 on mint or probe means local-only until the key checks out; uploads 
   expect(a.state().kind).toBe("local_only");
   a.reportStatus(200, {}, "mint");
   expect(a.state().kind).toBe("active");
+});
+
+test("cached 401 refusal is visible to status and clears when the key checks out", () => {
+  save(STAGING, "armorantigravity", "ak_1");
+  const a = start();
+  const marker = path.join(dataDir(), `login-refused-${loginBinding(a.uploadLogin()!)}`);
+  a.reportStatus(401, {}, "upload");
+  expect(existsSync(marker)).toBe(false);
+  a.reportStatus(401, {}, "probe");
+  expect(existsSync(marker)).toBe(true);
+  expect(statSync(marker).mode & 0o777).toBe(0o600);
+  a.reportStatus(200, {}, "probe");
+  expect(existsSync(marker)).toBe(false);
 });
 
 test("402 on mint refuses until a mint succeeds", () => {
