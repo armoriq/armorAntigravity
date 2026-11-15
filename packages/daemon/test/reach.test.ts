@@ -6,7 +6,7 @@ import { hostname } from "node:os";
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { fileLog } from "../src/log.ts";
-import { createAuth } from "../src/auth.ts";
+import { createAuth, type Auth } from "../src/auth.ts";
 import { readConfig } from "../src/config.ts";
 import { resolvePaths } from "../src/paths.ts";
 import type { HookEvent, HookResponse } from "@armorantigravity/protocol";
@@ -20,6 +20,7 @@ type Reach = typeof import("../src/reach.ts");
 let reach: Reach;
 let box: ReturnType<typeof sandboxHome>;
 let daemon: RunningDaemon | undefined;
+let isolatedAuth: Auth | undefined;
 let registration: PluginRegistration;
 let clock: number;
 let verdict: HookResponse;
@@ -66,10 +67,27 @@ async function boot(env: Record<string, string | undefined> = {}, send?: (url: s
   ] });
 }
 async function stop() {
+  if (isolatedAuth) {
+    await registration.pumps![0]!.stop();
+    isolatedAuth.stop(); isolatedAuth = undefined;
+  }
   if (!daemon) return;
   await turn();
   await daemon.stop();
   daemon = undefined;
+}
+
+async function bootDirect(env: Record<string, string> = {}, send?: (url: string, init: RequestInit) => Promise<Response>) {
+  const paths = resolvePaths(env);
+  isolatedAuth = createAuth(quiet, { env, config: readConfig(paths.configFile, quiet), dataDir: paths.dataDir });
+  registration = await reach.reachPlugin({ env, now: () => clock, notifier: (text) => { messages.push(text); }, fetch: send ?? (async (url, init) => {
+    sent.push({ url, init, body: JSON.parse(String(init.body)) });
+    return new Response(null, { status: 204 });
+  }) }).setup({ paths, auth: isolatedAuth, log: quiet, sessions: { get: () => undefined, all: () => [] } });
+}
+async function directHook(event: HookEvent = "PreToolUse") {
+  registration.observe!({ kind: "hook", hook: { event } as never, response: verdict, at: clock });
+  await turn();
 }
 function hook(event: HookEvent = "PreToolUse"): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -268,6 +286,63 @@ test("observe only schedules work and stays below 20 ms at p95 with file calls g
   await stop(); expect(sent).toHaveLength(1);
 });
 
+test("after daily decisions later events only append counters until UTC rollover", async () => {
+  const { emitPlanSuccess } = await import("@armorantigravity/intent");
+  await bootDirect(reminderOn); sessionStart(); await directHook();
+  while (!sent.length) await turn();
+  await Bun.sleep(30);
+  const open = spyOn(fs, "open"); const lstat = spyOn(fs, "lstat");
+  try {
+    sessionStart();
+    verdict = { decision: "deny", reason: "guard" };
+    await directHook(); emitPlanSuccess();
+    await Bun.sleep(30);
+    expect(open.mock.calls.map(([file]) => String(file))).toEqual([counts(), counts()]);
+    expect(lstat).not.toHaveBeenCalled();
+    expect(messages).toHaveLength(2);
+    expect(sent).toHaveLength(1);
+  } finally { open.mockRestore(); lstat.mockRestore(); }
+  clock += 1000;
+  await directHook(); await stop();
+  expect(sent).toHaveLength(2);
+  expect(sent[1]!.body.localCounts).toEqual([{ day, plans: 1, blocked: 1, held: 0 }]);
+});
+
+test("daily claim already taken is remembered without repeating file reads", async () => {
+  mkdirSync(dir(), { recursive: true });
+  writeFileSync(path.join(dir(), `ping-${day}`), "");
+  await bootDirect(); sessionStart(); await directHook(); await Bun.sleep(50);
+  const open = spyOn(fs, "open"); const lstat = spyOn(fs, "lstat");
+  try {
+    await directHook("PostToolUse"); sessionStart();
+    await stop();
+    expect(open).not.toHaveBeenCalled(); expect(lstat).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  } finally { open.mockRestore(); lstat.mockRestore(); }
+});
+
+test("reach queue drops excess work while a file operation is stalled", async () => {
+  await bootDirect();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const openFile = fs.open;
+  const open = spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    await gate;
+    return openFile(...args);
+  });
+  try {
+    sessionStart(); await turn();
+    for (let i = 0; i < 256; i++) registration.observe!({
+      kind: "hook", hook: { event: "PreToolUse" } as never,
+      response: { decision: "deny", reason: "guard" }, at: clock,
+    });
+    release(); await stop();
+    const lines = readFileSync(counts(), "utf8").trim().split("\n");
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.length).toBeLessThanOrEqual(32);
+  } finally { release(); open.mockRestore(); }
+});
+
 test("blocked, held, and plan successes count only while signed out; today stays local", async () => {
   const { emitPlanSuccess } = await import("@armorantigravity/intent");
   await boot();
@@ -336,6 +411,32 @@ for (const status of [200, 204, 302, 400, 500, 0]) {
     expect(existsSync(`${counts(previous)}.sending`)).toBe(false);
     await boot(); await hook(); await stop(); expect(sent).toEqual([]);
   });
+}
+
+for (const code of ["EPERM", "ENOTSUP", "EXDEV", "ENOSYS"]) {
+  for (const lateWrite of [false, true]) {
+    test(`failed send restores counts without hard links (${code}, late write ${lateWrite})`, async () => {
+      mkdirSync(dir(), { recursive: true });
+      writeFileSync(counts(previous), '{"t":"plan"}\n');
+      const linkFile = fs.link;
+      const link = spyOn(fs, "link").mockImplementation(async (from, to) => {
+        if (String(from).endsWith(".sending")) throw Object.assign(new Error("unsupported"), { code });
+        await linkFile(from, to);
+      });
+      try {
+        await bootDirect({}, async () => {
+          if (lateWrite) writeFileSync(counts(previous), '{"t":"held"}\n');
+          return new Response(null, { status: 500 });
+        });
+        await directHook(); await stop();
+        expect(readFileSync(counts(previous), "utf8").trim().split("\n").sort()).toEqual(lateWrite ? ['{"t":"held"}', '{"t":"plan"}'] : ['{"t":"plan"}']);
+        expect(existsSync(`${counts(previous)}.sending`)).toBe(false);
+        clock += 1000;
+        await bootDirect(); await directHook(); await stop();
+        expect(sent[0]!.body.localCounts).toEqual([{ day: previous, plans: 1, blocked: 0, held: lateWrite ? 1 : 0 }]);
+      } finally { link.mockRestore(); }
+    });
+  }
 }
 
 test("interrupted sending files merge late writes on rollback and the next day sends both", async () => {
@@ -537,6 +638,18 @@ test("signed in and cached relogin postures use uploadLogin for the reminder", a
   await hook(); await stop();
   expect(messages).toHaveLength(2); expect(messages[1]).toContain("is not signed in");
 });
+
+for (const posture of ["relogin_required", "local_only"]) {
+  test(`reminder forces a fresh login for the ${posture} posture captured in observe`, async () => {
+    const cli = installedCli();
+    await bootDirect({ ...reminderOn, ARMORIQ_API_KEY: "test-key" });
+    isolatedAuth!.reportStatus(posture === "relogin_required" ? 403 : 401, posture === "relogin_required" ? { error: "relogin_required" } : {}, "probe");
+    sessionStart();
+    if (posture === "local_only") isolatedAuth!.reportStatus(200, {}, "probe");
+    await stop();
+    expect(messages[1]).toContain(`${cli} login --backend 'https://api.armoriq.ai' --force`);
+  });
+}
 
 test("reminder uses environment backend, has independent environment claims and prunes only expired reminders", async () => {
   installedCli();

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { install, layout, PAYLOAD, type Deps } from "../src/install.ts";
 import contract from "../../daemon/test/fixtures/install-ping-v1.json";
@@ -80,6 +81,22 @@ for (const settings of ['{"usagePing":false}', '{"usagePing":"false"}', "{", "nu
   });
 }
 
+for (const source of ["settings", "config"]) {
+  test(`CLI installer treats symlinked ${source} as unreadable and leaves it intact`, async () => {
+    const file = source === "settings" ? path.join(home, ".armoriq/settings.json") : layout(home).configFile;
+    mkdirSync(path.dirname(file), { recursive: true });
+    const target = path.join(root, `${source}.json`);
+    const contents = JSON.stringify({ backendUrl: options().backend, channel: "dev" });
+    writeFileSync(target, contents);
+    symlinkSync(target, file);
+    await install(options(), deps());
+    expect(lines).not.toContain(contract.notice);
+    expect(existsSync(marker())).toBe(false);
+    expect(lstatSync(file).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe(contents);
+  });
+}
+
 async function cli(args: string[], env: Record<string, string> = {}) {
   const tools = path.join(root, "tools"); mkdirSync(tools, { recursive: true });
   for (const name of ["launchctl", "systemctl"]) writeFileSync(path.join(tools, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -118,6 +135,26 @@ test("status login hint uses the effective environment override", async () => {
   const result = await cli(["status"], { ARMORIQ_BACKEND_URL: "https://api.armoriq.ai/" });
   expect(result.code).toBe(0); expect(result.stdout).toContain(command("https://api.armoriq.ai"));
 });
+
+for (const issue of ["relogin-required", "login-refused"]) {
+  test(`status reports ${issue} for a saved login and prints a forced command`, async () => {
+    await install(options(), deps({ DO_NOT_TRACK: "1" }));
+    const backend = options().backend;
+    const apiKey = "test-saved-key";
+    writeFileSync(path.join(home, ".armoriq/credentials.json"), JSON.stringify({
+      version: 2,
+      loginHistory: { "armorantigravity@staging-api.armoriq.ai": { id: crypto.randomUUID(), origin: "fresh", events: [{ sequence: 1, at: "2026-11-15T00:00:00.000Z", userId: "u" }] } },
+      profiles: { "armorantigravity@staging-api.armoriq.ai": { apiKey, backend, product: "armorantigravity", userId: "u", orgId: "o", email: "test@example.com", loggedInAt: "2026-11-15T00:00:00.000Z", savedAt: "2026-11-15T00:00:00.000Z" } },
+    }));
+    const binding = createHash("sha256").update(`${backend}\n${apiKey}`).digest("hex").slice(0, 16);
+    writeFileSync(path.join(layout(home).dataDir, `${issue}-${binding}`), "");
+    const result = await cli(["status"]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(issue === "relogin-required" ? "login: expired" : "login: refused");
+    expect(result.stdout).not.toContain("login: yes");
+    expect(result.stdout).toContain(`${command(backend)} --force`);
+  });
+}
 test("CLI help documents every environment switch", async () => {
   const result = await cli(["--help"]);
   expect(result.code).toBe(0);

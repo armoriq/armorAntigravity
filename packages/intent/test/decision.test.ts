@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { loginCommand } from "../src/login-command.ts";
 import { checkIntent, denyReason, intentAuditRow, policySpanResult, type IntentVerdict } from "../src/decision.ts";
 import type { Conversation } from "../src/registry.ts";
 import { conversationKey, type Plan, type Token } from "../src/types.ts";
@@ -31,6 +35,29 @@ function conv(id: string, over: Partial<Conversation> = {}): Conversation {
 const check = (root: Conversation | null, tool: string, readOnly = false) => checkIntent({ root, tool, args: {}, readOnly, now: NOW });
 
 describe("checkIntent order", () => {
+  test("a revoked key hint uses the shared formatter with the effective backend", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "agr-intent-login-"));
+    const previousHome = process.env.ARMORIQ_HOME;
+    const previousBackend = process.env.ARMORIQ_BACKEND_URL;
+    process.env.ARMORIQ_HOME = root;
+    const dataDir = path.join(root, "armorantigravity");
+    mkdirSync(path.join(dataDir, "bin"), { recursive: true });
+    writeFileSync(path.join(dataDir, "bin/armorantigravity"), "");
+    writeFileSync(path.join(dataDir, "config.json"), JSON.stringify({ backendUrl: "https://staging-api.armoriq.ai" }));
+    try {
+      for (const override of [undefined, "https://api.armoriq.ai/"]) {
+        if (override) process.env.ARMORIQ_BACKEND_URL = override;
+        else delete process.env.ARMORIQ_BACKEND_URL;
+        const backend = override ? "https://api.armoriq.ai" : "https://staging-api.armoriq.ai";
+        const result = check(conv("c", { token: { status: "refused", code: "account_revoked" } }), "run_command");
+        expect(result).toMatchObject({ code: "account_revoked", reason: `the ArmorIQ API key was revoked; run \`${loginCommand(dataDir, backend, true)}\` again` });
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.ARMORIQ_HOME; else process.env.ARMORIQ_HOME = previousHome;
+      if (previousBackend === undefined) delete process.env.ARMORIQ_BACKEND_URL; else process.env.ARMORIQ_BACKEND_URL = previousBackend;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   test("read-only tools skip the plan but honour the backend's lists", () => {
     expect(check(conv("c", { plan: null, token: null }), "view_file", true)).toEqual({ kind: "allow", stepIndex: null, paramMismatch: false });
     expect(check(conv("c", { token: active({ deniedTools: new Set(["view_file"]) }) }), "view_file", true)).toEqual({

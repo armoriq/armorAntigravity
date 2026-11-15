@@ -1,5 +1,5 @@
 import pkg from "@armorantigravity/daemon/package.json" with { type: "json" };
-import { loginCommand } from "@armorantigravity/daemon";
+import { loginBinding, loginCommand, readLogin } from "@armorantigravity/daemon";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -174,12 +174,15 @@ async function cmdLogin(args: string[]): Promise<number> {
 async function cmdStatus(): Promise<number> {
   const l = layout(home);
   const backend = normalizeBackend(process.env.ARMORIQ_BACKEND_URL?.trim() || installedBackend() || DEFAULT_BACKENDS.stable);
-  const signedIn = hasLogin(backend);
+  const login = readLogin(process.env, backend);
+  const issue = login && (existsSync(path.join(l.dataDir, `relogin-required-${loginBinding(login)}`)) ? "expired"
+    : existsSync(path.join(l.dataDir, `login-refused-${loginBinding(login)}`)) ? "refused" : null);
+  const signedIn = login !== null && !issue;
   console.log(bold(`ArmorAntigravity ${pkg.version}`));
   info(`installed: ${existsSync(l.manifestFile) ? "yes" : "no"}`);
   info(`backend: ${backend}`);
-  info(`login: ${signedIn ? `yes (${PRODUCT_AT(backend)})` : "no"}`);
-  if (!signedIn) info(`Sign in: ${loginCommand(l.dataDir, backend)}`);
+  info(`login: ${issue || (signedIn ? `yes (${PRODUCT_AT(backend)})` : "no")}`);
+  if (!signedIn) info(`Sign in: ${loginCommand(l.dataDir, backend, login !== null)}`);
   info(`daemon: ${(await waitForSocket(l.socket, 0)) ? `listening on ${l.socket}` : "not running"}`);
   reportSurfaces();
   return 0;

@@ -14,6 +14,7 @@ const INSTALL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 const COUNT_FILE = /^counts-(\d{4}-\d{2}-\d{2})\.ndjson(\.sending)?$/;
 const MAX_BYTES = 5 * 1024 * 1024;
 const DAY_MS = 86400000;
+const MAX_QUEUED = 32;
 type Metric = "plan" | "blocked" | "held";
 type Counts = { day: string; plans: number; blocked: number; held: number };
 const METRICS = { plan: "plans", blocked: "blocked", held: "held" } as const;
@@ -137,7 +138,13 @@ async function settleCounts(files: readonly string[], acknowledged = false): Pro
         // A rollback can restore an oversized or unreadable file without reading it.
         const source = await fs.lstat(file);
         if (!source.isFile()) continue;
-        try { await fs.link(file, target); }
+        try {
+          await fs.link(file, target).catch((error: unknown) => {
+            if (!(error instanceof Error && "code" in error && ["EPERM", "ENOTSUP", "EXDEV", "ENOSYS"].includes(String(error.code)))) throw error;
+            // Exclusive copy preserves an existing late append and leaves the source on failure.
+            return fs.copyFile(file, target, constants.COPYFILE_EXCL);
+          });
+        }
         catch (error) {
           if (!exists(error)) continue;
           const contents = await readText(file, MAX_BYTES);
@@ -232,8 +239,11 @@ export function reachPlugin(opts: ReachOptions = {}): DaemonPlugin {
         : desktopNotifier(ctx.log, { env });
       let stopped = false;
       let queued = Promise.resolve();
+      let pending = 0;
+      type Daily = { day: string; eligible: Awaited<ReturnType<typeof eligibility>>; pingDecided: boolean; messagesDecided: boolean };
+      let daily: Daily | undefined;
 
-      async function messages(day: string, signedIn: boolean, active: () => boolean) {
+      async function messages(day: string, signedIn: boolean, storedLogin: boolean, active: () => boolean) {
         const root = path.join(ctx.paths.armoriqDir, "reach/v1/armorantigravity");
         // Each message owns its claim. Neither ping consent nor a failed claim hides the other.
         try {
@@ -253,14 +263,15 @@ export function reachPlugin(opts: ReachOptions = {}): DaemonPlugin {
           const origin = resolveBackend(env, typeof config.backendUrl === "string" && config.backendUrl.trim() ? config.backendUrl.trim() : null);
           const environment = reachEnvironment(origin);
           if (!environment || !active()) return;
-          const command = loginCommand(ctx.paths.dataDir, origin);
+          const command = loginCommand(ctx.paths.dataDir, origin, storedLogin);
           if (await claimDay(path.join(root, environment), day, "reminder-") && active()) {
             notify(`ArmorAntigravity is not signed in to ArmorIQ. Sign in to see your plans and blocks on your dashboard: ${command} (hide this reminder: ARMORIQ_SIGNIN_REMINDER_DISABLED=1)`);
           }
         } catch { /* Notification work never changes a hook result. */ }
       }
 
-      async function work(day: string, signedIn: boolean, trigger: boolean, metric: Metric | null, sessionStart: boolean) {
+      async function work(state: Daily, signedIn: boolean, storedLogin: boolean, trigger: boolean, metric: Metric | null, sessionStart: boolean) {
+        const { day } = state;
         const controller = new AbortController();
         let active = true;
         let acknowledged = false;
@@ -277,12 +288,19 @@ export function reachPlugin(opts: ReachOptions = {}): DaemonPlugin {
         });
         const perform = async () => {
           try {
-            if (sessionStart) await messages(day, signedIn, () => active);
-            const eligible = await eligibility(ctx.paths.armoriqDir, ctx.paths.configFile, env);
+            if (sessionStart && !state.messagesDecided) {
+              state.messagesDecided = true;
+              await messages(day, signedIn, storedLogin, () => active);
+            }
+            const ping = trigger && !state.pingDecided;
+            if (!ping && (!metric || signedIn)) return;
+            const eligible = state.eligible ?? await eligibility(ctx.paths.armoriqDir, ctx.paths.configFile, env);
             if (!eligible || !active) return;
+            state.eligible = eligible;
             const dir = path.join(ctx.paths.armoriqDir, "reach/v1/armorantigravity", eligible.environment);
             if (metric && !signedIn) await appendCount(dir, day, metric);
-            if (!trigger || !active) return;
+            if (!ping || !active) return;
+            state.pingDecided = true;
             const installId = await ensureInstallId(ctx.paths.armoriqDir);
             if (!installId || !active || !await claimDay(dir, day) || !active) return;
             const localCounts = await collectCounts(dir, day, files, controller.signal);
@@ -314,12 +332,18 @@ export function reachPlugin(opts: ReachOptions = {}): DaemonPlugin {
       }
 
       function enqueue(trigger: boolean, metric: Metric | null, sessionStart = false) {
-        if (stopped) return;
+        if (stopped || pending >= MAX_QUEUED) return;
         // Only memory and scheduling on the caller's path. Capture one clock and auth observation.
         const day = new Date(now()).toISOString().slice(0, 10);
         const signedIn = ctx.auth.uploadLogin() !== null;
+        const storedLogin = "login" in ctx.auth.state();
+        if (daily?.day !== day) daily = { day, eligible: null, pingDecided: false, messagesDecided: false };
+        const state = daily;
+        if ((!metric || signedIn) && (!trigger || state.pingDecided) && (!sessionStart || state.messagesDecided)) return;
+        pending++;
         queued = queued.then(() => new Promise<void>((resolve) => {
-          setImmediate(() => { void work(day, signedIn, trigger, metric, sessionStart).catch(() => {}).finally(resolve); });
+          // session_start is observed before the hook reply, so defer all reach I/O to a later turn.
+          setImmediate(() => { void work(state, signedIn, storedLogin, trigger, metric, sessionStart).catch(() => {}).finally(() => { pending--; resolve(); }); });
         }));
       }
 
