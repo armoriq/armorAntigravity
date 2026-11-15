@@ -1,4 +1,5 @@
 import pkg from "@armorantigravity/daemon/package.json" with { type: "json" };
+import { loginBinding, loginCommand, readLogin } from "@armorantigravity/daemon";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -22,6 +23,15 @@ install    copies the binaries to ~/.armoriq/armorantigravity/bin, signs in to A
            armoriq-agd as a launchd agent (macOS) or systemd user unit (Linux). Safe to re-run.
 uninstall  removes all of that and stops the daemon. --purge also deletes ~/.armoriq/armorantigravity
            (config, logs, queued uploads). The ArmorIQ login is kept unless --logout is given.
+
+Privacy switches (the installer saves recognised opt outs in config.json):
+  DO_NOT_TRACK=1 or true                    disables the anonymous daily usage ping
+  ARMORIQ_USAGE_PING_DISABLED=1, true or yes disables the anonymous daily usage ping
+  ARMORIQ_SIGNIN_REMINDER_DISABLED=1, true or yes
+                                           hides the daily desktop sign in reminder
+Values ignore case and surrounding spaces. A service started daemon does not see your shell
+variables. Set usagePing or signInReminder to false in ~/.armoriq/settings.json or
+~/.armoriq/armorantigravity/config.json, or run the installer again with the variable set.
 `;
 
 const tty = process.stdout.isTTY && process.env.NO_COLOR === undefined;
@@ -131,7 +141,7 @@ async function cmdInstall(args: string[]): Promise<number> {
   console.log("  Restart Antigravity to load the integration.");
   if (values["skip-login"] && !hasLogin(backend)) {
     console.log("  Connect ArmorIQ to enable enforcement:");
-    console.log(`  ${path.join(layout(home).binDir, "armorantigravity")} login`);
+    console.log(`  ${loginCommand(layout(home).dataDir, backend)}`);
   }
   section("Manage anytime");
   console.log(`  ${path.join(layout(home).binDir, "armorantigravity")} status`);
@@ -163,11 +173,16 @@ async function cmdLogin(args: string[]): Promise<number> {
 
 async function cmdStatus(): Promise<number> {
   const l = layout(home);
-  const backend = installedBackend();
+  const backend = normalizeBackend(process.env.ARMORIQ_BACKEND_URL?.trim() || installedBackend() || DEFAULT_BACKENDS.stable);
+  const login = readLogin(process.env, backend);
+  const issue = login && (existsSync(path.join(l.dataDir, `relogin-required-${loginBinding(login)}`)) ? "expired"
+    : existsSync(path.join(l.dataDir, `login-refused-${loginBinding(login)}`)) ? "refused" : null);
+  const signedIn = login !== null && !issue;
   console.log(bold(`ArmorAntigravity ${pkg.version}`));
   info(`installed: ${existsSync(l.manifestFile) ? "yes" : "no"}`);
-  info(`backend: ${backend ?? "not configured"}`);
-  info(`login: ${backend && hasLogin(backend) ? `yes (${PRODUCT_AT(backend)})` : "no"}`);
+  info(`backend: ${backend}`);
+  info(`login: ${issue || (signedIn ? `yes (${PRODUCT_AT(backend)})` : "no")}`);
+  if (!signedIn) info(`Sign in: ${loginCommand(l.dataDir, backend, login !== null)}`);
   info(`daemon: ${(await waitForSocket(l.socket, 0)) ? `listening on ${l.socket}` : "not running"}`);
   reportSurfaces();
   return 0;

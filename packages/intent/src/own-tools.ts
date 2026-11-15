@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { emitPlanSuccess } from "./plan-events.ts";
 import { isPlainObject, mcpPart, parsePlan } from "./plan.ts";
 import type { Conversation, Registry } from "./registry.ts";
 import { AGENT_ID, CLIENT_ID, conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PolicyView, type Token } from "./types.ts";
@@ -161,6 +162,7 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     const login = deps.login();
     if (!login) {
       registry.setPlan(conv.key, { ...parsed.plan, id: "" }, null);
+      emitPlanSuccess();
       return `Intent recorded locally: ${parsed.plan.steps.length} steps. ArmorIQ is not logged in, so calls are monitored, not enforced.`;
     }
     registering.add(conv.key);
@@ -206,6 +208,7 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       registry.noteRevision(conv.key);
       track(recordRevision(login, conv, revising, plan, reason));
     }
+    emitPlanSuccess();
     return describeRegistered(plan, token, revising !== null);
   }
 
