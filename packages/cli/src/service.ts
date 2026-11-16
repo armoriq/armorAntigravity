@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import plistTemplate from "@armorantigravity/daemon/service/ai.armoriq.armorantigravity.agd.plist" with { type: "text" };
 import systemdTemplate from "@armorantigravity/daemon/service/armoriq-agd.service" with { type: "text" };
 import path from "node:path";
@@ -64,8 +65,9 @@ export function reloadServices(service: Service, run: Run): void {
 
 export const realRun: Run = (cmd) => {
   try {
-    const result = Bun.spawnSync([...cmd], { stdout: "pipe", stderr: "pipe" });
-    return { code: result.exitCode ?? 1, output: `${result.stdout.toString()}${result.stderr.toString()}`.trim() };
+    const result = spawnSync(cmd[0] as string, cmd.slice(1), { encoding: "utf8" });
+    if (result.error) throw result.error;
+    return { code: result.status ?? 1, output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
   } catch (error) {
     return { code: 127, output: String(error) };
   }

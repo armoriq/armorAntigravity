@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants } from "node:fs";
 import path from "node:path";
 
 export interface SurfaceReport {
@@ -21,7 +22,17 @@ export interface DetectOptions {
 // The agy binary is only located, never run: running it can trigger its self-updater.
 export function detectSurfaces(opts: DetectOptions): SurfaceReport[] {
   const { platform, home, PATH } = opts;
-  const which = (cmd: string) => Bun.which(cmd, { PATH }) ?? null;
+  const which = (cmd: string) => {
+    for (const dir of (PATH ?? "").split(path.delimiter)) {
+      if (!dir) continue;
+      const candidate = path.join(dir, cmd);
+      try {
+        accessSync(candidate, constants.X_OK);
+        return candidate;
+      } catch {}
+    }
+    return null;
+  };
   const agy = which("agy") ?? firstExisting([path.join(home, ".local", "bin", "agy")]);
   const cli: SurfaceReport = { id: "cli", name: "agy CLI", where: agy, version: null };
 
@@ -58,3 +69,20 @@ function bundleVersion(bundle: string): string | null {
     return null;
   }
 }
+
+export function foundSurfaces(reports: readonly SurfaceReport[]): SurfaceReport[] {
+  return reports.filter((r) => r.where !== null);
+}
+
+export function describeSurfaces(reports: readonly SurfaceReport[]): string {
+  return foundSurfaces(reports)
+    .map((r) => (r.version ? `${r.name} ${r.version}` : r.name))
+    .join(", ");
+}
+
+// Installing into ~/.gemini/config does nothing on a machine with no Antigravity to read it: the hooks
+// never fire, and the daemon runs under launchd with nothing to guard. ArmorClaude refuses the same way
+// when `claude` is absent. --force is for an install in a place detectSurfaces does not know about.
+export const NO_SURFACE =
+  "No Antigravity installation was found: not the Antigravity 2.0 app, the Antigravity IDE, or the agy CLI on PATH. " +
+  "Install Antigravity first (https://antigravity.google), then re-run this. If it is installed somewhere this does not look, re-run with --force.";
