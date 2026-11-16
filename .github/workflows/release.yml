@@ -106,7 +106,16 @@ jobs:
         with:
           bun-version-file: .bun-version
           no-cache: true
+      # armorantigravity and armoriq-agd are node bundles now, so the runner's node decides whether
+      # the archive runs at all. Pinned rather than inherited from the image.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
       - run: bun install --frozen-lockfile
+      # agd-hook is C. Apple's cc emits both macOS slices on its own; the Linux runner needs the
+      # archive's aarch64 cross gcc for the linux-arm64 slice.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - run: bun scripts/build-release.ts ${{ matrix.targets }} --out dist/release
       - name: Smoke test the native archive
         run: |

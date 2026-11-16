@@ -89,6 +89,47 @@ export interface DaemonResponse {
   readonly response: HookResponse;
 }
 
+// The hook client's frame, one line: tag, event, the millisecond clock reading the hook took, then the
+// payload exactly as Antigravity wrote it on stdin. Text rather than JSON so a client with no JSON writer
+// can build it, and so a payload that is not JSON at all still arrives with its event attached.
+export const HOOK_FRAME_TAG = "agd1";
+
+export interface HookFrame {
+  readonly event: HookEvent;
+  readonly receivedAt: number;
+  readonly payload: unknown;
+}
+
+export function parseHookFrame(line: string): HookFrame | null {
+  if (!line.startsWith(`${HOOK_FRAME_TAG} `)) return null;
+  const eventEnd = line.indexOf(" ", HOOK_FRAME_TAG.length + 1);
+  if (eventEnd < 0) return null;
+  const event = line.slice(HOOK_FRAME_TAG.length + 1, eventEnd);
+  if (!isHookEvent(event)) return null;
+  const clockEnd = line.indexOf(" ", eventEnd + 1);
+  if (clockEnd < 0) return null;
+  const receivedAt = Number(line.slice(eventEnd + 1, clockEnd));
+  const body = line.slice(clockEnd + 1);
+  let payload: unknown = null;
+  try {
+    payload = body === "" ? null : JSON.parse(body);
+  } catch {}
+  return { event, receivedAt: Number.isFinite(receivedAt) && receivedAt > 0 ? receivedAt : Date.now(), payload };
+}
+
+// The contents of a pre-rendered fallback file: the bytes the hook writes to stdout. Empty for the
+// null response, which is the only thing Antigravity may not see printed.
+export function hookResponseLine(response: HookResponse): string {
+  return response === null ? "" : `${JSON.stringify(response)}\n`;
+}
+
+// The reply to a frame. It repeats the tag so the hook can tell this daemon's answer from any other
+// line the socket might carry, such as the id envelope an older daemon replies with. A reply without
+// the tag is not printed, it falls back.
+export function hookReplyLine(response: HookResponse): string {
+  return response === null ? `${HOOK_FRAME_TAG}\n` : `${HOOK_FRAME_TAG} ${JSON.stringify(response)}\n`;
+}
+
 export const SOCKET_PATH_ENV = "ARMORANTIGRAVITY_SOCKET";
 export const DEFAULT_SOCKET_PATH = "~/.armoriq/armorantigravity/agd.sock";
 
@@ -112,6 +153,13 @@ export interface McpOutcomeResponse {
 // Written by the daemon next to its socket; read by the hook client only when the daemon is unreachable.
 export const MODE_FILE_NAME = "mode";
 export type Mode = "enforce" | "monitor";
+
+// One file per event beside the mode file, holding the exact bytes the hook writes to stdout when it
+// cannot reach the daemon. The daemon renders them because it owns the mode; the hook only copies bytes,
+// which is what lets it be a program with no JSON writer. A missing or unreadable file fails closed.
+export const FALLBACK_DIR_NAME = "fallback";
+export const DAEMON_UNAVAILABLE_CODE = "daemon_unavailable";
+export const DAEMON_UNAVAILABLE_REASON = "armoriq-agd is not running or did not answer";
 
 export function parseHookPayload(event: HookEvent, raw: unknown): HookPayload | null {
   if (!isRecord(raw)) return null;

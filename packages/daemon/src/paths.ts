@@ -1,4 +1,4 @@
-import { DEFAULT_SOCKET_PATH, MODE_FILE_NAME, SOCKET_PATH_ENV } from "@armorantigravity/protocol";
+import { DEFAULT_SOCKET_PATH, FALLBACK_DIR_NAME, MODE_FILE_NAME, SOCKET_PATH_ENV } from "@armorantigravity/protocol";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -9,8 +9,10 @@ export type Env = Readonly<Record<string, string | undefined>>;
 export interface Paths {
   readonly armoriqDir: string;
   readonly dataDir: string;
+  readonly binDir: string;
   readonly socket: string;
   readonly modeFile: string;
+  readonly fallbackDir: string;
   readonly lockFile: string;
   readonly configFile: string;
   readonly sessionsDir: string;
@@ -24,8 +26,10 @@ export function resolvePaths(env: Env): Paths {
   return {
     armoriqDir,
     dataDir,
+    binDir: path.join(dataDir, "bin"),
     socket,
     modeFile: path.join(path.dirname(socket), MODE_FILE_NAME),
+    fallbackDir: path.join(path.dirname(socket), FALLBACK_DIR_NAME),
     lockFile: `${socket}.lock`,
     configFile: path.join(dataDir, "config.json"),
     sessionsDir: path.join(dataDir, "sessions"),

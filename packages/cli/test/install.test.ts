@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { BINARIES, DEFAULT_BACKENDS, hooksValue, install, layout, mcpValue, uninstall, type Deps } from "../src/install.ts";
+import { BINARIES, DEFAULT_BACKENDS, hooksValue, install, layout, mcpValue, PAYLOAD, stopDaemon, uninstall, WRAPPERS, type Deps } from "../src/install.ts";
 import { parseJsonc } from "../src/jsonc.ts";
 import type { Run } from "../src/service.ts";
 
@@ -55,7 +55,7 @@ beforeEach(() => {
   source = path.join(root, "release");
   mkdirSync(home);
   mkdirSync(source);
-  for (const name of BINARIES) writeFileSync(path.join(source, name), `#!/bin/sh\n# ${name}\n`, { mode: 0o755 });
+  for (const name of PAYLOAD) writeFileSync(path.join(source, name), `#!/bin/sh\n# ${name}\n`, { mode: 0o755 });
   calls = [];
   logs = [];
 });
@@ -108,9 +108,38 @@ describe("install", () => {
     expect(JSON.stringify(value)).not.toContain("bun");
     expect(value.Stop).toEqual([{ type: "command", command: `${hook} Stop`, timeout: 30 }]);
     expect(value.PreToolUse).toEqual([{ matcher: "*", hooks: [{ type: "command", command: `${hook} PreToolUse`, timeout: 30 }] }]);
-    for (const name of BINARIES) expect(read(path.join(L().binDir, name))).toBe(read(path.join(source, name)));
+    for (const name of PAYLOAD) expect(read(path.join(L().binDir, name))).toBe(read(path.join(source, name)));
+    // The wrappers are written here, not copied, so they name the interpreter that ran this install
+    // rather than whatever launchd or systemd happens to have on PATH.
+    for (const name of WRAPPERS) {
+      const wrapper = read(path.join(L().binDir, name));
+      expect(wrapper).toContain(`NODE=${process.execPath}`);
+      expect(wrapper).toContain(name === "armoriq-agd" ? "/agd.js" : "/cli.js");
+      expect(statSync(path.join(L().binDir, name)).mode & 0o111).toBeGreaterThan(0);
+    }
     expect(mcpValue(L().binDir)).toEqual({ command: path.join(L().binDir, "armorantigravity"), args: ["mcp"] });
   });
+
+
+  test("uninstall stops a daemon running as a node bundle", async () => {
+    seed();
+    await install(opts(), deps());
+    // Not a stand-in for the daemon's identity: this process's real command line carries the path
+    // uninstall looks for, and a real ps has to find it before a real signal is sent.
+    const looksLikeDaemon = Bun.spawn(["/bin/sh", "-c", `sleep 30 # ${path.join(L().binDir, "agd.js")}`]);
+    writeFileSync(L().lockFile, `${looksLikeDaemon.pid}\n`);
+    await stopDaemon(L(), run, (line) => logs.push(line));
+    expect(await looksLikeDaemon.exited).not.toBe(0);
+    expect(logs.some((l) => l.includes(`stopped armoriq-agd (pid ${looksLikeDaemon.pid})`))).toBe(true);
+
+    // A pid the system reused for something else is left alone.
+    const unrelated = Bun.spawn(["/bin/sh", "-c", "sleep 30"]);
+    writeFileSync(L().lockFile, `${unrelated.pid}\n`);
+    await stopDaemon(L(), run, (line) => logs.push(line));
+    expect(unrelated.killed).toBe(false);
+    unrelated.kill("SIGKILL");
+    await unrelated.exited;
+  }, 20_000);
 
   test("writes the rule, the daemon config and a launchd agent, then starts it", async () => {
     seed();
