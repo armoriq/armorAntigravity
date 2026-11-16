@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { renderUnit, serviceFor } from "../src/service.ts";
-import { detectSurfaces } from "../src/surfaces.ts";
+import { describeSurfaces, detectSurfaces, foundSurfaces } from "../src/surfaces.ts";
 
 let root: string;
 beforeEach(() => {
@@ -70,4 +70,22 @@ test("escapes paths in the generated units", () => {
   expect(renderUnit(launchd, home, "/x")).not.toContain("<!--");
   expect(renderUnit(systemd, home, "/x")).toStartWith("[Unit]\n");
   expect(serviceFor("win32", home, null)).toBeNull();
+});
+
+test("a root with no Antigravity installed reports nothing found, which is what install refuses on", () => {
+  const empty = mkdtempSync(path.join(tmpdir(), "agy-none-"));
+  const reports = detectSurfaces({ platform: "darwin", home: empty, PATH: "", appDirs: [empty] });
+  expect(reports.map((r) => r.id).sort()).toEqual(["app", "cli", "ide"]);
+  expect(foundSurfaces(reports)).toEqual([]);
+  expect(describeSurfaces(reports)).toBe("");
+  rmSync(empty, { recursive: true, force: true });
+});
+
+test("a found surface is described with its version, which is what install prints", () => {
+  const apps = path.join(root, "Applications");
+  mkdirSync(apps, { recursive: true });
+  bundle(apps, "Antigravity.app", "2.26.0");
+  const reports = detectSurfaces({ platform: "darwin", home: root, PATH: "", appDirs: [apps] });
+  expect(foundSurfaces(reports).length).toBe(1);
+  expect(describeSurfaces(reports)).toBe("Antigravity 2.0 2.26.0");
 });

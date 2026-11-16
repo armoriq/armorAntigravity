@@ -7,6 +7,40 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ## [Unreleased]
 
+### Changed
+
+- The curl installer lives in armoriq/armorIQ-landing only, at
+  `public/install_armorantigravity.sh`, which is the copy armoriq.ai serves. This repo kept a second
+  copy that nothing referenced from the site; the two drifted 115 lines apart, and a fix applied here
+  reached nobody. Its tests moved to that repo with it, and run in its installer CI.
+
+### Added
+
+- `armorantigravity install` refuses to run when no Antigravity installation is found: not the
+  Antigravity 2.0 app, the Antigravity IDE, or the `agy` CLI on PATH. Installing into
+  `~/.gemini/config` on a machine with no Antigravity to read it leaves hooks that never fire and a
+  daemon with nothing to guard. `--force` installs anyway, for an Antigravity somewhere this does not
+  look. When one is found, the install prints which.
+
+### Changed
+
+- The install downloads about 0.5 MB rather than 60 MB, which needs **node 22 or newer** on the
+  machine. `armorantigravity` and `armoriq-agd` are node bundles behind a shell wrapper instead of
+  compiled binaries carrying their own runtime; the installer checks for node before downloading, and
+  `armorantigravity install` writes the wrappers with the absolute interpreter that ran it, so launchd
+  and systemd find the same node a version manager put on your PATH. The daemon's instance lock is a
+  pid file with a liveness check, because node cannot call `flock(2)`: a daemon that is killed outright
+  now leaves a lock that the next start takes over, rather than one the kernel released.
+- The install downloads about 2 MB instead of 60 MB on macOS and Linux alike. `agd-hook` is now a
+  34 KB C binary rather than a Bun-compiled one, which was 69 MB of embedded runtime around 3 KB of
+  logic. It is also faster: measured back to back on an M-series Mac, PreToolUse went from a p50 of
+  12.6 ms to 2.5 ms against the same daemon.
+- `armoriq-agd` publishes the answer each hook event gets while it is unreachable, one file per
+  event in `~/.armoriq/armorantigravity/fallback`, beside the mode file it already wrote. The hook
+  client reads one of those files instead of building the response itself, and a request that
+  arrives in the client's own frame is answered with the response on a line of its own. A missing
+  or unreadable file still denies the tool call.
+
 ### Fixed
 
 - The dev channel installed against `staging-api.armoriq.io`, which is not the
