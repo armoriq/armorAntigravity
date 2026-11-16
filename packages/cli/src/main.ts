@@ -1,3 +1,4 @@
+import { NO_AUTO_UPDATE_ENV, optedOut, readUpdateStatus } from "@armorantigravity/daemon";
 import pkg from "@armorantigravity/daemon/package.json" with { type: "json" };
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -180,8 +181,17 @@ async function cmdStatus(): Promise<number> {
   info(`backend: ${backend ?? "not configured"}`);
   info(`login: ${backend && hasLogin(backend) ? `yes (${PRODUCT_AT(backend)})` : "no"}`);
   info(`daemon: ${(await waitForSocket(l.socket, 0)) ? `listening on ${l.socket}` : "not running"}`);
+  info(`updates: ${updateLine(l.dataDir)}`);
   reportSurfaces();
   return 0;
+}
+
+function updateLine(dataDir: string): string {
+  if (optedOut(process.env)) return `off (${NO_AUTO_UPDATE_ENV} is set)`;
+  const status = readUpdateStatus(dataDir);
+  const checked = status.lastCheckedAt > 0 ? `last checked ${new Date(status.lastCheckedAt).toISOString()}` : "not checked yet";
+  if (status.stagedVersion) return `${status.stagedVersion} staged, applied once no session is open (${checked})`;
+  return `${checked}${status.lastSeenVersion ? `, latest release ${status.lastSeenVersion}` : ""}`;
 }
 
 function reportSurfaces(): void {

@@ -27,6 +27,7 @@ import type { DaemonEvent, DaemonPlugin, DecisionHandler, EventObserver, HookCon
 import { createSessionStore, type SessionStore } from "./sessions.ts";
 import { stubDecide } from "./stub.ts";
 import { surfaceFromTranscriptPath } from "./surface.ts";
+import { applyStagedUpdate, createUpdater, optedOut, readUpdateStatus, type Updater } from "./update.ts";
 
 export const SESSION_IDLE_MS = 30 * 60 * 1000;
 const IDLE_SWEEP_MS = 60_000;
@@ -39,6 +40,10 @@ export interface DaemonOptions {
   readonly log?: Log;
   readonly sessionIdleMs?: number;
   readonly authPollMs?: number;
+  readonly updater?: Updater;
+  // Called once a staged update is waiting and no session is open. The caller stops the daemon and
+  // exits RESTART_EXIT_CODE, and the next start applies the update.
+  readonly onRestartRequired?: (version: string) => void;
 }
 
 export interface RunningDaemon {
@@ -49,6 +54,14 @@ export interface RunningDaemon {
 
 export class AlreadyRunning extends Error {}
 
+// A staged update was moved into place. The process must exit non-zero so launchd and systemd
+// start the replaced binary; the running image is still the old one.
+export class RestartRequired extends Error {
+  constructor(readonly version: string) {
+    super(`applied ArmorAntigravity ${version}; restarting into it`);
+  }
+}
+
 export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   const paths = resolvePaths(opts.env);
   const log = opts.log ?? fileLog(paths.logFile, false);
@@ -56,12 +69,18 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   if (!lock) throw new AlreadyRunning(`another armoriq-agd holds ${paths.lockFile}`);
 
   const config = readConfig(paths.configFile, log);
+  const applied = applyStagedUpdate({ log, env: opts.env, channel: config.channel, dataDir: paths.dataDir, binDir: paths.binDir });
+  if (applied) {
+    lock.release();
+    throw new RestartRequired(applied);
+  }
+  const updater = opts.updater ?? createUpdater({ log, env: opts.env, channel: config.channel, dataDir: paths.dataDir, binDir: paths.binDir });
   const auth = createAuth(log, { env: opts.env, config, dataDir: paths.dataDir, ...(opts.authPollMs ? { pollMs: opts.authPollMs } : {}) });
   const sessions = createSessionStore(paths.sessionsDir);
   const idleMs = opts.sessionIdleMs ?? SESSION_IDLE_MS;
   const pumps: Pump[] = [];
   const abort = async (error: unknown): Promise<never> => {
-    await Promise.allSettled(pumps.map((p) => p.stop()));
+    await Promise.allSettled([...pumps.map((p) => p.stop()), updater.stop()]);
     auth.stop();
     lock.release();
     throw error;
@@ -114,6 +133,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   });
 
   const inflight = new Set<Promise<void>>();
+  let restartRequested = false;
   const connections = new Set<Socket>();
   const server = await listen(paths.socket, (socket) => serve(socket)).catch(abort);
 
@@ -123,10 +143,19 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
       emit({ kind: "session_end", session, at: now });
       sessions.close(session.key);
     }
+    if (opts.onRestartRequired && !restartRequested && !optedOut(opts.env) && inflight.size === 0 && isEmpty(sessions.all())) {
+      const staged = readUpdateStatus(paths.dataDir).stagedVersion;
+      if (staged) {
+        restartRequested = true;
+        log.info("no session is open; restarting to apply the staged update", { version: staged });
+        opts.onRestartRequired(staged);
+      }
+    }
   }, Math.min(IDLE_SWEEP_MS, idleMs));
   sweep.unref?.();
 
   log.info("armoriq-agd started", { pid: process.pid, socket: paths.socket, mode: auth.mode(), auth: auth.state().kind, pumps: pumps.length });
+  updater.start();
 
   function serve(socket: Socket): void {
     connections.add(socket);
@@ -239,6 +268,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
       (stopping ??= (async () => {
         log.info("armoriq-agd stopping", { inflight: inflight.size });
         clearInterval(sweep);
+        await updater.stop();
         const closed = new Promise<void>((resolve) => server.close(() => resolve()));
         await withDeadline(Promise.allSettled([...inflight]), SHUTDOWN_BUDGET_MS);
         for (const socket of connections) socket.destroy();
@@ -332,4 +362,9 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T | null> 
   } finally {
     clearTimeout(timer);
   }
+}
+
+function isEmpty(items: Iterable<unknown>): boolean {
+  for (const _ of items) return false;
+  return true;
 }

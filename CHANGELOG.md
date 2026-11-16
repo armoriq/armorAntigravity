@@ -7,6 +7,8 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-16
+
 ### Changed
 
 - The curl installer lives in armoriq/armorIQ-landing only, at
@@ -16,6 +18,11 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ### Added
 
+- `armoriq-agd` updates itself. It checks every six hours for a newer release on its channel
+  (`releases/latest` for stable, `dev-latest` for dev), verifies the archive against `SHA256SUMS`,
+  stages it, and applies it once no session is open or at its next start.
+  `ARMORANTIGRAVITY_NO_AUTO_UPDATE=1` opts out before any network call.
+- `armorantigravity status` reports the last update check and any staged version.
 - `armorantigravity install` refuses to run when no Antigravity installation is found: not the
   Antigravity 2.0 app, the Antigravity IDE, or the `agy` CLI on PATH. Installing into
   `~/.gemini/config` on a machine with no Antigravity to read it leaves hooks that never fire and a
