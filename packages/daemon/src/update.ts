@@ -183,7 +183,8 @@ export function createUpdater(opts: UpdaterOptions): Updater {
   const { log, env, dataDir, binDir } = opts;
   const now = opts.now ?? Date.now;
   const doFetch = opts.fetch ?? ((input, init) => fetch(input, init));
-  const apiUrl = (opts.apiUrl ?? (env[API_URL_ENV]?.trim() || GITHUB_API)).replace(/\/+$/, "");
+  let apiUrl = opts.apiUrl ?? (env[API_URL_ENV]?.trim() || GITHUB_API);
+  while (apiUrl.endsWith("/")) apiUrl = apiUrl.slice(0, -1);
   const current = opts.currentVersion ?? pkg.version;
   const intervalMs = opts.intervalMs ?? CHECK_INTERVAL_MS;
   const timeoutMs = opts.timeoutMs ?? CHECK_TIMEOUT_MS;
