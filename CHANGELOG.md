@@ -7,6 +7,8 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-16
+
 ### Changed
 
 - The curl installer lives in armoriq/armorIQ-landing only, at
