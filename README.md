@@ -17,4 +17,17 @@ curl -fsSL https://armoriq.ai/install_armorantigravity.sh | bash -s -- --uninsta
 curl -fsSL https://armoriq.ai/install_armorantigravity.sh | bash -s -- --uninstall --purge   # also deletes ~/.armoriq/armorantigravity
 ```
 
-`~/.armoriq/armorantigravity/bin/armorantigravity status` shows the login, the daemon and which Antigravity surfaces were found.
+`~/.armoriq/armorantigravity/bin/armorantigravity status` shows the login, the daemon, the update state and which Antigravity surfaces were found.
+
+## Updates
+
+`armoriq-agd` updates itself. Every six hours it asks GitHub for the newest release on its channel:
+stable installs follow `releases/latest`, dev installs follow the rolling `dev-latest` prerelease. A
+newer archive is verified against that release's `SHA256SUMS` and staged. The daemon applies it once
+no Antigravity session is open, or at its next start, and exits so launchd or systemd starts the new
+binaries. A failed or unreachable check is never fatal and never interrupts a session.
+
+Only an install made by the installer (it leaves `~/.armoriq/armorantigravity/release.sha256`) is
+updated. Set `ARMORANTIGRAVITY_NO_AUTO_UPDATE=1` to keep updates manual; the daemon then makes no
+network call for updates and applies nothing that is already staged. Re-running the installer still
+upgrades. `ARMORANTIGRAVITY_UPDATE_API_URL` points the check at a mirror of the repository releases API.

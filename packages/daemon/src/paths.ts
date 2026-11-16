@@ -9,6 +9,7 @@ export type Env = Readonly<Record<string, string | undefined>>;
 export interface Paths {
   readonly armoriqDir: string;
   readonly dataDir: string;
+  readonly binDir: string;
   readonly socket: string;
   readonly modeFile: string;
   readonly fallbackDir: string;
@@ -25,6 +26,7 @@ export function resolvePaths(env: Env): Paths {
   return {
     armoriqDir,
     dataDir,
+    binDir: path.join(dataDir, "bin"),
     socket,
     modeFile: path.join(path.dirname(socket), MODE_FILE_NAME),
     fallbackDir: path.join(path.dirname(socket), FALLBACK_DIR_NAME),

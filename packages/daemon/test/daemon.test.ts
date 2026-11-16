@@ -1,11 +1,13 @@
 import { saveLoginProfile } from "@armoriq/sdk-dev/dist/credentials.js";
 import { DAEMON_UNAVAILABLE_CODE, DAEMON_UNAVAILABLE_REASON, HOOK_FRAME_TAG, type HookEvent } from "@armorantigravity/protocol";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import path from "node:path";
 import { AlreadyRunning, startDaemon, type RunningDaemon } from "../src/daemon.ts";
 import type { DaemonEvent, DaemonPlugin } from "../src/plugin.ts";
+import { RESTART_EXIT_CODE } from "../src/update.ts";
 import { sandboxHome } from "./sandbox.ts";
 
 const STAGING = "https://staging-api.armoriq.ai";
@@ -242,4 +244,46 @@ test("the daemon pre-renders the fallback each event gets while it is unreachabl
     `${JSON.stringify({ decision: "deny", reason: `ArmorIQ blocked this call [${DAEMON_UNAVAILABLE_CODE}]: ${DAEMON_UNAVAILABLE_REASON}` })}\n`,
   );
   expect(readFileSync(enforcing.paths.modeFile, "utf8")).toBe("enforce\n");
+});
+
+function stageUpdate(version: string, members: Record<string, string>): string {
+  const dataDir = path.join(sandbox.home, ".armoriq", "armorantigravity");
+  const stage = path.join(sandbox.home, "stage");
+  mkdirSync(stage, { recursive: true });
+  mkdirSync(path.join(dataDir, "staged"), { recursive: true });
+  for (const [name, body] of Object.entries(members)) writeFileSync(path.join(stage, name), body, { mode: 0o755 });
+  const archive = path.join(dataDir, "staged", "armorantigravity-test.tar.gz");
+  expect(Bun.spawnSync(["tar", "-czf", archive, "-C", stage, ...Object.keys(members)]).exitCode).toBe(0);
+  const sha256 = createHash("sha256").update(readFileSync(archive)).digest("hex");
+  writeFileSync(path.join(dataDir, "update.json"), JSON.stringify({ lastCheckedAt: 1, lastSeenVersion: version, staged: { version, channel: "stable", archive, sha256, stagedAt: 1 } }));
+  return archive;
+}
+
+test("armoriq-agd applies a staged update at startup and exits for the service manager to restart it", async () => {
+  const binDir = path.join(sandbox.home, ".armoriq", "armorantigravity", "bin");
+  mkdirSync(binDir, { recursive: true });
+  const archive = stageUpdate("v9.9.9", { armorantigravity: "#!/bin/sh\n# new cli\n", "armoriq-agd": '#!/bin/sh\nNODE=""\n# new agd\n', "agd-hook": "#!/bin/sh\n# new hook\n", "agd.js": "// new bundle\n" });
+
+  const proc = Bun.spawn(["bun", path.join(import.meta.dir, "..", "src", "main.ts")], { env: { PATH: process.env.PATH ?? "", HOME: sandbox.home }, stdout: "pipe", stderr: "pipe" });
+  const stderr = await new Response(proc.stderr).text();
+  expect(await proc.exited).toBe(RESTART_EXIT_CODE);
+  expect(stderr).toContain("applied ArmorAntigravity v9.9.9");
+  expect(readFileSync(path.join(binDir, "armoriq-agd"), "utf8")).toContain("# new agd");
+  expect(readFileSync(path.join(binDir, "agd.js"), "utf8")).toBe("// new bundle\n");
+  expect(existsSync(path.join(sandbox.home, ".armoriq", "armorantigravity", "release.sha256"))).toBe(true);
+  expect(existsSync(archive)).toBe(false);
+});
+
+test("a staged update asks for a restart only once no session is open", async () => {
+  const restarts: string[] = [];
+  const d = await startDaemon({ env: { ARMORIQ_BACKEND_URL: STAGING }, plugins: [], log: quiet, sessionIdleMs: 300, onRestartRequired: (v) => restarts.push(v) });
+  running.push(d);
+  await hook("PreInvocation", payload("conv-busy"));
+  stageUpdate("v9.9.9", { armorantigravity: "x", "armoriq-agd": "x", "agd-hook": "x" });
+  await Bun.sleep(200);
+  expect(restarts).toEqual([]);
+  await Bun.sleep(700);
+  expect(restarts).toEqual(["v9.9.9"]);
+  await Bun.sleep(400);
+  expect(restarts).toEqual(["v9.9.9"]);
 });
