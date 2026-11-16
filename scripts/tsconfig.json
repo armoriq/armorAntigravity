@@ -1,5 +1,5 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": { "types": ["bun"] },
-  "include": ["*.ts"]
+  "include": ["*.ts", "../packages/cli/src/wrapper.ts"]
 }
