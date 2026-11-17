@@ -1,4 +1,5 @@
 import type { HookPayload, HookResponse, ToolDecision } from "@armorantigravity/protocol";
+import path from "node:path";
 import type { CompiledPolicy, CoreToolCall, Decision, DenyCode, Log, Mode, SessionID } from "./core-contract.ts";
 import { checkGuard } from "./guard.ts";
 import type { McpGate } from "./mcp-gate.ts";
@@ -124,18 +125,26 @@ function homeRelative(p: string, home: string): string {
   return p === home ? "~" : p.startsWith(home + "/") ? `~${p.slice(home.length)}` : p;
 }
 
-export function v2CallOf(call: MappedCall, home: string, at: number, userEmail: string | undefined): V2Call {
+export function v2CallOf(call: MappedCall, home: string, at: number, userEmail: string | undefined, workspace: string | null = null): V2Call {
   const text = (k: string) => (typeof call.args[k] === "string" ? (call.args[k] as string) : undefined);
   const names = call.category === "mcp" ? [call.mcp.tool, call.tool, call.name] : [...nameReadings(call.tool), call.name];
-  const capabilities = call.category === "web" ? (call.tool === "search_web" ? ["web.search"] : ["web.fetch", "network"]) : (CAPABILITIES[call.category] ?? []);
+  const capabilities = call.category === "web" ? (call.tool === "search_web" ? ["web.search"] : ["web.fetch", "network"]) : [...(CAPABILITIES[call.category] ?? [])];
   const derived: Record<string, unknown> = {};
   const command = text("command");
   const file = text("filePath") ?? text("path");
   const url = text("url");
   if (call.category === "shell" && command !== undefined) derived.command = command;
-  if (file !== undefined) derived.path = homeRelative(file, home);
+  if (file !== undefined) {
+    derived.path = homeRelative(file, home);
+    if (workspace !== null && path.isAbsolute(file)) {
+      const rel = path.relative(workspace, path.resolve(file));
+      derived.withinWorkspace = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    }
+  }
   if (url !== undefined) {
     derived.url = url;
+    // A browser navigation reaches a host too, so network rules apply to it.
+    if (!capabilities.includes("network")) capabilities.push("network");
     try {
       derived.host = new URL(url).hostname;
     } catch {}
@@ -162,7 +171,9 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     if (guard) return { decision: { kind: "deny", code: "builtin_protected", reason: guard.reason, ruleId: "builtin:guard_files" }, attribution: BUILTIN("builtin:guard_files") };
 
     const local = judgeLocal(call, conversationId, stepIdx, mode, now);
-    const v2 = mode === "monitor" ? null : decideV2(options.bundle?.current() ?? null, v2CallOf(call, options.guard.home, now, options.userEmail?.()));
+    // Monitor still enforces v1 policy (it only skips intent checks), so v2 applies in both modes;
+    // signed out, the bundle is empty.
+    const v2 = decideV2(options.bundle?.current() ?? null, v2CallOf(call, options.guard.home, now, options.userEmail?.(), workspace));
     return combine(local, v2);
   };
 

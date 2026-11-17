@@ -135,7 +135,14 @@ export function createPolicyBundle(options: PolicyBundleOptions): PolicyBundle {
     return { kind: "applied", etag, policies: parsed?.policies.length ?? 0 };
   };
 
-  const refresh = (): Promise<V2BundleOutcome> => (inFlight ??= pull().finally(() => (inFlight = null)));
+  // A pull overtaken by a login change is retried, so the new key is not left without a bundle until the next tick.
+  const pullCurrent = async (): Promise<V2BundleOutcome> => {
+    for (;;) {
+      const outcome = await pull();
+      if (stopped || outcome.kind !== "skipped" || outcome.reason !== "login changed") return outcome;
+    }
+  };
+  const refresh = (): Promise<V2BundleOutcome> => (inFlight ??= pullCurrent().finally(() => (inFlight = null)));
   const timer = setInterval(() => void refresh(), options.revalidateMs ?? BUNDLE_REVALIDATE_MS);
   timer.unref?.();
 

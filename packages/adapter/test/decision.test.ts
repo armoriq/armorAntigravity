@@ -451,9 +451,9 @@ describe("policy v2", () => {
     expect(log.entries).toContainEqual({ level: "info", message: "shadow v2 policy would not allow this call", extra: { policy: "Shadow no shell", verdict: "block", rule: "run_command#0" } });
   });
 
-  test("monitor mode does not enforce v2", () => {
+  test("monitor mode skips intent checks but still enforces v2, as it does v1", () => {
     const { handle } = setup({ bundle: fixedBundle([noShell]) });
-    expect(handle(hook("PreToolUse", runCommand("ls"), "monitor"))).toEqual(ALLOW);
+    expect(handle(hook("PreToolUse", runCommand("ls"), "monitor"))).toMatchObject({ decision: "deny", reason: expect.stringContaining('"No shell"') });
   });
 
   test("the guard still decides before v2", () => {

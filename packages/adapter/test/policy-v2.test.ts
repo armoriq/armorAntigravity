@@ -84,6 +84,20 @@ describe("decideV2", () => {
     expect(decideV2(agent, view("/Users/dev/ws/readme.md")).enforced?.verdict).toBe("allow");
   });
 
+  test("allowOutsideWorkspace: false blocks a file outside the workspace only", () => {
+    const agent = agentOf([entry("Stay inside", "org", "active", doc("inside", ORG, "      run_command: allow\n", "allow", "  files:\n    allowOutsideWorkspace: false\n"))]);
+    const write = (TargetFile: string) => v2CallOf(mapToolCall({ name: "write_to_file", args: { TargetFile, CodeContent: "x" } }), home, NOW, undefined, "/Users/dev/ws");
+    expect(decideV2(agent, write("/etc/hosts")).enforced?.verdict).toBe("block");
+    expect(decideV2(agent, write("/Users/dev/ws/src/a.ts")).enforced?.verdict).toBe("allow");
+    expect(decideV2(agent, write("/Users/dev/ws-other/a.ts")).enforced?.verdict).toBe("block");
+  });
+
+  test("a network deny reaches a browser navigation", () => {
+    const agent = agentOf([entry("No example", "org", "active", doc("net", ORG, "      run_command: allow\n", "allow", "  network:\n    deny: [\"*.example.com\"]\n"))]);
+    const nav = v2CallOf(mapToolCall({ name: "mcp_chrome_devtools_navigate_page", args: { url: "https://api.example.com/" } }), home, NOW, undefined);
+    expect(decideV2(agent, nav).enforced?.verdict).toBe("block");
+  });
+
   test("a shadow policy reports its verdict and is never enforced", () => {
     const out = decideV2(agentOf([entry("Shadow no shell", "agent", "shadow", doc("shadow", AGENT, "      run_command: block\n"))]), run("ls"));
     expect(out.enforced).toBeNull();
@@ -148,6 +162,25 @@ describe("createPolicyBundle", () => {
     expect(bundle.current()).not.toBeNull();
     loggedIn = false;
     expect(bundle.current()).toBeNull();
+  });
+
+  test("a pull overtaken by a login change fetches again for the new key", async () => {
+    const backend = stubBackend({
+      "GET /policy/bundles/current": async (req) => {
+        await Bun.sleep(30);
+        const forNewKey = req.headers.get("x-api-key") === "ak_new";
+        return Response.json(bundleOf(forNewKey ? [entry("New org", "org", "active", doc("new", ORG, "      run_command: block\n"))] : []));
+      },
+    });
+    cleanups.push(backend.stop);
+    let key = backend.login.apiKey;
+    const bundle = createPolicyBundle({ access: () => ({ login: { ...backend.login, apiKey: key }, client: "t" }), log: memoryLog() });
+    cleanups.push(() => bundle.stop());
+    const first = bundle.refresh();
+    await Bun.sleep(10);
+    key = "ak_new";
+    expect((await first).kind).toBe("applied");
+    expect(bundle.current()?.policies.map((p) => p.name)).toEqual(["New org"]);
   });
 
   test("polls on its own timer", async () => {
