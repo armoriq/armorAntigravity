@@ -5,6 +5,7 @@ import {
   createCoreDecide,
   createDecisionHandler,
   createMcpGate,
+  createPolicyBundle,
   createPolicySource,
   DEFAULT_OWN_MCP_SERVER,
   guardPaths,
@@ -15,6 +16,7 @@ import {
   type DecisionRecord,
   type HookInput,
   type MappedCall,
+  type PolicyAttribution,
   type SessionPair,
 } from "@armorantigravity/adapter";
 import { DEFAULT_POLICY_SOURCE, toAuditRow, type AuditStatus, type Capability, type CompiledPolicy, type Decision, type Session as CoreSession, type SessionID, type ToolCall as CoreToolCall } from "@armorantigravity/core";
@@ -42,7 +44,36 @@ const MAX_OPEN_CALLS = 10_000;
 
 type PostToolUse = Extract<HookPayload, { event: "PostToolUse" }>;
 type PreToolUse = Extract<HookPayload, { event: "PreToolUse" }>;
-type OpenCall = { readonly surface: Surface; readonly call: CoreToolCall; readonly decision: Decision; readonly capability: Capability; readonly at: number };
+type OpenCall = {
+  readonly surface: Surface;
+  readonly call: CoreToolCall;
+  readonly decision: Decision;
+  readonly attribution: PolicyAttribution;
+  readonly capability: Capability;
+  readonly at: number;
+};
+
+const BUILTIN_ATTRIBUTION: PolicyAttribution = { source: "builtin", v2: null, ruleId: null, shadow: [] };
+
+// conmap's audit DTO rejects unknown top-level fields, so the deciding source rides in `input`
+// under a key every ArmorIQ plugin shares. A blocked v2 row also carries `output.matchedPolicy`,
+// the shape the console reads to name the policy (conmap iap.service matchedPolicy()).
+function withAttribution<T extends { input: Record<string, unknown>; output?: Record<string, unknown>; status: AuditStatus }>(row: T, a: PolicyAttribution): T {
+  const ruleId = a.v2?.rule ?? a.ruleId;
+  row.input = {
+    ...row.input,
+    armoriq_policy: {
+      source: a.source,
+      ...(a.v2 ? { policy_id: a.v2.policyId, policy_name: a.v2.policyName, policy_hash: a.v2.policyHash } : {}),
+      ...(ruleId ? { rule_id: ruleId } : {}),
+      ...(a.shadow.length ? { shadow: a.shadow.map((s) => ({ policy_id: s.policyId, policy_name: s.policyName, verdict: s.verdict, rule_id: s.rule })) } : {}),
+    },
+  };
+  if (a.v2 && (row.status === "blocked" || row.status === "held") && row.output === undefined) {
+    row.output = { matchedPolicy: { policyId: a.v2.policyId, name: a.v2.policyName, policyVersion: a.v2.policyHash } };
+  }
+  return row;
+}
 
 export const DOCTOR_COMMAND = "armorantigravity status";
 
@@ -100,9 +131,11 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     access,
     log,
   });
+  const bundle = createPolicyBundle({ access, log });
   const mcpGate = createMcpGate({ access, log, ownServer: DEFAULT_OWN_MCP_SERVER });
   const syncOrg = () => {
     void policy.refresh();
+    void bundle.refresh();
     void mcpGate.sync();
   };
 
@@ -134,6 +167,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     surface: Surface,
     call: CoreToolCall,
     decision: Decision,
+    attribution: PolicyAttribution,
     status: AuditStatus,
     extra: { at: number; durationMs: number | null; error: string | null; capability: Capability },
   ) => {
@@ -142,7 +176,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     // Logged out is monitor mode: nothing is recorded, so no row can upload later under no user.
     if (!login) return;
     const row = toAuditRow({ call, session, root, status, decision, output: null, ...extra, userId: login.userId || undefined, userEmail: login.email || undefined }, ANTIGRAVITY);
-    recorder.audit(row, { surface });
+    recorder.audit(withAttribution(row, attribution), { surface });
   };
 
   const onDecision = (surface: Surface, record: DecisionRecord) => {
@@ -158,10 +192,10 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
       at: record.at,
     });
     const capability = capabilityOf(record.call);
-    if (record.status !== "allowed") auditRow(surface, call, decision, record.status, { at: record.at, durationMs: null, error: null, capability });
+    if (record.status !== "allowed") auditRow(surface, call, decision, record.attribution, record.status, { at: record.at, durationMs: null, error: null, capability });
     // A held call the user approves still runs; its result row comes from PostToolUse.
     if (record.status !== "blocked") {
-      open.set(call.callId, { surface, call, decision, capability, at: record.at });
+      open.set(call.callId, { surface, call, decision, attribution: record.attribution, capability, at: record.at });
       if (open.size > MAX_OPEN_CALLS) open.delete(open.keys().next().value ?? call.callId);
     }
   };
@@ -172,7 +206,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     if (!opened) return;
     open.delete(callId);
     const status: AuditStatus = payload.error === "" ? "success" : "failed";
-    auditRow(opened.surface, opened.call, opened.decision, status, { at, durationMs: Math.max(0, at - opened.at), error: payload.error || null, capability: opened.capability });
+    auditRow(opened.surface, opened.call, opened.decision, opened.attribution, status, { at, durationMs: Math.max(0, at - opened.at), error: payload.error || null, capability: opened.capability });
   };
 
   // Spec 0002 posture. Signed in and the backend unreachable: only read calls run. Signed out by a 401
@@ -195,7 +229,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
       ruleId: null,
     };
     const response = toHookResponse(decision);
-    onDecision(surface, { conversationId: payload.conversationId, stepIdx: payload.stepIdx, at, call, decision, status: "blocked", response });
+    onDecision(surface, { conversationId: payload.conversationId, stepIdx: payload.stepIdx, at, call, decision, status: "blocked", response, attribution: BUILTIN_ATTRIBUTION });
     return response;
   };
 
@@ -210,6 +244,8 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
       handler = createDecisionHandler({
         decide: createCoreDecide({ sessions: (id) => sessions(surface, id), builtin }),
         policy,
+        bundle,
+        userEmail: () => auth.uploadLogin()?.email || undefined,
         mcpGate,
         guard,
         log,
@@ -245,6 +281,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
         async stop() {
           unsubscribe();
           policy.stop();
+          bundle.stop();
         },
       },
     ],

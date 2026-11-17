@@ -9,6 +9,7 @@ import { armoriqPlugins } from "../src/armoriq.ts";
 import { startDaemon, type RunningDaemon } from "../src/daemon.ts";
 import { compileHook, hostTarget } from "../../../scripts/build-hook.ts";
 import { sandboxHome } from "./sandbox.ts";
+import { compile, parseYaml } from "@armoriq/policy-ir";
 
 const hookBuildDir = mkdtempSync(path.join(tmpdir(), "agd-hook-agy-"));
 const HOOK = path.join(hookBuildDir, "agd-hook");
@@ -45,6 +46,7 @@ type BackendHealth = "up" | "down" | "unauthorized";
 function stubBackend() {
   const seen: Seen[] = [];
   const health: { now: BackendHealth } = { now: "up" };
+  const bundle: { now: unknown } = { now: { orgId: "org-1", agents: [] } };
   const policy = {
     schemaVersion: "armor.policy.v1",
     defaults: { decision: "allow" },
@@ -64,6 +66,7 @@ function stubBackend() {
         return Response.json({ orgId: "org-1", userId: "user-1" });
       }
       if (health.now === "down") return new Response("", { status: 503 });
+      if (route === "GET /policy/bundles/current") return Response.json(bundle.now, { headers: { ETag: `"${Bun.hash(JSON.stringify(bundle.now))}"` } });
       if (route === "GET /policies/profiles/active") return Response.json({ version: 1, policy, updatedBy: "dashboard", publishedAt: "2026-10-12T10:00:00.000Z" });
       // The fields the SDK's getIntentToken reads from conmap's /iap/sdk/token.
       if (route === "POST /iap/sdk/token") {
@@ -78,7 +81,7 @@ function stubBackend() {
       return Response.json({ message: `Cannot ${route}`, statusCode: 404 }, { status: 404 });
     },
   });
-  return { url: `http://127.0.0.1:${server.port}`, seen, health, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}`, seen, health, bundle, stop: () => server.stop(true) };
 }
 
 function isRows(body: unknown): body is { rows: Record<string, unknown>[] } {
@@ -190,6 +193,42 @@ test("captured agy hooks get policy, plan and drift decisions, and every decisio
   );
   for (const row of rows) expect(row).toMatchObject({ session_id: runCommand.stdin.conversationId, agent_id: "antigravity", client_id: "armorantigravity", user_id: "user-1" });
   expect(backend.seen.some((r) => r.path === "/v1/traces")).toBe(true);
+}, 60_000);
+
+// One agent-targeted v2 policy as conmap's bundle serves it, compiled by policy-ir like conmap compiles it.
+function v2Bundle(name: string, rules: string) {
+  const yaml = `apiVersion: armor.io/v2\nkind: Policy\nmetadata:\n  name: ${name}\n  orgId: 11111111-1111-4111-8111-111111111111\ntarget:\n  agent: armorantigravity\nspec:\n  tools:\n    default: allow\n    rules:\n${rules}`;
+  const parsed = parseYaml(yaml);
+  const document = parsed.source ? compile(parsed.source, [], { policyId: `id-${name}` }).document : null;
+  if (!document) throw new Error(`policy ${name} did not compile`);
+  const policy = { policyId: `id-${name}`, name, policyHash: `sha256:${name}`, document };
+  return { orgId: "org-1", agents: [{ agentId: "armorantigravity", name: "armorantigravity", registeredName: null, registered: false, inactive: false, policy, policies: [{ ...policy, targetType: "agent", status: "active" }], tools: [], members: [] }] };
+}
+
+test("a v2 policy blocks through agd-hook with its name, v1 still applies where v2 is silent, and rows record the deciding source", async () => {
+  backend.bundle.now = v2Bundle("No shell", "      run_command: block\n");
+  daemon = await signedInDaemon();
+  await until(() => backend.seen.some((r) => r.path === "/policy/bundles/current"));
+  await Bun.sleep(100);
+  const r3 = captured();
+  const at = (seq: number): Capture => {
+    const c = r3.get(seq);
+    if (!c) throw new Error(`no capture ${seq}`);
+    return c;
+  };
+
+  expect(await hook(at(3))).toEqual({ decision: "deny", reason: 'ArmorIQ blocked this call [policy_forbid]: ArmorIQ policy "No shell" blocks this call (rule run_command#0)' });
+  expect(await hook(at(27))).toEqual({ decision: "deny", reason: expect.stringContaining("org-no-web-search") });
+  await daemon.stop();
+  daemon = null;
+
+  const rows = backend.seen.filter((r) => r.path === "/iap/audit/batch").flatMap((r) => (isRows(r.body) ? r.body.rows : []));
+  expect(rows.find((r) => r.tool === "run_command")).toMatchObject({
+    status: "blocked",
+    input: { armoriq_policy: { source: "v2", policy_id: "id-No shell", policy_name: "No shell", policy_hash: "sha256:No shell", rule_id: "run_command#0" } },
+    output: { matchedPolicy: { policyId: "id-No shell", name: "No shell", policyVersion: "sha256:No shell" } },
+  });
+  expect(rows.find((r) => r.tool === "search_web")).toMatchObject({ status: "blocked", input: { armoriq_policy: { source: "v1_org", rule_id: "org-no-web-search" } } });
 }, 60_000);
 
 const AGY_14 = path.join(import.meta.dir, "../../adapter/test/fixtures/captured");
