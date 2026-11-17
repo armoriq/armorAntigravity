@@ -2,7 +2,7 @@ import { saveLoginProfile } from "@armoriq/sdk-dev/dist/credentials.js";
 import { DAEMON_UNAVAILABLE_CODE, DAEMON_UNAVAILABLE_REASON, HOOK_FRAME_TAG, type HookEvent } from "@armorantigravity/protocol";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import path from "node:path";
 import { AlreadyRunning, startDaemon, type RunningDaemon } from "../src/daemon.ts";
@@ -100,6 +100,16 @@ test("a hook request gets a decision and the session is keyed by surface", async
   await d.stop();
   expect(readdirSync(d.paths.sessionsDir).sort()).toEqual(["cli-conv-1.json", "ide-conv-1.json"]);
   expect(readFileSync(d.paths.modeFile, "utf8")).toBe("monitor\n");
+});
+
+test("a socket path longer than sun_path is bound in full, from its directory", async () => {
+  const socket = path.join(sandbox.home, "d".repeat(120), "agd.sock");
+  const cwd = process.cwd();
+  const rec = recorder();
+  await start([rec.plugin], { ARMORANTIGRAVITY_SOCKET: socket });
+  expect(process.cwd()).toBe(cwd);
+  expect(statSync(socket).mode & 0o777).toBe(0o600);
+  expect(await hook("PreToolUse", toolPayload("conv-long"))).toEqual({ decision: "allow" });
 });
 
 test("PreInvocation opens a turn and Stop closes it and kicks the pumps", async () => {
