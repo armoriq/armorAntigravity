@@ -22,6 +22,7 @@ import {
 import { DEFAULT_POLICY_SOURCE, toAuditRow, type AuditStatus, type Capability, type CompiledPolicy, type Decision, type Session as CoreSession, type SessionID, type ToolCall as CoreToolCall } from "@armorantigravity/core";
 import { callIdOf, createAgySource, evidencePlugin, type EvidenceRecorder } from "@armorantigravity/evidence";
 import {
+  AGENT_ID,
   conversationKey,
   createIntentRuntime,
   intentRegistration,
@@ -37,6 +38,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { DaemonContext, DaemonPlugin, HookContext, PluginRegistration } from "./plugin.ts";
 import { loginBinding } from "./auth.ts";
+import { createHoldResolver, type SignedPlan } from "./hold.ts";
 import { createReachability, type Reachability } from "./reachability.ts";
 import { APP_DATA_DIRS } from "./surface.ts";
 
@@ -237,7 +239,13 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
   const guard = { home, protectedPaths: guardPaths(home) };
   // createCoreDecide resolves a session from the conversationId alone, but intent keys plans by surface too,
   // so each surface gets its own handler.
-  const handlers = new Map<Surface, (hook: HookInput) => HookResponse>();
+  const signedPlan = (surface: Surface, conversationId: string): SignedPlan | null => {
+    const root = runtime.root({ surface, conversationId });
+    const token = root?.token;
+    if (!root?.plan?.id || token?.status !== "active" || !token.jwt) return null;
+    return { planId: root.plan.id, jwt: token.jwt };
+  };
+  const handlers = new Map<Surface, (hook: HookInput) => HookResponse | Promise<HookResponse>>();
   const handlerFor = (surface: Surface) => {
     let handler = handlers.get(surface);
     if (!handler) {
@@ -250,6 +258,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
         guard,
         log,
         onDecision: (record) => onDecision(surface, record),
+        resolveHold: createHoldResolver({ access, plan: (id) => signedPlan(surface, id), agentId: AGENT_ID, builtinServer: AGENT_ID, log }),
       });
       handlers.set(surface, handler);
     }
