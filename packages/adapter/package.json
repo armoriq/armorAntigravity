@@ -8,6 +8,7 @@
   "dependencies": {
     "@armorantigravity/core": "workspace:*",
     "@armorantigravity/protocol": "workspace:*",
+    "@armoriq/policy-ir": "0.1.9",
     "zod": "^4.6.6"
   }
 }

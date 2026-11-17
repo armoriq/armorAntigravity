@@ -8,7 +8,7 @@ export type BackendAccess = {
   readonly client: string;
 };
 
-export type BackendResult = { ok: true; status: number; data: unknown } | { ok: false; status: number | null; reason: string };
+export type BackendResult = { ok: true; status: number; data: unknown; headers: Headers } | { ok: false; status: number | null; reason: string };
 
 const TIMEOUT_MS = 8000;
 
@@ -23,7 +23,7 @@ function stripTrailingSlashes(url: string): string {
 // API-key call shaped like armorClaude backend-client.mjs, with the client header PRD 4a requires on every call.
 export async function backendRequest(
   access: BackendAccess,
-  request: { method: "GET" | "POST"; path: string; body?: unknown; fetch?: Fetch; timeoutMs?: number },
+  request: { method: "GET" | "POST"; path: string; body?: unknown; headers?: Readonly<Record<string, string>>; fetch?: Fetch; timeoutMs?: number },
 ): Promise<BackendResult> {
   const doFetch: Fetch = request.fetch ?? ((input, init) => fetch(input, init));
   const controller = new AbortController();
@@ -36,13 +36,15 @@ export async function backendRequest(
         Authorization: `Bearer ${access.login.apiKey}`,
         "X-API-Key": access.login.apiKey,
         "X-ArmorIQ-Client": access.client,
+        ...request.headers,
       },
       ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
       signal: controller.signal,
     });
     const data: unknown = await res.json().catch(() => null);
-    if (!res.ok) return { ok: false, status: res.status, reason: `HTTP ${res.status}` };
-    return { ok: true, status: res.status, data };
+    // 304 answers a conditional GET; the caller kept the body it validated.
+    if (!res.ok && res.status !== 304) return { ok: false, status: res.status, reason: `HTTP ${res.status}` };
+    return { ok: true, status: res.status, data, headers: res.headers };
   } catch (error) {
     const reason = controller.signal.aborted ? `timed out after ${request.timeoutMs ?? TIMEOUT_MS} ms` : String(error);
     return { ok: false, status: null, reason };

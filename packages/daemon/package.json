@@ -15,5 +15,8 @@
     "@armorantigravity/intent": "workspace:*",
     "@armorantigravity/protocol": "workspace:*",
     "@armoriq/sdk-dev": "^0.8.17"
+  },
+  "devDependencies": {
+    "@armoriq/policy-ir": "0.1.9"
   }
 }
