@@ -53,22 +53,6 @@ export type DecisionRecord = {
   readonly attribution: PolicyAttribution;
 };
 
-// A call a v2 policy holds for approval, as the hold resolver sees it.
-export type HeldCall = {
-  readonly conversationId: string;
-  readonly stepIdx: number;
-  readonly call: MappedCall;
-  // Antigravity's own arguments, before the adapter adds canonical fields.
-  readonly rawArgs: Readonly<Record<string, unknown>>;
-  readonly policyName: string;
-  readonly ruleId: string | null;
-  readonly reason: string;
-};
-
-// Settles a v2 hold with the backend: allow once an approval is spent, deny when the backend blocks,
-// otherwise a hold whose reason names the approval request.
-export type HoldResolver = (held: HeldCall) => Promise<AdapterDecision>;
-
 export type DecisionHandlerOptions = {
   readonly decide: DecideFn;
   readonly policy: PolicySource;
@@ -82,7 +66,6 @@ export type DecisionHandlerOptions = {
   readonly log: Log;
   // Must not throw or block; it runs before the response is returned.
   readonly onDecision?: (record: DecisionRecord) => void;
-  readonly resolveHold?: HoldResolver;
 };
 
 const NO_OPINION: HookResponse = null;
@@ -99,8 +82,7 @@ export function toHookResponse(decision: AdapterDecision): HookResponse {
       return { decision: "deny", reason: `ArmorIQ blocked this call [${decision.code}]: ${decision.reason}` } satisfies ToolDecision;
     case "hold":
       // Not force_ask: agy auto-approves force_ask under --dangerously-skip-permissions (spike
-      // ft-forceask), so a hold would run. A hold blocks; for a v2 hold the reason names the approval
-      // request, and the retry after approval is allowed by the hold resolver.
+      // ft-forceask), so a hold would run. Until approvals exist, a hold blocks, as in ArmorOpenCode v1.
       return { decision: "deny", reason: `ArmorIQ blocked this call until it is approved [approval_required]: ${decision.reason}` } satisfies ToolDecision;
     case "ask":
       return { decision: "ask", reason: decision.reason } satisfies ToolDecision;
@@ -178,9 +160,7 @@ export function v2CallOf(call: MappedCall, home: string, at: number, userEmail: 
   };
 }
 
-export function createDecisionHandler(options: DecisionHandlerOptions & { resolveHold: HoldResolver }): (hook: HookInput) => HookResponse | Promise<HookResponse>;
-export function createDecisionHandler(options: DecisionHandlerOptions): (hook: HookInput) => HookResponse;
-export function createDecisionHandler(options: DecisionHandlerOptions): (hook: HookInput) => HookResponse | Promise<HookResponse> {
+export function createDecisionHandler(options: DecisionHandlerOptions): (hook: HookInput) => HookResponse {
   const { log } = options;
 
   type Judged = { decision: AdapterDecision; attribution: PolicyAttribution };
@@ -264,47 +244,24 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
       log.error("decision failed", { tool: call.name, error: String(error) });
       judged = { decision: mode === "enforce" ? internalError(error) : { kind: "allow", stepIndex: null, paramMismatch: false }, attribution: BUILTIN("builtin:internal_error") };
     }
-    const finish = (decision: AdapterDecision): HookResponse => {
-      const response = toHookResponse(decision);
-      try {
-        options.onDecision?.({
-          conversationId: payload.conversationId,
-          stepIdx: payload.stepIdx,
-          at: hook.receivedAt,
-          call,
-          decision,
-          status: statusOf(decision),
-          response,
-          attribution: judged.attribution,
-        });
-      } catch (error) {
-        log.error("decision observer failed", { error: String(error) });
-      }
-      return response;
-    };
     const { decision, attribution } = judged;
-    const resolveHold = options.resolveHold;
-    if (decision.kind !== "hold" || attribution.source !== "v2" || !attribution.v2 || !resolveHold) return finish(decision);
-    const held: HeldCall = {
-      conversationId: payload.conversationId,
-      stepIdx: payload.stepIdx,
-      call,
-      rawArgs: isRecord(payload.toolCall.args) ? payload.toolCall.args : {},
-      policyName: attribution.v2.policyName,
-      ruleId: decision.ruleId,
-      reason: decision.reason,
-    };
-    return resolveHold(held)
-      .catch((error: unknown): AdapterDecision => {
-        log.error("hold resolution failed", { tool: call.name, error: String(error) });
-        return { ...decision, reason: `${decision.reason}; the approval request could not be filed: ${String(error)}` };
-      })
-      .then(finish);
+    const response = toHookResponse(decision);
+    try {
+      options.onDecision?.({
+        conversationId: payload.conversationId,
+        stepIdx: payload.stepIdx,
+        at: hook.receivedAt,
+        call,
+        decision,
+        status: statusOf(decision),
+        response,
+        attribution,
+      });
+    } catch (error) {
+      log.error("decision observer failed", { error: String(error) });
+    }
+    return response;
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // mcp_<server>_<tool> folds `_` and `-` together, so `github_create`/`issue`

@@ -52,8 +52,6 @@ export {
   type DecideFn,
   type DecisionHandlerOptions,
   type DecisionRecord,
-  type HeldCall,
-  type HoldResolver,
   type HookInput,
   type PolicyAttribution,
   type PolicySourceKind,

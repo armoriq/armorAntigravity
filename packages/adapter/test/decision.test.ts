@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { HookEvent, HookPayload } from "@armorantigravity/protocol";
 import { backendToolLists } from "../src/backend-lists.ts";
 import type { Mode } from "../src/core-contract.ts";
-import { createDecisionHandler, type AdapterDecision, type DecideFn, type DecisionRecord } from "../src/decision.ts";
+import { createDecisionHandler, type DecideFn, type DecisionRecord } from "../src/decision.ts";
 import { guardPaths } from "../src/guard.ts";
 import { createMcpGate, type McpGate } from "../src/mcp-gate.ts";
 import { parseHookPayload } from "../src/payload.ts";
@@ -47,7 +47,7 @@ function setup(opts: { policy?: unknown; decide?: DecideFn; gate?: McpGate; bund
     log,
     onDecision: opts.onDecision ?? ((r) => records.push(r)),
   });
-  return { handle, records, log, policy };
+  return { handle, records, log };
 }
 
 function hook(event: HookEvent, raw: unknown, mode: Mode = "enforce") {
@@ -419,48 +419,6 @@ describe("policy v2", () => {
     const response = handle(hook("PreToolUse", runCommand("ls")));
     expect(response).toMatchObject({ decision: "deny", reason: expect.stringContaining('[approval_required]: ArmorIQ policy "Ask first" requires approval') });
     expect(records[0]?.status).toBe("held");
-  });
-
-  test("a v2 hold goes to the hold resolver, and its verdict is the response and the record", async () => {
-    const hold = entry("Ask first", "org", "active", doc("ask", ORG, "      run_command: hold\n", "allow", APPROVAL));
-    const { policy, records, log } = setup();
-    const seen: unknown[] = [];
-    let answer: AdapterDecision = { kind: "hold", ruleId: "r", reason: "Approval request req-1 is waiting" };
-    const handle = createDecisionHandler({
-      decide: decideWith(),
-      policy,
-      bundle: fixedBundle([hold]),
-      mcpGate: createMcpGate({ access: () => null, log, ownServer: "armoriq" }),
-      guard: { home, protectedPaths: guardPaths(home) },
-      log,
-      onDecision: (r) => records.push(r),
-      resolveHold: async (held) => {
-        seen.push(held);
-        return answer;
-      },
-    });
-    expect(await handle(hook("PreToolUse", runCommand("ls")))).toEqual({ decision: "deny", reason: "ArmorIQ blocked this call until it is approved [approval_required]: Approval request req-1 is waiting" });
-    expect(seen[0]).toMatchObject({ policyName: "Ask first", rawArgs: { CommandLine: "ls" }, call: { name: "run_command" } });
-    expect(records[0]).toMatchObject({ status: "held", attribution: { source: "v2" } });
-
-    answer = { kind: "allow", stepIndex: null, paramMismatch: false };
-    expect(await handle(hook("PreToolUse", runCommand("ls")))).toEqual(ALLOW);
-    expect(records[1]).toMatchObject({ status: "allowed", attribution: { source: "v2", v2: { policyName: "Ask first" } } });
-  });
-
-  test("a v2 block never reaches the hold resolver", () => {
-    const noShell = entry("No shell", "agent", "active", doc("no-shell", AGENT, "      run_command: block\n"));
-    const { policy, log } = setup();
-    const handle = createDecisionHandler({
-      decide: decideWith(),
-      policy,
-      bundle: fixedBundle([noShell]),
-      mcpGate: createMcpGate({ access: () => null, log, ownServer: "armoriq" }),
-      guard: { home, protectedPaths: guardPaths(home) },
-      log,
-      resolveHold: () => Promise.reject(new Error("must not be called")),
-    });
-    expect(handle(hook("PreToolUse", runCommand("ls")))).toMatchObject({ decision: "deny" });
   });
 
   test("a v2 allow does not loosen a local forbid", () => {
