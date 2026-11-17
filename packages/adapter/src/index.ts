@@ -30,6 +30,18 @@ export {
   type PolicySourceOptions,
   type RefreshOutcome,
 } from "./policy-source.ts";
+export {
+  BUNDLE_REVALIDATE_MS,
+  createPolicyBundle,
+  decideV2,
+  parseBundleAgent,
+  V2_AGENT,
+  type PolicyBundle,
+  type PolicyBundleOptions,
+  type V2Agent,
+  type V2BundleOutcome,
+  type V2Outcome,
+} from "./policy-v2.ts";
 export { segmentedPolicy } from "./shell-policy.ts";
 export { createMcpGate, parseServerList, type McpGate, type McpGateOptions, type McpServerStatus, type McpVerdict, type SyncOutcome } from "./mcp-gate.ts";
 export {
@@ -41,5 +53,8 @@ export {
   type DecisionHandlerOptions,
   type DecisionRecord,
   type HookInput,
+  type PolicyAttribution,
+  type PolicySourceKind,
+  v2CallOf,
 } from "./decision.ts";
 export { ANTIGRAVITY, ANTIGRAVITY_TOOLS, compileAntigravityPolicy, createCoreDecide, type SessionPair } from "./product.ts";
