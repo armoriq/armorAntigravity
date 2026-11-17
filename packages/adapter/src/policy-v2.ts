@@ -5,7 +5,9 @@ import { isRecord } from "./tools.ts";
 
 // The product slug conmap resolves to this org's Antigravity agent (policy v2 shared contract).
 export const V2_AGENT = "armorantigravity";
-export const BUNDLE_REVALIDATE_MS = 60_000;
+// Half the 60 s a console edit must take to reach every device, so a slow fetch still lands in time;
+// an unchanged bundle costs a 304.
+export const BUNDLE_REVALIDATE_MS = 30_000;
 
 export type V2Policy = {
   readonly policyId: string;
