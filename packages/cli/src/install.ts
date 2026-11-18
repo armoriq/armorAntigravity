@@ -1,6 +1,6 @@
 import rules from "@armorantigravity/mcp/rules/armoriq.md" with { type: "text" };
+import { dialSocket, resolveSocketPath } from "@armorantigravity/protocol/socket";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { createConnection } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import path from "node:path";
 import { isEmptyObjectAt, removeMember, setMember, type Json, type JsonObject } from "./jsonc.ts";
@@ -42,10 +42,12 @@ export interface Layout {
   readonly lockFile: string;
 }
 
-export function layout(home: string): Layout {
+// `env` is the environment whose daemon to find. The installer leaves it empty: the service it starts
+// does not inherit the shell's ARMORIQ_HOME or ARMORANTIGRAVITY_SOCKET.
+export function layout(home: string, env: Readonly<Record<string, string | undefined>> = {}): Layout {
   const geminiConfig = path.join(home, ".gemini", "config");
   const dataDir = path.join(home, ".armoriq", PRODUCT);
-  const socket = path.join(dataDir, "agd.sock");
+  const socket = resolveSocketPath(env, home);
   return {
     home,
     geminiConfig,
@@ -390,7 +392,7 @@ export async function waitForSocket(socket: string, timeoutMs: number): Promise<
 
 function connects(socket: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const conn = createConnection(socket);
+    const conn = dialSocket(socket);
     conn.once("connect", () => {
       conn.destroy();
       resolve(true);

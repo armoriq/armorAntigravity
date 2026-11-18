@@ -174,7 +174,7 @@ async function cmdLogin(args: string[]): Promise<number> {
 }
 
 async function cmdStatus(): Promise<number> {
-  const l = layout(home);
+  const l = layout(home, process.env);
   const backend = installedBackend();
   console.log(bold(`ArmorAntigravity ${pkg.version}`));
   info(`installed: ${existsSync(l.manifestFile) ? "yes" : "no"}`);
