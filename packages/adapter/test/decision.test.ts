@@ -435,6 +435,12 @@ describe("policy v2", () => {
     expect(records[0]?.attribution.source).toBe("v2");
   });
 
+  test("a call only the v2 default allows is recorded as the default, not credited to the policy", () => {
+    const { handle, records } = setup({ bundle: fixedBundle([noShell]) });
+    expect(handle(hook("PreToolUse", stdinOf("pre-read_file")))).toEqual(ALLOW);
+    expect(records[0]?.attribution).toEqual({ source: "default", v2: null, ruleId: "tools.default", shadow: [] });
+  });
+
   test("without a v2 policy the local file decides and is recorded", () => {
     const { handle, records } = setup({ policy: rule("no-shell-local", "forbid", "run_command"), bundle: fixedBundle([]) });
     expect(handle(hook("PreToolUse", runCommand("ls")))).toMatchObject({ decision: "deny" });
