@@ -1,6 +1,6 @@
 import { PROTOCOL_VERSION, type McpOutcomeRequest } from "@armorantigravity/protocol";
+import { dialSocket } from "@armorantigravity/protocol/socket";
 import { randomUUID } from "node:crypto";
-import { createConnection } from "node:net";
 import type { AskDaemon } from "./server.ts";
 
 // One request per connection: the daemon answers one line and the socket closes.
@@ -8,7 +8,7 @@ export function daemonAsker(socketPath: string, waitMs: number): AskDaemon {
   return (tool, args) =>
     new Promise((resolve) => {
       const request: McpOutcomeRequest = { v: PROTOCOL_VERSION, id: randomUUID(), kind: "mcp_outcome", tool, args, waitMs };
-      const socket = createConnection(socketPath);
+      const socket = dialSocket(socketPath);
       let buffer = "";
       const finish = (text: string | null) => {
         clearTimeout(timer);
