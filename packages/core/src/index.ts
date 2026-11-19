@@ -1,4 +1,6 @@
 export * from "./types.ts";
+export { RUNS, runReport, settleRunRequest, runTransportId, type RunBinding, type RunEndReason, type RunReport, type RunRequestOutcome, type RunState } from "./core/runs.ts";
+export type { JournalCheckpoint } from "./io/outbox.ts";
 export type { Capability } from "./core/capability.ts";
 export type { ProductConfig, ToolVocabulary } from "./product.ts";
 export { MAX_PARAM_CHARS, redactText, sanitizeParams } from "./sanitize.ts";
@@ -42,4 +44,5 @@ export {
 } from "./usage.ts";
 export { createOutbox, MAX_ATTEMPTS, ROTATE_BYTES, type Outbox, type SendResult, type QueueLogin, type OutboxStatus } from "./outbox.ts";
 export { AUDIT_SIZE_LIMITS } from "./io/audit-size.ts";
+export { CLIENT_EVENTS, clientEvent, type ClientEvent, type DeadLetterReason, type EventQueue, type EventType, type PlanFailureReason, type StallReason } from "./core/client-events.ts";
 export { isAlive, tryLock, withLock } from "./shared-lock.ts";

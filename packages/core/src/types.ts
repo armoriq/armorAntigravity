@@ -1,7 +1,6 @@
 // Shared contract for every module. See docs/architecture.md, section 4.
 
 import type { Capability } from "./core/capability.ts";
-export type { Capability };
 
 export type SessionID = string & { readonly __brand: "SessionID" };
 export type Mode = "enforce" | "monitor";

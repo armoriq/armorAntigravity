@@ -106,7 +106,7 @@ test("logged out stops create no queue, while missing identity stays a local cap
   expect(existsSync(dir)).toBe(false);
   await captureFallback(dir, identity, 1_000, null);
   const outbox = createOutbox(dir, "audit", quiet, { login: () => binding });
-  expect(outbox.status()).toEqual({ pending: 0, undeliverable: 0, deadLetters: 0, captureFailures: 1, legacyPending: 0, corruptRecords: 0 });
+  expect(outbox.status()).toEqual({ pending: 0, undeliverable: 0, deadLetters: 0, captureFailures: 1, legacyPending: 0, corruptRecords: 0, holds: [] });
   await outbox.persist();
 });
 
@@ -119,7 +119,7 @@ test("status counts paused rows, other login rows, dead letters and capture fail
   outbox.captureFailure();
   await outbox.drain(async () => ({ ok: false, relogin: true }));
   await outbox.persist();
-  const expected = { pending: 1, undeliverable: 1, deadLetters: 1, captureFailures: 1, legacyPending: 0, corruptRecords: 0 };
+  const expected = { pending: 1, undeliverable: 1, deadLetters: 1, captureFailures: 1, legacyPending: 0, corruptRecords: 0, holds: [] };
   expect(await auditStatus(env)).toEqual(expected);
   expect(await auditStatus({ ...env, ARMORIQ_API_KEY: "ak_test_other_login" })).toEqual(expected);
 });
@@ -127,9 +127,8 @@ test("status counts paused rows, other login rows, dead letters and capture fail
 test("repeated status calls create no queue writers", async () => {
   const { dir, env } = store();
   await auditStatus(env);
-  const queues = () => readdirSync(path.join(dir, "outbox", "audit-v2")).filter(file => /^queue-\d+-[0-9a-f]+\.jsonl$/.test(file));
-  expect(queues()).toEqual([]);
+  expect(existsSync(path.join(dir, "outbox", "audit-v2"))).toBe(false);
   await auditStatus(env);
   await auditStatus(env);
-  expect(queues()).toEqual([]);
+  expect(existsSync(path.join(dir, "outbox", "audit-v2"))).toBe(false);
 });
