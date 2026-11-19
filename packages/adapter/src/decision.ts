@@ -1,10 +1,12 @@
 import type { HookPayload, HookResponse, ToolDecision } from "@armorantigravity/protocol";
+import path from "node:path";
 import type { CompiledPolicy, CoreToolCall, Decision, DenyCode, Log, Mode, SessionID } from "./core-contract.ts";
 import { checkGuard } from "./guard.ts";
 import type { McpGate } from "./mcp-gate.ts";
-import type { PolicySource } from "./policy-source.ts";
+import type { PolicyOrigin, PolicySource } from "./policy-source.ts";
+import { decideV2, type PolicyBundle, type V2Call, type V2Outcome, type V2Verdict } from "./policy-v2.ts";
 import { segmentedPolicy } from "./shell-policy.ts";
-import { BUILTIN_MCP_SERVERS, mapToolCall, mcpPart, mcpToolName, type MapOptions, type MappedCall } from "./tools.ts";
+import { BUILTIN_MCP_SERVERS, mapToolCall, mcpPart, mcpToolName, nameReadings, type MapOptions, type MappedCall } from "./tools.ts";
 
 // The part of the daemon's HookContext (packages/daemon/src/plugin.ts) the
 // adapter reads; the daemon's own type is assignable to it.
@@ -25,6 +27,19 @@ export type AdapterDecision =
 
 export type AuditStatus = "blocked" | "held" | "allowed";
 
+export type PolicySourceKind = "v2" | "v1_org" | "local" | "default" | "builtin";
+
+type V2Ref = { readonly policyId: string; readonly policyName: string; readonly policyHash: string | null; readonly rule: string };
+
+// Which layer decided, for audit rows: a v2 policy, the org's v1 profile, the local
+// policy.json, the built-in default, or one of the guard's own rules.
+export type PolicyAttribution = {
+  readonly source: PolicySourceKind;
+  readonly v2: V2Ref | null;
+  readonly ruleId: string | null;
+  readonly shadow: readonly (V2Ref & { readonly verdict: V2Verdict["verdict"] })[];
+};
+
 // Everything the audit and trace pumps need for a PreToolUse verdict: a
 // `held` row for ask and force_ask, `blocked` for deny.
 export type DecisionRecord = {
@@ -35,11 +50,16 @@ export type DecisionRecord = {
   readonly decision: AdapterDecision;
   readonly status: AuditStatus;
   readonly response: HookResponse;
+  readonly attribution: PolicyAttribution;
 };
 
 export type DecisionHandlerOptions = {
   readonly decide: DecideFn;
   readonly policy: PolicySource;
+  // Policy v2: when it holds an active document for this agent, its verdict applies on top of
+  // v1 and the local file, and the stricter of the two wins.
+  readonly bundle?: PolicyBundle;
+  readonly userEmail?: () => string | undefined;
   readonly mcpGate: McpGate;
   readonly guard: { readonly home: string; readonly protectedPaths: readonly string[] };
   readonly map?: MapOptions;
@@ -79,14 +99,103 @@ function internalError(error: unknown): Decision {
   return { kind: "deny", code: "internal_error" satisfies DenyCode, reason: `ArmorIQ could not check this call: ${String(error)}`, ruleId: null };
 }
 
+const RANK: Record<AdapterDecision["kind"], number> = { allow: 0, ask: 1, hold: 2, deny: 3 };
+const BUILTIN = (ruleId: string | null): PolicyAttribution => ({ source: "builtin", v2: null, ruleId, shadow: [] });
+const ORIGIN_SOURCE: Record<PolicyOrigin, PolicySourceKind> = { backend: "v1_org", file: "local", default: "default", fail_closed: "local" };
+
+function v2Ref(v: V2Verdict): V2Ref | null {
+  return v.policy ? { policyId: v.policy.policyId, policyName: v.policy.name, policyHash: v.policy.policyHash, rule: v.rule } : null;
+}
+
+function v2Decision(v: V2Verdict): AdapterDecision {
+  const named = v.policy ? `ArmorIQ policy "${v.policy.name}"` : "ArmorIQ";
+  const ruleId = v.policy ? `v2:${v.policy.policyId}:${v.rule}` : `v2:${v.rule}`;
+  if (v.verdict === "block") {
+    const reason = v.policy ? `${named} blocks this call (rule ${v.rule})` : "this agent is deactivated in the ArmorIQ console";
+    return { kind: "deny", code: "policy_forbid", reason, ruleId };
+  }
+  if (v.verdict === "hold") return { kind: "hold", ruleId, reason: `${named} requires approval for this call (rule ${v.rule})` };
+  return { kind: "allow", stepIndex: null, paramMismatch: false };
+}
+
+// policy-ir CAPABILITY_KEYS; `files` and `network` are what spec.files and spec.network rules match on.
+const CAPABILITIES: Partial<Record<MappedCall["category"], readonly string[]>> = { shell: ["shell"], write: ["file.write", "files"], read: ["file.read", "files"], subagent: ["subagent"] };
+
+function homeRelative(p: string, home: string): string {
+  return p === home ? "~" : p.startsWith(home + "/") ? `~${p.slice(home.length)}` : p;
+}
+
+export function v2CallOf(call: MappedCall, home: string, at: number, userEmail: string | undefined, workspace: string | null = null): V2Call {
+  const text = (k: string) => (typeof call.args[k] === "string" ? (call.args[k] as string) : undefined);
+  const names = call.category === "mcp" ? [call.mcp.tool, call.tool, call.name] : [...nameReadings(call.tool), call.name];
+  const capabilities = call.category === "web" ? (call.tool === "search_web" ? ["web.search"] : ["web.fetch", "network"]) : [...(CAPABILITIES[call.category] ?? [])];
+  const derived: Record<string, unknown> = {};
+  const command = text("command");
+  const file = text("filePath") ?? text("path");
+  const url = text("url");
+  if (call.category === "shell" && command !== undefined) derived.command = command;
+  if (file !== undefined) {
+    derived.path = homeRelative(file, home);
+    if (workspace !== null && path.isAbsolute(file)) {
+      const rel = path.relative(workspace, path.resolve(file));
+      derived.withinWorkspace = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    }
+  }
+  if (url !== undefined) {
+    derived.url = url;
+    // A browser navigation reaches a host too, so network rules apply to it.
+    if (!capabilities.includes("network")) capabilities.push("network");
+    try {
+      derived.host = new URL(url).hostname;
+    } catch {}
+  }
+  return {
+    names: [...new Set(names)],
+    ...(call.category === "mcp" ? { mcpServer: call.mcp.server } : {}),
+    args: call.args,
+    capabilities,
+    derived,
+    ...(userEmail ? { userEmail } : {}),
+    at,
+  };
+}
+
 export function createDecisionHandler(options: DecisionHandlerOptions): (hook: HookInput) => HookResponse {
   const { log } = options;
 
-  const judge = (call: MappedCall, conversationId: string, stepIdx: number, workspace: string | null, mode: Mode, now: number): AdapterDecision => {
+  type Judged = { decision: AdapterDecision; attribution: PolicyAttribution };
+
+  const judge = (call: MappedCall, conversationId: string, stepIdx: number, workspace: string | null, mode: Mode, now: number): Judged => {
     if (!isSessionId(conversationId)) throw new Error("conversationId is empty");
     const guard = checkGuard(call, { ...options.guard, workspace });
-    if (guard) return { kind: "deny", code: "builtin_protected", reason: guard.reason, ruleId: "builtin:guard_files" };
+    if (guard) return { decision: { kind: "deny", code: "builtin_protected", reason: guard.reason, ruleId: "builtin:guard_files" }, attribution: BUILTIN("builtin:guard_files") };
 
+    const local = judgeLocal(call, conversationId, stepIdx, mode, now);
+    // Monitor still enforces v1 policy (it only skips intent checks), so v2 applies in both modes;
+    // signed out, the bundle is empty.
+    const v2 = decideV2(options.bundle?.current() ?? null, v2CallOf(call, options.guard.home, now, options.userEmail?.(), workspace));
+    return combine(local, v2);
+  };
+
+  const combine = (local: Judged, v2: V2Outcome | null): Judged => {
+    const shadow = (v2?.shadow ?? []).flatMap((s) => {
+      const ref = v2Ref(s);
+      return ref ? [{ ...ref, verdict: s.verdict }] : [];
+    });
+    for (const s of shadow) if (s.verdict !== "allow") log.info("shadow v2 policy would not allow this call", { policy: s.policyName, verdict: s.verdict, rule: s.rule });
+    const enforced = v2?.enforced;
+    if (!enforced) return { decision: local.decision, attribution: { ...local.attribution, shadow } };
+    const attribution: PolicyAttribution =
+      enforced.verdict === "allow" && enforced.rule === "tools.default"
+        ? { source: "default", v2: null, ruleId: enforced.rule, shadow }
+        : { source: "v2", v2: v2Ref(enforced), ruleId: null, shadow };
+    const decision = v2Decision(enforced);
+    // Ties go to v2 so a block names its policy; two allows keep the local one, which carries the plan step.
+    if (RANK[decision.kind] < RANK[local.decision.kind]) return { decision: local.decision, attribution: { ...local.attribution, shadow } };
+    return { decision: decision.kind === "allow" ? local.decision : decision, attribution };
+  };
+
+  const judgeLocal = (call: MappedCall, conversationId: SessionID, stepIdx: number, mode: Mode, now: number): Judged => {
     const active = options.policy.current();
     const policy = segmentedPolicy(active.policy, { isShell: (c) => c.tool === "run_command", home: options.guard.home });
     const core: CoreToolCall = {
@@ -96,26 +205,34 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
       args: call.args,
     };
     const decision = options.decide({ call: core, policy, mode, now });
-    if (decision.kind !== "allow" || call.category !== "mcp" || mode === "monitor") return decision;
+    const fromPolicy = (d: AdapterDecision): Judged => {
+      const ruleId = d.kind === "deny" || d.kind === "hold" ? d.ruleId : null;
+      const builtin = d.kind === "deny" && d.code !== "policy_forbid";
+      return { decision: d, attribution: builtin ? BUILTIN(ruleId) : { source: ORIGIN_SOURCE[active.origin], v2: null, ruleId, shadow: [] } };
+    };
+    if (decision.kind !== "allow" || call.category !== "mcp" || mode === "monitor") return fromPolicy(decision);
 
     const server = call.mcp.server;
     const verdict = options.mcpGate.check(server);
-    if (verdict.kind === "approved") return decision;
+    if (verdict.kind === "approved") return fromPolicy(decision);
     if (verdict.kind === "denied") {
-      return { kind: "deny", code: "mcp_server_denied", reason: `MCP server "${server}" is denied on this device`, ruleId: null };
+      return { decision: { kind: "deny", code: "mcp_server_denied", reason: `MCP server "${server}" is denied on this device`, ruleId: null }, attribution: BUILTIN("builtin:mcp_server_denied") };
     }
     // A policy statement that names this server or tool approves it. A wildcard
     // permit, the built-in allow-all included, also matches the probe and does not.
     const named = policy.evaluate(core);
     if (named.effect === "permit" && named.ruleId !== null && !foldsAmbiguously(server, options.map?.knownMcpServers)) {
       const probe = policy.evaluate({ ...core, tool: mcpToolName(PROBE) });
-      if (probe.ruleId !== named.ruleId) return decision;
+      if (probe.ruleId !== named.ruleId) return fromPolicy(decision);
     }
     return {
-      kind: "ask",
-      code: "mcp_server_unapproved",
-      server,
-      reason: `ArmorIQ: MCP server "${server}" is not approved. Approve this call, or have an admin register "${server}" in the ArmorIQ console.`,
+      decision: {
+        kind: "ask",
+        code: "mcp_server_unapproved",
+        server,
+        reason: `ArmorIQ: MCP server "${server}" is not approved. Approve this call, or have an admin register "${server}" in the ArmorIQ console.`,
+      },
+      attribution: BUILTIN("builtin:mcp_server_unapproved"),
     };
   };
 
@@ -123,13 +240,14 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     const { payload, mode } = hook;
     if (payload.event !== "PreToolUse") return NO_OPINION;
     const call = mapToolCall(payload.toolCall, options.map);
-    let decision: AdapterDecision;
+    let judged: Judged;
     try {
-      decision = judge(call, payload.conversationId, payload.stepIdx, payload.workspacePaths[0] ?? null, mode, hook.receivedAt);
+      judged = judge(call, payload.conversationId, payload.stepIdx, payload.workspacePaths[0] ?? null, mode, hook.receivedAt);
     } catch (error) {
       log.error("decision failed", { tool: call.name, error: String(error) });
-      decision = mode === "enforce" ? internalError(error) : { kind: "allow", stepIndex: null, paramMismatch: false };
+      judged = { decision: mode === "enforce" ? internalError(error) : { kind: "allow", stepIndex: null, paramMismatch: false }, attribution: BUILTIN("builtin:internal_error") };
     }
+    const { decision, attribution } = judged;
     const response = toHookResponse(decision);
     try {
       options.onDecision?.({
@@ -140,6 +258,7 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
         decision,
         status: statusOf(decision),
         response,
+        attribution,
       });
     } catch (error) {
       log.error("decision observer failed", { error: String(error) });

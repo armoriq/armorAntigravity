@@ -14,6 +14,7 @@
       "dependencies": {
         "@armorantigravity/core": "workspace:*",
         "@armorantigravity/protocol": "workspace:*",
+        "@armoriq/policy-ir": "0.1.9",
         "zod": "^4.6.6",
       },
     },
@@ -37,7 +38,7 @@
     },
     "packages/daemon": {
       "name": "@armorantigravity/daemon",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "armoriq-agd": "./src/main.ts",
       },
@@ -49,10 +50,13 @@
         "@armorantigravity/protocol": "workspace:*",
         "@armoriq/sdk-dev": "^0.8.17",
       },
+      "devDependencies": {
+        "@armoriq/policy-ir": "0.1.9",
+      },
     },
     "packages/evidence": {
       "name": "@armorantigravity/evidence",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@armorantigravity/core": "workspace:*",
         "@armorantigravity/protocol": "workspace:*",
@@ -61,15 +65,10 @@
     },
     "packages/hook": {
       "name": "@armorantigravity/hook",
-      "version": "0.1.0",
-      "bin": {
-        "agd-hook": "./src/main.ts",
-      },
-      "dependencies": {
-        "@armorantigravity/protocol": "workspace:*",
-      },
+      "version": "0.2.0",
       "devDependencies": {
         "@armorantigravity/daemon": "workspace:*",
+        "@armorantigravity/protocol": "workspace:*",
       },
     },
     "packages/intent": {
@@ -121,6 +120,8 @@
     "@armorantigravity/mcp": ["@armorantigravity/mcp@workspace:packages/mcp"],
 
     "@armorantigravity/protocol": ["@armorantigravity/protocol@workspace:packages/protocol"],
+
+    "@armoriq/policy-ir": ["@armoriq/policy-ir@0.1.9", "", { "dependencies": { "yaml": "^2.9.1" } }, "sha512-rCwZm096lzGieXoXi5Wr3hCGA0kWTEcZBtkcOBUptvbIZayUY8/Rr0VXcLPTcWNnHa5684PpGDVHFpybDI1neg=="],
 
     "@armoriq/sdk-dev": ["@armoriq/sdk-dev@0.8.17", "", { "dependencies": { "@opentelemetry/api": "^1.9.1", "@opentelemetry/core": "^2.10.0", "@opentelemetry/exporter-trace-otlp-http": "^0.221.0", "@opentelemetry/otlp-exporter-base": "^0.221.0", "@opentelemetry/otlp-transformer": "^0.221.0", "@opentelemetry/resources": "^2.10.0", "@opentelemetry/sdk-trace-base": "^2.10.0", "@opentelemetry/sdk-trace-node": "^2.10.0", "axios": "^1.7.0", "js-yaml": "^4.1.1" }, "bin": { "armoriq-dev": "dist/cli/index.js" } }, "sha512-PC9HiUNfL55LpkK2ZzQHoghTnLlLKGCTToom/rbtvUUID25jLJLV9Dbe62QdbP7HKxKNexYmgCksFdS39A7QHQ=="],
 
@@ -365,6 +366,8 @@
     "which": ["which@2.0.2", "", { "dependencies": { "isexe": "^2.0.0" }, "bin": { "node-which": "./bin/node-which" } }, "sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA=="],
 
     "wrappy": ["wrappy@1.0.2", "", {}, "sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ=="],
+
+    "yaml": ["yaml@2.9.1", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw=="],
 
     "zod": ["zod@4.6.6", "", {}, "sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA=="],
 
