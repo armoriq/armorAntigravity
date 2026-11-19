@@ -113,7 +113,7 @@ const notConfirmed = (reason: string) => `Plan registration not confirmed: ${rea
 export function createOwnTools(deps: OwnToolDeps): OwnTools {
   const { registry, backend, log } = deps;
   const now = deps.now ?? Date.now;
-  const validity = intentValiditySeconds(process.env, deps.validitySeconds ?? 3600);
+  const validity = deps.validitySeconds ?? intentValiditySeconds(process.env);
   const background = new Set<Promise<void>>();
   const outcomes = new Map<string, { text: string; conversation: ConversationKey; at: number }[]>();
   const waiters = new Map<string, ((text: string | null) => void)[]>();
@@ -162,11 +162,11 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     if (forbidden) return notRegistered(forbidden);
 
     const login = deps.login();
-    if (forceRevision && !revising) return notRegistered("no registered plan in the current prompt to reanchor");
     if (!login || deps.mode() === "monitor") {
       registry.setPlan(conv.key, { ...parsed.plan, id: "" }, null);
       return `Plan recorded locally, not registered (${login ? "monitor_mode" : "logged_out"}).`;
     }
+    if (forceRevision && !revising) return notRegistered("no registered plan in the current prompt to reanchor");
     if (!conv.promptId) return notRegistered("no current user prompt");
     if (!forceRevision && revising && conv.planHash === parsed.plan.hash && conv.token?.status === "active" && conv.token.jwt && conv.token.expiresAt > now()) {
       return describeRegistered(revising, conv.token, conv.kind === "revision" ? "revision" : "new", conv.countedPlanId!);
@@ -178,7 +178,7 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     const generation = registry.generation(conv.key)!;
     try {
       const kind = revising ? "revision" : "new";
-      const request = planRequest({ kind, promptId: conv.promptId, parentPlanId: conv.countedPlanId, planHash: parsed.plan.hash }, requestBody(login, parsed.plan, conv.ref.conversationId, validity, deps.mintPolicy?.()));
+      const request = planRequest({ kind, promptId: conv.promptId, parentPlanId: conv.countedPlanId, planHash: parsed.plan.hash, epoch: conv.retirementEpoch }, requestBody(login, parsed.plan, conv.ref.conversationId, validity, deps.mintPolicy?.()));
       const pending = conv.pendingRequest;
       if (pending && pending.key !== request.key && pending.headers["X-ArmorIQ-Plan-Kind"] !== "refresh") return notConfirmed("a different request is awaiting confirmation; retry that plan first");
       const descriptor = pending?.key === request.key ? pending : request;
@@ -205,11 +205,12 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
   }
 
   async function mint(login: Login, conv: Conversation, draft: Draft, revising: Plan | null, reason: string, generation: Generation, request: PendingRequest, kind: PlanKind): Promise<string> {
+    const previousTokenPlanId = conv.tokenPlanId ?? revising?.id;
     const cancelled = () => {
       registry.syncAuth(deps.login(), deps.mode());
       return !registry.isCurrent(conv.key, generation);
     };
-    const minted = await backend.mint(login, draft, conv.ref.conversationId, request, { cancelled });
+    const minted = await backend.mint(login, draft, conv.ref.conversationId, request, { cancelled, now });
     registry.syncAuth(deps.login(), deps.mode());
     if (!registry.isCurrent(conv.key, generation)) return notRegistered("the prompt or authentication changed while registration was in progress");
     if (!minted.ok) {
@@ -236,15 +237,15 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     registry.setPlan(conv.key, plan, token, generation, kind);
     if (revising) {
       registry.noteRevision(conv.key);
-      track(recordRevision(login, conv, { ...revising, id: request.headers["X-ArmorIQ-Parent-Plan-Id"]! }, plan, reason).catch(() => log.warn("reanchor failed", { conversationId: conv.ref.conversationId })));
+      track(recordRevision(login, conv, revising, plan, reason, previousTokenPlanId!).catch(() => log.warn("reanchor failed", { conversationId: conv.ref.conversationId })));
     }
     return describeRegistered(plan, token, minted.value.kind ?? kind, planId);
   }
 
-  async function recordRevision(login: Login, conv: Conversation, previous: Plan, plan: Plan, reason: string): Promise<void> {
+  async function recordRevision(login: Login, conv: Conversation, previous: Plan, plan: Plan, reason: string, tokenPlanId: string): Promise<void> {
     let trustId: string | null = null;
     const { id: _id, ...unminted } = plan;
-    const r = await backend.reanchor(login, previous.id, unminted, reason);
+    const r = await backend.reanchor(login, tokenPlanId, unminted, reason);
     if (r.ok) trustId = r.value.trustId;
     else log.warn("reanchor failed", { conversationId: conv.ref.conversationId, reason: r.reason });
     try {
@@ -285,7 +286,7 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     const generation = registry.generation(conv.key)!;
     try {
       if (login && conv.plan.id) {
-        const r = await backend.revoke(login, conv.plan.id, reason);
+        const r = await backend.revoke(login, conv.tokenPlanId ?? conv.plan.id, reason);
         registry.syncAuth(deps.login(), deps.mode());
         if (!registry.isCurrent(conv.key, generation)) return "The previous prompt or login state was retired while revoking its plan.";
         if (!r.ok) return `Revoke failed: ${r.reason}. The plan is still registered.`;
@@ -315,7 +316,7 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       ...(typeof validity === "number" ? { validitySeconds: validity } : {}),
       ...(str(args.targetAgent) ? { targetAgent: str(args.targetAgent) } : {}),
     };
-    const r = await backend.delegate(login, conv.plan.id, request);
+    const r = await backend.delegate(login, conv.tokenPlanId ?? conv.plan.id, request);
     if (!r.ok) return `Delegate failed: ${r.reason}`;
     return `Delegation issued. trustId=${r.value.trustId ?? "n/a"} subtreePath=${subtreePath} subtreeRoot=${r.value.subtreeRoot || "n/a"} inclusionProofLength=${r.value.inclusionProofLength}`;
   }
@@ -412,5 +413,8 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
 
 function describeRegistered(plan: Plan, token: Token, kind: PlanKind, countedPlanId: string): string {
   if (token.status !== "active") return notRegistered(token.code);
-  return `Intent registered: plan ${countedPlanId} (${kind}), ${plan.steps.length} steps. Token valid until ${new Date(token.expiresAt).toISOString()}.`;
+  const lines = [`Intent registered: plan ${countedPlanId} (${kind}), ${plan.steps.length} steps. Token valid until ${new Date(token.expiresAt).toISOString()}.`];
+  if (token.deniedTools.size) lines.push(`Denied by backend: ${[...token.deniedTools].join(", ")}`);
+  if (token.heldTools.size) lines.push(`Held for approval by backend: ${[...token.heldTools].join(", ")}`);
+  return lines.join("\n");
 }

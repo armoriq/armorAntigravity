@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { createSdkBackend, logLegacyBackend, parseRetryAfter, toSdkPlan } from "../src/backend.ts";
+import { createSdkBackend, logLegacyBackend, parseRetryAfter, toSdkPlan, type ClientIdentity } from "../src/backend.ts";
+import { AGENT_ID, CLIENT_ID } from "../src/types.ts";
+import contract from "./fixtures/plan-capture-v1.json";
 import { planRequest, requestBody } from "../src/plan-request.ts";
 import { LOGIN, silentLog } from "./helpers.ts";
 import * as sdk from "@armoriq/sdk-dev";
@@ -33,7 +35,7 @@ describe("mint payload pieces", () => {
   });
 });
 
-function transport(responses: { status?: number; error?: string; stall?: boolean; headers?: Record<string, string>; data?: unknown }[]) {
+function transport(responses: { status?: number; error?: string; stall?: boolean; headers?: Record<string, string>; data?: unknown }[], client: ClientIdentity = { product: `${CLIENT_ID}-dev`, version: "0.0.0" }) {
   const calls: { body: Record<string, unknown>; headers: Record<string, string>; timeout: number }[] = [];
   const loadSdk = async () => ({ ...sdk, ArmorIQClient: class extends sdk.ArmorIQClient {
     constructor(options: ConstructorParameters<typeof sdk.ArmorIQClient>[0]) {
@@ -47,13 +49,30 @@ function transport(responses: { status?: number; error?: string; stall?: boolean
       };
     }
   } });
-  return { calls, backend: createSdkBackend({ client: { product: "armorantigravity-dev", version: "0.0.0" }, loadSdk }) };
+  return { calls, backend: createSdkBackend({ client, loadSdk }) };
 }
 
 const draft = { hash: "hash", goal: "g", steps: [{ action: "run_command", tool: "run_command" }], revision: 1, registeredInMessage: "prompt" };
 const descriptor = () => planRequest({ kind: "new", promptId: "prompt", planHash: "hash" }, requestBody(LOGIN, draft, "root", 180));
 
 describe("durable token transport", () => {
+  for (const product of [CLIENT_ID, `${CLIENT_ID}-dev`]) {
+    test(`${product} sends the identity defined by the contract fixture`, async () => {
+      const identity = contract.identity.find(entry => entry.plugin === "ArmorAntigravity")!;
+      const t = transport([{}], { product, version: "0.0.0" });
+      expect((await t.backend.mint(LOGIN, draft, "root", descriptor())).ok).toBe(true);
+      expect(AGENT_ID).toBe(identity.agentId);
+      expect(t.calls[0]?.body.agent_id).toBe(identity.agentId);
+      expect(t.calls[0]?.body.context_id).toBe("root");
+      const clientPattern = identity.clientHeaderPattern.replace("[-dev]", "(?:-dev)?").replace("<v>", "0\\.0\\.0");
+      expect(t.calls[0]?.headers["X-ArmorIQ-Client"]).toMatch(new RegExp(`^${clientPattern}$`));
+    });
+  }
+
+  test("response expiry uses the request clock", async () => {
+    const t = transport([{ data: { success: true, plan_id: "plan-1", kind: "new", jwt_token: "jwt", token: { expires_at: 180 } } }]);
+    expect(await t.backend.mint(LOGIN, draft, "root", descriptor(), { now: () => 0 })).toMatchObject({ ok: true, value: { token: { expiresAt: 180_000 } } });
+  });
   test("timeouts retry the saved request and leave its outcome unconfirmed", async () => {
     const t = transport([{ stall: true }, { stall: true }]);
     const request = descriptor();

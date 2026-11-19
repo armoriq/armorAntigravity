@@ -69,6 +69,40 @@ function setup(mintResult: () => CallResult<Minted>, onUnauthorized?: () => void
 }
 
 describe("token pump", () => {
+  test("a slow pre tool refresh returns within the hook budget and stays single flight", async () => {
+    const s = setup(() => ({ ok: true, value: { planId: "refresh-1", token: { status: "active", jwt: "j", expiresAt: 9e12, deniedTools: new Set(), heldTools: new Set() } } }));
+    let release!: () => void;
+    s.onMint(() => new Promise<void>(resolve => { release = resolve; }));
+    s.registry.setToken(KEY, s.token(s.now()));
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const guards = Promise.all([s.pump.beforeTool(KEY), s.pump.beforeTool(KEY)]).then(() => "returned");
+      const result = await Promise.race([guards, new Promise<string>(resolve => { timeout = setTimeout(() => resolve("hook still waiting"), 4000); })]);
+      expect(result).toBe("returned");
+      expect(s.mints).toHaveLength(1);
+      expect(s.registry.get(KEY)?.tokenPlanId).toBe("plan-1");
+    } finally {
+      clearTimeout(timeout);
+      release();
+      await s.cycle();
+      await s.pump.stop();
+    }
+  });
+
+  for (const retirement of ["idle", "expired", "session_end", "shutdown"] as const) {
+    test(`${retirement} revokes the live token after a refresh`, async () => {
+      const s = setup(() => ({ ok: true, value: { planId: "refresh-1", token: { status: "active", jwt: "j", expiresAt: 9e12, deniedTools: new Set(), heldTools: new Set() } } }));
+      s.registry.setToken(KEY, s.token(s.now()));
+      await s.pump.beforeTool(KEY);
+      expect(s.registry.get(KEY)?.tokenPlanId).toBe("refresh-1");
+      if (retirement === "shutdown") await s.pump.stop();
+      if (retirement === "session_end") s.pump.revoke(KEY, "session ended");
+      if (retirement === "idle") { s.pump.noteStop(KEY); s.idle(1001); await s.cycle(); }
+      if (retirement === "expired") { s.idle(24 * 60 * 60_000); await s.cycle(); }
+      expect(s.revokes.map(r => r.planId)).toContain("refresh-1");
+    });
+  }
+
   test("validity 180 refreshes at sixty seconds remaining with the fixture key", async () => {
     const s = setup(() => ({ ok: false, retryable: true, reason: "network error" }), undefined, { validitySeconds: 180 });
     const expiry = s.now() + 180_000;
@@ -166,17 +200,18 @@ describe("token pump", () => {
     expect(s.mints).toHaveLength(1);
     expect(s.registry.get(KEY)?.countedPlanId).toBe("plan-1");
   });
-  test("a 401 on refresh reports signed out and keeps the plan and its token for when the key is accepted again", async () => {
+  test("a 401 on refresh signs out and retires the plan through the daemon auth path", async () => {
     let unauthorized = 0;
-    const s = setup(() => ({ ok: true, value: { planId: "", token: { status: "refused", code: "account_revoked" } } }), () => unauthorized++);
-    const before = s.registry.get(KEY)?.token;
+    let login: Login | null = LOGIN;
+    const s = setup(() => ({ ok: true, value: { planId: "", token: { status: "refused", code: "account_revoked" } } }), () => { unauthorized++; login = null; }, { login: () => login, mode: () => login ? "enforce" : "monitor" });
     s.advance(3_600_000 - 59_000);
     s.registry.open(REF);
     await s.cycle();
     expect(s.mints).toEqual(["conv-1"]);
     expect(unauthorized).toBe(1);
-    expect(s.registry.get(KEY)?.token).toBe(before);
-    expect(s.registry.get(KEY)?.plan?.id).toBe("plan-1");
+    expect(s.registry.get(KEY)?.token).toBeNull();
+    expect(s.registry.get(KEY)?.plan).toBeNull();
+    expect(s.registry.get(KEY)?.retirementEpoch).toBe(1);
   });
 
   test("refreshes with the raw conversationId and keeps the counted plan and step cursor", async () => {

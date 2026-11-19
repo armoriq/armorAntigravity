@@ -63,7 +63,7 @@ export interface IntentRuntime {
 export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
   const now = opts.now ?? Date.now;
   const validitySeconds = intentValiditySeconds(process.env);
-  const registry = createRegistry(now, opts.stateFile);
+  const registry = createRegistry(now, opts.stateFile, opts.log);
   const syncAuth = () => registry.syncAuth(opts.login(), opts.mode());
   syncAuth();
   const backend = opts.backend ?? createSdkBackend({ client: opts.client });
@@ -116,7 +116,7 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
           // user message, so it must not reset the revision counter.
           const messaged = childMessagedAt.get(key);
           const fromChild = messaged !== undefined && now() - messaged < CHILD_MESSAGE_WINDOW_MS;
-          if (payload.invocationNum === 0 && !fromChild && !linker.mightBeChild(ref)) registry.beginPrompt(key, payload.initialNumSteps);
+          if (payload.invocationNum === 0 && !fromChild) registry.beginPrompt(key, payload.initialNumSteps);
           return;
         }
         case "PreToolUse": {

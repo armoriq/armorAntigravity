@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { checkIntent } from "../src/decision.ts";
 import { AMBIGUOUS_OUTCOME, callDigest, createOwnTools, ownToolName } from "../src/own-tools.ts";
 import { createRegistry } from "../src/registry.ts";
-import { conversationKey, type ConversationRef, type PolicyView } from "../src/types.ts";
+import { conversationKey, type ConversationRef, type IntentBackend, type Login, type Minted, type Mode, type PolicyView } from "../src/types.ts";
+import { createTokenPump } from "../src/pump.ts";
 import { harness, LOGIN, permitAll, recordingBackend, silentLog } from "./helpers.ts";
 import { planHash, requestKey } from "../src/plan-request.ts";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -45,6 +46,121 @@ describe("parallel conversations", () => {
 });
 
 describe("registration rules", () => {
+  test("an injected validity is stable when the environment changes after startup", async () => {
+    const previous = process.env.ARMORIQ_INTENT_VALIDITY_SECONDS;
+    const registry = createRegistry();
+    const rec = recordingBackend();
+    let tools: ReturnType<typeof createOwnTools>;
+    try {
+      process.env.ARMORIQ_INTENT_VALIDITY_SECONDS = "3600";
+      tools = createOwnTools({ registry, backend: rec.backend, login: () => LOGIN, mode: () => "enforce", validitySeconds: 180, policy: () => permitAll, audit() {}, log: silentLog });
+    } finally {
+      if (previous === undefined) delete process.env.ARMORIQ_INTENT_VALIDITY_SECONDS;
+      else process.env.ARMORIQ_INTENT_VALIDITY_SECONDS = previous;
+    }
+    registry.open(A);
+    registry.beginPrompt(conversationKey(A), 0);
+    await tools.handle(A, "register_intent_plan", plan("g", "run_command"));
+    expect(rec.mints[0]?.request.body.expires_in).toBe(180);
+  });
+
+  test.each(["logged_out", "monitor_mode"])("reanchor records a local plan in %s", async state => {
+    const registry = createRegistry();
+    const rec = recordingBackend();
+    const tools = createOwnTools({ registry, backend: rec.backend, login: () => state === "logged_out" ? null : LOGIN, mode: () => "monitor", policy: () => permitAll, audit() {}, log: silentLog });
+    expect(await tools.handle(A, "trust_reanchor", { updatedPlan: plan("g", "run_command"), reason: "changed" })).toBe(`Plan recorded locally, not registered (${state}).`);
+    expect(registry.get(conversationKey(A))?.unregisteredLocalPlan?.goal).toBe("g");
+    expect(rec.mints).toEqual([]);
+  });
+
+  test("a confirmed reply keeps the denied and held tool guidance", async () => {
+    const h = harness();
+    const args = plan("g", "run_command");
+    await h.tools.handle(A, "register_intent_plan", args);
+    h.registry.setToken(conversationKey(A), { status: "active", jwt: "jwt", expiresAt: 9e12, deniedTools: new Set(["write_to_file"]), heldTools: new Set(["run_command"]) });
+    const reply = await h.tools.handle(A, "register_intent_plan", args);
+    expect(reply).toStartWith("Intent registered: plan plan-1 (new), 1 steps.");
+    expect(reply).toContain("Denied by backend: write_to_file");
+    expect(reply).toContain("Held for approval by backend: run_command");
+  });
+
+  for (const retirement of ["revoke", "mode", "login"] as const) {
+    test(`the same plan after ${retirement} cannot replay a retired backend response`, async () => {
+      let clock = Date.now();
+      let login: Login | null = LOGIN;
+      let mode: Mode = "enforce";
+      const registry = createRegistry(() => clock);
+      registry.syncAuth(login, mode);
+      registry.open(A);
+      registry.beginPrompt(conversationKey(A), 0);
+      const ledger = new Map<string, Minted>();
+      const keys: string[] = [];
+      const backend: IntentBackend = { ...recordingBackend().backend, async mint(_login, _draft, _context, request) {
+        keys.push(request.key);
+        let value = ledger.get(request.key);
+        if (!value) {
+          value = { planId: `plan-${ledger.size + 1}`, token: { status: "active", jwt: "jwt", expiresAt: clock + 180_000, deniedTools: new Set(), heldTools: new Set() } };
+          ledger.set(request.key, value);
+        }
+        return { ok: true, value };
+      } };
+      const tools = createOwnTools({ registry, backend, login: () => login, mode: () => mode, now: () => clock, policy: () => permitAll, audit() {}, log: silentLog });
+      const args = plan("same plan", "run_command");
+      await tools.handle(A, "register_intent_plan", args);
+      const promptId = registry.get(conversationKey(A))!.promptId;
+      if (retirement === "revoke") await tools.handle(A, "trust_revoke", { reason: "retire this plan" });
+      if (retirement === "mode") {
+        mode = "monitor";
+        registry.syncAuth(login, mode);
+        mode = "enforce";
+        registry.syncAuth(login, mode);
+      }
+      if (retirement === "login") {
+        login = null;
+        registry.syncAuth(login, mode);
+        clock += 180_001;
+        login = LOGIN;
+        registry.syncAuth(login, mode);
+      }
+      expect(await tools.handle(A, "register_intent_plan", args)).toStartWith("Intent registered: plan plan-2 (new)");
+      expect(keys[1]).not.toBe(keys[0]);
+      expect(registry.get(conversationKey(A))?.promptId).toBe(promptId);
+    });
+  }
+
+  for (const operation of ["trust_revoke", "trust_delegate", "trust_reanchor"] as const) {
+    test(`${operation} after a refresh targets the live token while revisions retain the counted parent`, async () => {
+      let clock = Date.now();
+      const registry = createRegistry(() => clock);
+      const rec = recordingBackend({ now: () => clock });
+      const delegated: string[] = [];
+      const backend: IntentBackend = { ...rec.backend, async delegate(login, planId, request) {
+        delegated.push(planId);
+        return rec.backend.delegate(login, planId, request);
+      } };
+      const tools = createOwnTools({ registry, backend, login: () => LOGIN, mode: () => "enforce", now: () => clock, policy: () => permitAll, audit() {}, log: silentLog });
+      registry.open(A);
+      registry.beginPrompt(conversationKey(A), 0);
+      await tools.handle(A, "register_intent_plan", plan("g", "run_command"));
+      const pump = createTokenPump({ registry, backend, login: () => LOGIN, now: () => clock, log: silentLog });
+      clock += 1000;
+      registry.setToken(conversationKey(A), { status: "active", jwt: "expired", expiresAt: clock, deniedTools: new Set(), heldTools: new Set() });
+      await pump.beforeTool(conversationKey(A));
+      expect(registry.get(conversationKey(A))?.tokenPlanId).toBe("plan-2");
+      const args = operation === "trust_reanchor" ? { updatedPlan: plan("changed", "run_command"), reason: "changed" }
+        : operation === "trust_delegate" ? { delegatePublicKey: "public", subtreePath: "/steps/[0]" } : { reason: "done" };
+      await tools.handle(A, operation, args);
+      await tools.settled();
+      if (operation === "trust_revoke") expect(rec.revokes).toContainEqual({ planId: "plan-2", reason: "done" });
+      if (operation === "trust_delegate") expect(delegated).toEqual(["plan-2"]);
+      if (operation === "trust_reanchor") {
+        expect(rec.reanchors).toEqual([{ planId: "plan-2", reason: "changed" }]);
+        expect(rec.mints[2]?.request.headers["X-ArmorIQ-Parent-Plan-Id"]).toBe("plan-1");
+      }
+      await pump.stop();
+    });
+  }
+
   for (const tool of ["register_intent_plan", "trust_reanchor"] as const) {
     test(`settled waits for the background ${tool} registration`, async () => {
       const h = harness({ gate: true });
