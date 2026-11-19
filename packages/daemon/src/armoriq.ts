@@ -148,6 +148,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
 
   const runtime: IntentRuntime = createIntentRuntime({
     client: auth.client,
+    stateFile: path.join(ctx.paths.dataDir, "intent-state.json"),
     login: () => auth.uploadLogin(),
     mode: () => auth.mode(),
     policy: () => policyView(policy.current().policy),

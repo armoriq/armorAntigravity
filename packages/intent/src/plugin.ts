@@ -31,6 +31,7 @@ export function withIntent<H extends IntentHook>(
     if (payload.event === "PreToolUse") {
       const own = await runtime.ownToolDecision(surface, payload);
       if (own) return own;
+      await runtime.beforeTool({ surface, conversationId: payload.conversationId });
     }
     const response = await inner(hook);
     if (payload.event !== "PreInvocation") return response;

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { logLegacyBackend } from "./backend.ts";
+import { intentValiditySeconds, planRequest, requestBody } from "./plan-request.ts";
 import { isPlainObject, mcpPart, parsePlan } from "./plan.ts";
-import type { Conversation, Generation, Registry } from "./registry.ts";
+import type { Conversation, Generation, PlanKind, PendingRequest, Registry } from "./registry.ts";
 import { AGENT_ID, CLIENT_ID, conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PolicyView, type Token } from "./types.ts";
 
 export const OWN_TOOLS = ["register_intent_plan", "trust_reanchor", "trust_revoke", "trust_delegate", "policy_read"] as const;
@@ -90,10 +92,13 @@ export interface OwnToolDeps {
   onUnauthorized?(): void;
   readonly log: Log;
   readonly now?: () => number;
+  readonly validitySeconds?: number;
+  mintPolicy?(): Record<string, unknown> | undefined;
 }
 
 export interface OwnTools {
-  // Runs on PreToolUse for an own tool. All state changes happen here, before the MCP server answers.
+  // Runs on PreToolUse for an own tool. Plan requests are persisted before the first send, and registrations
+  // run in the background, tracked by settled(). The promise resolves to the eventual MCP outcome.
   // A repeat for the same conversation and stepIdx returns the first outcome without acting again.
   handle(ref: ConversationRef, tool: OwnTool, args: unknown, stepIdx?: number): Promise<string>;
   // The MCP server's view: the outcome text for a call the hook already handled, or null after waitMs.
@@ -102,10 +107,13 @@ export interface OwnTools {
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
+const notRegistered = (reason: string) => `Plan not registered: ${reason.replace(/\.+$/, "")}.`;
+const notConfirmed = (reason: string) => `Plan registration not confirmed: ${reason.replace(/\.+$/, "")}. It will be retried with the same request id.`;
 
 export function createOwnTools(deps: OwnToolDeps): OwnTools {
   const { registry, backend, log } = deps;
   const now = deps.now ?? Date.now;
+  const validity = intentValiditySeconds(process.env, deps.validitySeconds ?? 3600);
   const background = new Set<Promise<void>>();
   const outcomes = new Map<string, { text: string; conversation: ConversationKey; at: number }[]>();
   const waiters = new Map<string, ((text: string | null) => void)[]>();
@@ -139,34 +147,47 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     return new Set([next.conversation, ...queue.map((o) => o.conversation)]).size > 1 ? AMBIGUOUS_OUTCOME : next.text;
   }
 
-  async function register(conv: Conversation, raw: unknown, reason: string): Promise<string> {
+  async function register(conv: Conversation, raw: unknown, reason: string, forceRevision = false): Promise<string> {
     if (conv.parent !== null) {
-      return "This is a subagent conversation. It inherits the plan registered by its parent and cannot register its own. Continue within the parent plan.";
+      return notRegistered("This is a subagent conversation. It inherits the plan registered by its parent and cannot register its own. Continue within the parent plan");
     }
-    if (registry.busy(conv.key)) return "A plan registration is already in progress for this conversation. Wait for it to finish.";
+    if (registry.busy(conv.key)) return notRegistered("A plan registration is already in progress for this conversation. Wait for it to finish");
     const previous = conv.plan;
     // A plan recorded while logged out was never minted, so replacing it is a first registration.
-    const revising = previous !== null && previous.id !== "" ? previous : null;
-    if (revising && !reason.trim()) return 'Plan revision rejected: a plan is already registered. Pass a "reason" explaining why the plan changed.';
-    if (revising && conv.revisionsThisTurn >= MAX_REVISIONS_PER_TURN) {
-      return `Plan revision rejected: at most ${MAX_REVISIONS_PER_TURN} revisions are allowed per user message. Continue with the current plan or ask the user how to proceed.`;
-    }
+    const revising = previous?.id && conv.countedPlanId ? previous : null;
 
     const parsed = parsePlan(raw, previous ? previous.revision + 1 : 1, conv.promptId ?? `turn-${conv.turn}`);
-    if (!parsed.ok) return `Plan rejected: ${parsed.error}`;
+    if (!parsed.ok) return notRegistered(parsed.error);
     const forbidden = forbiddenStep(parsed.plan);
-    if (forbidden) return forbidden;
+    if (forbidden) return notRegistered(forbidden);
 
     const login = deps.login();
-    if (!login) {
+    if (forceRevision && !revising) return notRegistered("no registered plan in the current prompt to reanchor");
+    if (!login || deps.mode() === "monitor") {
       registry.setPlan(conv.key, { ...parsed.plan, id: "" }, null);
-      return `Intent recorded locally: ${parsed.plan.steps.length} steps. ArmorIQ is not logged in, so calls are monitored, not enforced.`;
+      return `Plan recorded locally, not registered (${login ? "monitor_mode" : "logged_out"}).`;
     }
+    if (!conv.promptId) return notRegistered("no current user prompt");
+    if (!forceRevision && revising && conv.planHash === parsed.plan.hash && conv.token?.status === "active" && conv.token.jwt && conv.token.expiresAt > now()) {
+      return describeRegistered(revising, conv.token, conv.kind === "revision" ? "revision" : "new", conv.countedPlanId!);
+    }
+    if (revising && !reason.trim()) return notRegistered('a plan is already registered. Pass a "reason" explaining why the plan changed');
+    if (revising && conv.revisionsThisTurn >= MAX_REVISIONS_PER_TURN) return notRegistered(`at most ${MAX_REVISIONS_PER_TURN} revisions are allowed per user message`);
     const release = registry.acquire(conv.key);
-    if (!release) return "A plan registration is already in progress for this conversation. Wait for it to finish.";
+    if (!release) return notRegistered("A plan registration is already in progress for this conversation. Wait for it to finish");
     const generation = registry.generation(conv.key)!;
     try {
-      return await mint(login, conv, parsed.plan, previous, revising, reason, generation);
+      const kind = revising ? "revision" : "new";
+      const request = planRequest({ kind, promptId: conv.promptId, parentPlanId: conv.countedPlanId, planHash: parsed.plan.hash }, requestBody(login, parsed.plan, conv.ref.conversationId, validity, deps.mintPolicy?.()));
+      const pending = conv.pendingRequest;
+      if (pending && pending.key !== request.key && pending.headers["X-ArmorIQ-Plan-Kind"] !== "refresh") return notConfirmed("a different request is awaiting confirmation; retry that plan first");
+      const descriptor = pending?.key === request.key ? pending : request;
+      try {
+        if (!registry.setPendingRequest(conv.key, descriptor, generation)) return notRegistered("the prompt or authentication changed");
+      } catch {
+        return notRegistered("could not persist the plan request");
+      }
+      return await mint(login, conv, parsed.plan, revising, reason, generation, descriptor, kind);
     } finally {
       release();
     }
@@ -177,40 +198,47 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     for (const [i, step] of draft.steps.entries()) {
       const verdict = policy.evaluate(step.tool, step.params ?? {});
       if (verdict.effect === "forbid") {
-        return `Plan rejected: step ${i + 1} uses ${step.tool}, which the current policy forbids${verdict.ruleId ? ` (rule ${verdict.ruleId})` : ""}: ${verdict.reason}`;
+        return `step ${i + 1} uses ${step.tool}, which the current policy forbids${verdict.ruleId ? ` (rule ${verdict.ruleId})` : ""}: ${verdict.reason}`;
       }
     }
     return null;
   }
 
-  async function mint(login: Login, conv: Conversation, draft: Draft, previous: Plan | null, revising: Plan | null, reason: string, generation: Generation): Promise<string> {
-    const minted = await backend.mint(login, draft, conv.ref.conversationId);
+  async function mint(login: Login, conv: Conversation, draft: Draft, revising: Plan | null, reason: string, generation: Generation, request: PendingRequest, kind: PlanKind): Promise<string> {
+    const cancelled = () => {
+      registry.syncAuth(deps.login(), deps.mode());
+      return !registry.isCurrent(conv.key, generation);
+    };
+    const minted = await backend.mint(login, draft, conv.ref.conversationId, request, { cancelled });
     registry.syncAuth(deps.login(), deps.mode());
-    if (!registry.isCurrent(conv.key, generation)) return "Plan not installed: the prompt or login state changed during registration. Register a plan for the current prompt.";
+    if (!registry.isCurrent(conv.key, generation)) return notRegistered("the prompt or authentication changed while registration was in progress");
     if (!minted.ok) {
       if (minted.relogin) deps.onRelogin?.(minted.reason);
-      const kept = previous ? " The previous plan is still in effect." : " No plan is active, so side-effecting calls stay blocked.";
-      return `Plan not registered: ArmorIQ could not issue an intent token (${minted.reason}).${kept} Try again shortly.`;
+      if (minted.retryable || minted.unconfirmed) return notConfirmed(minted.reason);
+      registry.setPendingRequest(conv.key, null, generation);
+      return notRegistered(minted.reason);
     }
     const { token, planId } = minted.value;
     if (token.status === "refused" && token.code === "account_revoked" && deps.onUnauthorized) {
       deps.onUnauthorized();
       registry.syncAuth(deps.login(), deps.mode());
-      return "Plan not registered: ArmorIQ did not accept the API key, so this session runs in local-only mode on local rules. Run `armorantigravity status` to check the login.";
+      registry.setPendingRequest(conv.key, null, generation);
+      return notRegistered("account_revoked");
     }
     if (token.status === "refused") {
       registry.setToken(conv.key, token, generation);
-      return token.code === "account_revoked"
-        ? "Plan not registered: the ArmorIQ API key was revoked (account_revoked). Tool calls are blocked until the user logs in again."
-        : "Plan not registered: the ArmorIQ organization has no active subscription or is over quota (billing_blocked). Tool calls are blocked.";
+      registry.setPendingRequest(conv.key, null, generation);
+      return notRegistered(token.code);
     }
+    if (!planId || !token.jwt || token.expiresAt <= now()) return notConfirmed("token response has no usable token or expiry");
+    if (minted.value.legacy) logLegacyBackend(log);
     const plan: Plan = { ...draft, id: planId };
-    registry.setPlan(conv.key, plan, token, generation);
+    registry.setPlan(conv.key, plan, token, generation, kind);
     if (revising) {
       registry.noteRevision(conv.key);
-      track(recordRevision(login, conv, revising, plan, reason));
+      track(recordRevision(login, conv, { ...revising, id: request.headers["X-ArmorIQ-Parent-Plan-Id"]! }, plan, reason).catch(() => log.warn("reanchor failed", { conversationId: conv.ref.conversationId })));
     }
-    return describeRegistered(plan, token, revising !== null);
+    return describeRegistered(plan, token, minted.value.kind ?? kind, planId);
   }
 
   async function recordRevision(login: Login, conv: Conversation, previous: Plan, plan: Plan, reason: string): Promise<void> {
@@ -314,8 +342,7 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
         return register(conv, raw, str(reason));
       }
       case "trust_reanchor":
-        if (conv.parent === null && !conv.plan) return "No registered plan to re-anchor. Call register_intent_plan first.";
-        return register(conv, { plan: args.updatedPlan }, str(args.reason));
+        return register(conv, { plan: args.updatedPlan }, str(args.reason), true);
       case "trust_revoke":
         return revoke(conv, str(args.reason));
       case "trust_delegate":
@@ -347,12 +374,13 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
           text = await run(conv, tool, args);
         } catch (error) {
           log.error("own tool failed", { tool, conversationId: ref.conversationId, error: String(error) });
-          text = `ArmorIQ could not process ${tool}: internal error. No state was changed.`;
+          text = tool === "register_intent_plan" || tool === "trust_reanchor" ? notConfirmed("internal error") : `ArmorIQ could not process ${tool}: internal error.`;
         }
         publish(callDigest(tool, rawArgs), conversationKey(ref), text);
         return text;
       })();
       if (onceKey) handled.set(onceKey, { result, at: now() });
+      if (tool === "register_intent_plan" || tool === "trust_reanchor") track(result.then(() => {}));
       return result;
     },
 
@@ -377,15 +405,12 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     },
 
     async settled() {
-      await Promise.allSettled([...background]);
+      while (background.size) await Promise.allSettled([...background]);
     },
   };
 }
 
-function describeRegistered(plan: Plan, token: Token, isRevision: boolean): string {
-  const active = token.status === "active" ? token : null;
-  const expiry = active ? ` Token valid until ${new Date(active.expiresAt).toISOString()}.` : "";
-  const denied = active?.deniedTools.size ? ` Denied by policy: ${[...active.deniedTools].join(", ")}.` : "";
-  const held = active?.heldTools.size ? ` Requires approval: ${[...active.heldTools].join(", ")}.` : "";
-  return `Intent ${isRevision ? `revised (revision ${plan.revision})` : "registered"}: ${plan.steps.length} steps.${expiry}${denied}${held}`;
+function describeRegistered(plan: Plan, token: Token, kind: PlanKind, countedPlanId: string): string {
+  if (token.status !== "active") return notRegistered(token.code);
+  return `Intent registered: plan ${countedPlanId} (${kind}), ${plan.steps.length} steps. Token valid until ${new Date(token.expiresAt).toISOString()}.`;
 }

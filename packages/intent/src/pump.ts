@@ -1,13 +1,16 @@
 import type { Conversation, Registry } from "./registry.ts";
+import { logLegacyBackend } from "./backend.ts";
+import { intentValiditySeconds, planRequest, requestBody } from "./plan-request.ts";
 import type { ConversationKey, IntentBackend, Log, Login, Mode, Plan } from "./types.ts";
 
-export const REFRESH_BEFORE_MS = 60_000;
+export const REFRESH_BEFORE_MS = 120_000;
 export const CHECK_EVERY_MS = 15_000;
 // ASSUMPTION(P0 #8): Antigravity has no conversation-deleted event, so a conversation counts as ended once it
 // has had a Stop and then this long with no hook from it or its subagents. Replace with the trigger the spike settles on.
 export const IDLE_AFTER_STOP_MS = 30 * 60_000;
 const FORGET_AFTER_MS = 24 * 60 * 60_000;
 const RETRY_MAX_MS = 5 * 60_000;
+const PROMPT_IDLE_MS = 30 * 60_000;
 // Long enough for one revoke: two attempts of 5 s each.
 const STOP_WAIT_MS = 11_000;
 
@@ -16,11 +19,12 @@ export interface TokenPump {
   kick(): void;
   noteStop(key: ConversationKey): void;
   revoke(key: ConversationKey, reason: string): void;
+  beforeTool(key: ConversationKey): Promise<void>;
   // Revokes every live plan with cascade, then stops. Called when the daemon shuts down.
   stop(): Promise<void>;
 }
 
-// Refresh 60 s before expiry with per-conversation backoff; revoke on idle and shutdown. Never on the hook path.
+// Refresh open prompts with backoff. The tool guard joins a refresh already in flight.
 export function createTokenPump(deps: {
   registry: Registry;
   backend: IntentBackend;
@@ -31,13 +35,18 @@ export function createTokenPump(deps: {
   now?: () => number;
   checkEveryMs?: number;
   idleAfterStopMs?: number;
+  validitySeconds?: number;
+  mintPolicy?: () => Record<string, unknown> | undefined;
 }): TokenPump {
   const { registry, backend, login, log } = deps;
   const now = deps.now ?? Date.now;
+  const validity = intentValiditySeconds(process.env, deps.validitySeconds ?? 3600);
+  const refreshBeforeMs = Math.min(120, validity / 3) * 1000;
   const idleMs = deps.idleAfterStopMs ?? IDLE_AFTER_STOP_MS;
   const inflight = new Set<Promise<void>>();
   const failing = new Map<ConversationKey, { count: number; retryAt: number }>();
-  const stoppedAt = new Map<ConversationKey, number>();
+  const stoppedAt = new Map<ConversationKey, { at: number; generation: number }>();
+  const refreshing = new Map<ConversationKey, Promise<void>>();
   let timer: ReturnType<typeof setInterval> | null = null;
   let running: Promise<void> | null = null;
   let stopped = false;
@@ -50,8 +59,9 @@ export function createTokenPump(deps: {
   const live = (c: Conversation): c is Conversation & { plan: Plan } =>
     c.parent === null && c.plan !== null && c.plan.id !== "" && c.token?.status === "active";
 
+  const promptOpen = (c: Conversation) => c.promptId !== null && c.promptOpenSince !== null && now() - c.lastActivityAt < PROMPT_IDLE_MS;
   const due = (c: Conversation) =>
-    live(c) && c.token?.status === "active" && c.token.expiresAt - now() <= REFRESH_BEFORE_MS && now() >= (failing.get(c.key)?.retryAt ?? 0);
+    !stopped && (deps.mode?.() ?? "enforce") === "enforce" && promptOpen(c) && c.countedPlanId !== null && live(c) && c.token?.status === "active" && c.token.expiresAt - now() <= refreshBeforeMs && now() >= (failing.get(c.key)?.retryAt ?? 0);
 
   // A subagent keeps running after its parent's Stop (spike capture), so its hooks count as the root's activity.
   const activityByRoot = (): Map<ConversationKey, number> => {
@@ -69,9 +79,13 @@ export function createTokenPump(deps: {
     for (const key of failing.keys()) if (!registry.has(key)) failing.delete(key);
     const activity = activityByRoot();
     const idle = (c: Conversation) => {
-      const at = stoppedAt.get(c.key);
+      const stop = stoppedAt.get(c.key);
+      if (stop && stop.generation !== c.promptGeneration) {
+        stoppedAt.delete(c.key);
+        return false;
+      }
       const last = activity.get(c.key) ?? c.lastActivityAt;
-      return at !== undefined && now() - Math.max(at, last) >= idleMs;
+      return stop !== undefined && now() - Math.max(stop.at, last) >= idleMs;
     };
     for (const c of [...registry.all()]) {
       if (stopped) return;
@@ -87,7 +101,7 @@ export function createTokenPump(deps: {
         registry.clearPlan(c.key);
         continue;
       }
-      if (auth && due(c) && c.plan) await refresh(auth, c, c.plan);
+      if (auth && due(c) && c.plan) await refreshOnce(auth, c, c.plan);
     }
   }
 
@@ -97,10 +111,26 @@ export function createTokenPump(deps: {
     const generation = registry.generation(c.key)!;
     try {
       const { id: _id, ...unminted } = plan;
-      const result = await backend.mint(auth, unminted, c.ref.conversationId);
+      const request = planRequest({ kind: "refresh", promptId: c.promptId!, countedPlanId: c.countedPlanId!, tokenExpiresAt: new Date(c.tokenExpiresAt!).toISOString() }, requestBody(auth, unminted, c.ref.conversationId, validity, deps.mintPolicy?.()));
+      if (c.pendingRequest && c.pendingRequest.key !== request.key) return;
+      const descriptor = c.pendingRequest ?? request;
+      try {
+        if (!registry.setPendingRequest(c.key, descriptor, generation)) return;
+      } catch {
+        failed(c.key, "could not persist the plan request");
+        return;
+      }
+      const cancelled = () => {
+        registry.syncAuth(login(), deps.mode?.() ?? "enforce");
+        return stopped || !registry.isCurrent(c.key, generation) || !promptOpen(c);
+      };
+      const result = await backend.mint(auth, unminted, c.ref.conversationId, descriptor, { cancelled });
       registry.syncAuth(login(), deps.mode?.() ?? "enforce");
       if (!result.ok) {
-        if (registry.isCurrent(c.key, generation)) failed(c.key, result.reason);
+        if (registry.isCurrent(c.key, generation)) {
+          if (!result.retryable && !result.unconfirmed) registry.setPendingRequest(c.key, null, generation);
+          failed(c.key, result.reason);
+        }
         return;
       }
       failing.delete(c.key);
@@ -111,7 +141,7 @@ export function createTokenPump(deps: {
         if (planId && planId !== plan.id) revokePlan(auth, c.key, planId, "armoriq-agd shutting down");
         return;
       }
-      if (!current || !registry.isCurrent(c.key, generation) || current.plan !== plan) {
+      if (!current || !registry.isCurrent(c.key, generation) || current.plan !== plan || !promptOpen(c)) {
         // Replaced or retired while the mint ran, so this result cannot authorize tools.
         if (planId && planId !== plan.id) revokePlan(auth, c.key, planId, current ? "plan replaced during token refresh" : "antigravity conversation closed");
         return;
@@ -119,18 +149,24 @@ export function createTokenPump(deps: {
       if (token.status === "refused" && token.code === "account_revoked" && deps.onUnauthorized) {
         deps.onUnauthorized();
         registry.syncAuth(login(), deps.mode?.() ?? "enforce");
+        registry.setPendingRequest(c.key, null, generation);
         return;
       }
-      if (token.status === "refused" || planId === plan.id) {
-        registry.setToken(c.key, token, generation);
-        return;
-      }
-      const cursor = current.stepCursor;
-      registry.setPlan(c.key, { ...plan, id: planId }, token, generation, "refresh");
-      if (cursor > 0) registry.advance(c.key, cursor - 1);
+      if (result.value.legacy) logLegacyBackend(log);
+      registry.setToken(c.key, token, generation, planId);
+      registry.setPendingRequest(c.key, null, generation);
     } finally {
       release();
     }
+  }
+
+  function refreshOnce(auth: Login, c: Conversation, plan: Plan): Promise<void> {
+    const active = refreshing.get(c.key);
+    if (active) return active;
+    const work = refresh(auth, c, plan).finally(() => refreshing.delete(c.key));
+    refreshing.set(c.key, work);
+    track(work);
+    return work;
   }
 
   function failed(key: ConversationKey, reason: string): void {
@@ -167,8 +203,20 @@ export function createTokenPump(deps: {
 
     kick,
 
+    async beforeTool(key) {
+      registry.syncAuth(login(), deps.mode?.() ?? "enforce");
+      const c = registry.root(key);
+      if (!c || c.token?.status !== "active" || c.token.expiresAt > now()) return;
+      const active = refreshing.get(c.key);
+      if (active) return active;
+      const auth = login();
+      if (auth && due(c) && c.plan) await refreshOnce(auth, c, c.plan);
+    },
+
     noteStop(key) {
-      stoppedAt.set(key, now());
+      registry.endPrompt(key);
+      const c = registry.get(key);
+      if (c) stoppedAt.set(key, { at: now(), generation: c.promptGeneration });
     },
 
     revoke(key, reason) {

@@ -1,6 +1,7 @@
 export * from "./types.ts";
 export { checkCall, mcpPlanName, parsePlan, planToolName, type ParsePlanResult, type PlanCheck } from "./plan.ts";
 export { createRegistry, type Conversation, type Registry } from "./registry.ts";
+export { canonicalJson, intentValiditySeconds, planHash, planRequest, requestKey } from "./plan-request.ts";
 export {
   CHILD_SESSION_KEY,
   RECOVER,

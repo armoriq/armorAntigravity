@@ -40,11 +40,34 @@ function setup(mode: "enforce" | "monitor" = "enforce") {
     seen.push(hook.payload);
     return hook.payload.event === "PreToolUse" ? { decision: "allow" } : reply;
   });
-  const hook = (payload: HookPayload, surface: Surface = "cli") => decide({ payload, session: { surface } });
+  const hook = (payload: HookPayload, surface: Surface = "cli") => {
+    if (payload.event === "PreToolUse" && !rt.root({ surface, conversationId: CONV })?.promptId) rt.observe(surface, preInvocation);
+    return decide({ payload, session: { surface } });
+  };
   return { rt, rec, seen, hook, setReply: (r: HookResponse) => void (reply = r) };
 }
 
 describe("withIntent", () => {
+  test("an expired token is refreshed before the inner handler sees the tool call", async () => {
+    let clock = Date.now();
+    const rec = recordingBackend({ now: () => clock });
+    const rt = createIntentRuntime({ client: { product: "armorantigravity", version: "0.0.0" }, login: () => LOGIN, mode: () => "enforce", policy: () => permitAll, mintPolicy: () => undefined, audit() {}, log: silentLog, backend: rec.backend, now: () => clock });
+    const decide = withIntent(rt, () => {
+      const token = rt.root({ surface: "cli", conversationId: CONV })?.token;
+      expect(token?.status === "active" && token.expiresAt > clock).toBe(true);
+      return { decision: "allow" };
+    });
+    rt.observe("cli", preInvocation);
+    await rt.ownToolDecision("cli", register as Extract<HookPayload, { event: "PreToolUse" }>);
+    const current = rt.root({ surface: "cli", conversationId: CONV })!;
+    if (current.token?.status !== "active") throw new Error("expected a registered token");
+    rt.registry.setToken(current.key, { ...current.token, expiresAt: clock + 180_000 });
+    clock += 180_001;
+    expect(await decide({ payload: runCommand, session: { surface: "cli" } })).toEqual({ decision: "allow" });
+    expect(rec.mints).toHaveLength(2);
+    expect(rt.root({ surface: "cli", conversationId: CONV })?.countedPlanId).toBe("plan-1");
+    await rt.pump.stop();
+  });
   test("own tools are decided by intent and never reach the inner handler", async () => {
     const { rt, rec, seen, hook } = setup();
     expect(await hook(register)).toEqual({ decision: "allow" });
@@ -112,8 +135,8 @@ describe("call_mcp_tool proxy", () => {
     const { rt, rec, seen, hook } = setup();
     expect(await hook(proxied)).toEqual({ decision: "allow" });
     expect(seen).toEqual([]);
-    expect(rec.mints).toEqual([{ contextId: CONV, goal: proxiedArgs.goal, tools: ["run_command"] }]);
-    expect(await rt.mcpOutcome("register_intent_plan", proxiedArgs, 0)).toStartWith("Intent registered: 1 steps.");
+    expect(rec.mints).toEqual([{ contextId: CONV, goal: proxiedArgs.goal, tools: ["run_command"], request: expect.any(Object) }]);
+    expect(await rt.mcpOutcome("register_intent_plan", proxiedArgs, 0)).toStartWith("Intent registered: plan plan-1 (new), 1 steps.");
   });
 
   test("the server name is folded the way the adapter folds it", async () => {

@@ -5,6 +5,7 @@ import { INTENT_DIRECTIVE, planningDraftNote } from "./directive.ts";
 import { createOwnTools, ownToolCall, type OwnTool } from "./own-tools.ts";
 import { isPlainObject } from "./plan.ts";
 import { createTokenPump } from "./pump.ts";
+import { intentValiditySeconds } from "./plan-request.ts";
 import { createRegistry, type Conversation, type Registry } from "./registry.ts";
 import { createSubagentLinker } from "./subagents.ts";
 import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type IntentBackend, type Log, type Login, type Mode, type PolicyView } from "./types.ts";
@@ -38,20 +39,22 @@ export interface IntentRuntimeOptions {
   readonly backend?: IntentBackend;
   readonly now?: () => number;
   readonly fileExists?: (path: string) => boolean;
+  readonly stateFile?: string;
 }
 
 export interface IntentRuntime {
   readonly registry: Registry;
   // Call on every hook event before deciding: opens the conversation, links subagents, tracks turns.
   observe(surface: Surface, payload: HookPayload): void;
-  // For register_intent_plan and the trust tools: performs the state change, then allows the call so the
-  // MCP server can answer with the outcome. Null for every other tool.
+  // Plan tools persist the request and start registration without waiting for the network. The MCP server
+  // waits for the outcome. Other own tools finish before allowing the call. Null for every other tool.
   ownToolDecision(surface: Surface, payload: PreToolUse): Promise<ToolDecision | null>;
   // The conversation whose plan and token a check uses; a subagent resolves to its root.
   root(ref: ConversationRef): Conversation | null;
   // PreInvocation response: the plan directive while the current root prompt has no registered plan.
   preInvocation(surface: Surface, payload: HookPayload): HookResponse;
   authChanged(): void;
+  beforeTool(ref: ConversationRef): Promise<void>;
   mcpOutcome(tool: OwnTool, args: unknown, waitMs: number): Promise<string | null>;
   conversationEnded(ref: ConversationRef): void;
   readonly pump: { readonly name: string; kick(): void; stop(): Promise<void> };
@@ -59,10 +62,11 @@ export interface IntentRuntime {
 
 export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
   const now = opts.now ?? Date.now;
-  const registry = createRegistry(now);
+  const validitySeconds = intentValiditySeconds(process.env);
+  const registry = createRegistry(now, opts.stateFile);
   const syncAuth = () => registry.syncAuth(opts.login(), opts.mode());
   syncAuth();
-  const backend = opts.backend ?? createSdkBackend({ client: opts.client, mintPolicy: () => opts.mintPolicy() });
+  const backend = opts.backend ?? createSdkBackend({ client: opts.client });
   const tools = createOwnTools({
     registry,
     backend,
@@ -72,10 +76,12 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     audit: opts.audit,
     log: opts.log,
     now,
+    validitySeconds,
+    mintPolicy: opts.mintPolicy,
     ...(opts.onRelogin ? { onRelogin: opts.onRelogin } : {}),
     ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}),
   });
-  const pump = createTokenPump({ registry, backend, login: opts.login, mode: opts.mode, log: opts.log, now, ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}) });
+  const pump = createTokenPump({ registry, backend, login: opts.login, mode: opts.mode, log: opts.log, now, validitySeconds, mintPolicy: opts.mintPolicy, ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}) });
   const linker = createSubagentLinker(registry, now, opts.fileExists);
   const drafts = new Map<ConversationKey, string>();
   const childMessagedAt = new Map<ConversationKey, number>();
@@ -143,7 +149,8 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
       syncAuth();
       const call = ownToolCall(payload.toolCall.name, payload.toolCall.args);
       if (!call) return null;
-      await tools.handle(refOf(surface, payload), call.tool, call.args, payload.stepIdx);
+      const result = tools.handle(refOf(surface, payload), call.tool, call.args, payload.stepIdx);
+      if (call.tool !== "register_intent_plan" && call.tool !== "trust_reanchor") await result;
       return { decision: "allow" };
     },
 
@@ -153,6 +160,7 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     },
 
     authChanged: syncAuth,
+    beforeTool: ref => pump.beforeTool(conversationKey(ref)),
 
     preInvocation(surface, payload) {
       syncAuth();

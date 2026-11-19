@@ -61,13 +61,14 @@ const log = { info: console.log, warn: console.warn, error: console.error };
 const registry = createRegistry();
 const backend = createSdkBackend({
   client: { product: "armorantigravity", version: "0.0.0-dev" },
-  mintPolicy: () => compileMintPolicy({ schemaVersion: "armor.policy.v1", statements }, policy.hash),
 });
-const tools = createOwnTools({ registry, backend, login: () => login, mode: () => "enforce", policy: () => policy, audit: (r) => audit.push(r), log });
+const tools = createOwnTools({ registry, backend, login: () => login, mode: () => "enforce", policy: () => policy, mintPolicy: () => compileMintPolicy({ schemaVersion: "armor.policy.v1", statements }, policy.hash), audit: (r) => audit.push(r), log });
 const pump = createTokenPump({ registry, backend, login: () => login, log });
 
 const ref = { surface: "cli" as const, conversationId };
 const key = conversationKey(ref);
+registry.open(ref);
+registry.beginPrompt(key, 0);
 const show = (label: string, value: unknown) => console.log(`\n=== ${label}\n${typeof value === "string" ? value : JSON.stringify(value, null, 2)}`);
 
 show("register_intent_plan", await tools.handle(ref, "register_intent_plan", { goal: "Run the test suite", steps: [{ action: "run_command", description: "run tests", metadata: { inputs: { CommandLine: "bun test" } } }] }));
