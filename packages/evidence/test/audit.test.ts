@@ -1,4 +1,4 @@
-import type { AuditRow } from "@armorantigravity/core";
+import { AUDIT_SIZE_LIMITS, type AuditRow } from "@armorantigravity/core";
 import { afterEach, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -58,7 +58,7 @@ describe("audit pump", () => {
     expect(new Set(first?.map((r) => r.client_row_id)).size).toBe(2);
   });
 
-  test("a backend that defers part of every batch gets smaller batches, and no row is dead-lettered", async () => {
+  test("a backend that defers part of every batch eventually accepts every row within the shared caps", async () => {
     const { pump, sent, tmp } = setup(({ body }) => {
       const rows = rowsOf(body);
       const failures = rows.slice(50).map((_, i) => ({ index: 50 + i, error: `batch budget exhausted after 10001ms; row deferred for retry` }));
@@ -68,8 +68,9 @@ describe("audit pump", () => {
     pump.start();
     await until(() => (pump.kick(), sent().reduce((n, b) => n + Math.min(b.length, 50), 0) >= 400), 8_000);
     await pump.stop();
-    expect(sent()[1]?.length).toBe(50);
-    expect(() => readdirSync(path.join(tmp.dir, "outbox", "audit", "dead"))).toThrow();
+    expect(sent().every(batch => batch.length <= AUDIT_SIZE_LIMITS.maxBatchRows)).toBe(true);
+    expect(new Set(sent().flatMap(batch => batch.slice(0, 50).map(row => row.client_row_id))).size).toBe(400);
+    expect(readdirSync(path.join(tmp.dir, "outbox", "audit", "dead"))).toEqual([]);
   });
 
   test("an invalid row is dead-lettered, a deferred row is retried, accepted rows are not resent", async () => {
@@ -83,7 +84,7 @@ describe("audit pump", () => {
     pump.start();
     await until(() => sent().length >= 1);
     pump.kick();
-    await until(() => sent().length >= 2);
+    await until(() => (pump.kick(), sent().length >= 2));
     await pump.stop();
     const [first, second] = sent();
     expect(first?.length).toBe(3);
@@ -122,14 +123,15 @@ describe("audit pump", () => {
     await pump.stop();
   });
 
-  test("a 413 halves the batch and the rest still goes out", async () => {
-    const { pump, sent } = setup(({ body }) => (rowsOf(body).length > 2 ? { status: 413, body: {} } : { body: { written: rowsOf(body).length, failures: [] } }));
+  test("a 413 retries the intact batch without legacy bisection", async () => {
+    let calls = 0;
+    const { pump, sent } = setup(({ body }) => (++calls === 1 ? { status: 413, body: {} } : { body: { written: rowsOf(body).length, failures: [] } }));
     for (const n of [1, 2, 3, 4, 5]) pump.enqueue(row(n));
     pump.start();
-    await until(() => sent().filter((b) => b.length <= 2).flat().length >= 5);
+    await until(() => (pump.kick(), sent().length >= 2));
     await pump.stop();
-    const delivered = sent().filter((b) => b.length <= 2).flat().map((r) => r.input);
-    expect(delivered).toHaveLength(5);
+    expect(sent().map(batch => batch.length)).toEqual([5, 5]);
+    expect(sent()[1]?.map(row => row.client_row_id)).toEqual(sent()[0]?.map(row => row.client_row_id));
   });
 
   test("stop() sends what is queued before exiting", async () => {
@@ -141,18 +143,22 @@ describe("audit pump", () => {
 
   test("rows queued while the backend is down are adopted and sent by the next daemon", async () => {
     const tmp = tempDir();
-    const down = stubBackend({ "POST /iap/audit/batch": () => ({ status: 503, body: {} }) });
-    const up = stubBackend({ "POST /iap/audit/batch": ({ body }) => ({ body: { written: rowsOf(body).length, failures: [] } }) });
-    cleanups.push(tmp.cleanup, down.stop, up.stop);
-    const first = createAuditPump({ dataDir: tmp.dir, uploads: uploads(() => login(down.url)), log: quietLog, timing: { ...FAST, stopBudgetMs: 300 } });
+    let available = false;
+    let now = 1_000;
+    const clock = { now: () => now, random: () => 0 };
+    const backend = stubBackend({ "POST /iap/audit/batch": ({ body }) => available ? { body: { written: rowsOf(body).length, failures: [] } } : { status: 503, body: {} } });
+    cleanups.push(tmp.cleanup, backend.stop);
+    const first = createAuditPump({ dataDir: tmp.dir, uploads: uploads(() => login(backend.url)), log: quietLog, clock, timing: { ...FAST, stopBudgetMs: 300 } });
     first.enqueue(row(9));
     await first.stop();
-    const firstIds = down.hits("POST", "/iap/audit/batch").map((r) => rowsOf(r.body)[0]?.client_row_id);
-    const second = createAuditPump({ dataDir: tmp.dir, uploads: uploads(() => login(up.url)), log: quietLog, timing: FAST });
+    const firstIds = backend.hits("POST", "/iap/audit/batch").map((r) => rowsOf(r.body)[0]?.client_row_id);
+    available = true;
+    now += 100;
+    const second = createAuditPump({ dataDir: tmp.dir, uploads: uploads(() => login(backend.url)), log: quietLog, clock, timing: FAST });
     second.start();
-    await until(() => up.hits("POST", "/iap/audit/batch").length >= 1);
+    await until(() => backend.hits("POST", "/iap/audit/batch").length >= 2);
     await second.stop();
-    const resent = rowsOf(up.hits("POST", "/iap/audit/batch")[0]?.body);
+    const resent = rowsOf(backend.hits("POST", "/iap/audit/batch")[1]?.body);
     expect(resent.map((r) => r.input)).toEqual([{ CommandLine: "echo 9" }]);
     expect(firstIds).toContain(resent[0]?.client_row_id);
   });

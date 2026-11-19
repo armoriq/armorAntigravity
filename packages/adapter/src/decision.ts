@@ -80,11 +80,13 @@ export type DecisionHandlerOptions = {
   readonly guard: { readonly home: string; readonly protectedPaths: readonly string[] };
   readonly map?: MapOptions;
   readonly log: Log;
-  // Must not throw or block; it runs before the response is returned.
+  // Runs before the response is returned. Keep it synchronous; storage failures go to onDecisionError.
   readonly onDecision?: (record: DecisionRecord) => void;
   readonly resolveHold?: HoldResolver;
   // Workspace Monitor, signed in: every check runs and is recorded, and the call goes ahead.
   readonly orgMonitor?: () => boolean;
+  // A durable recorder uses this to report an append failure to the hook caller.
+  readonly onDecisionError?: (error: unknown) => void;
 };
 
 const NO_OPINION: HookResponse = null;
@@ -287,6 +289,7 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
         });
       } catch (error) {
         log.error("decision observer failed", { error: String(error) });
+        options.onDecisionError?.(error);
       }
       return response;
     };

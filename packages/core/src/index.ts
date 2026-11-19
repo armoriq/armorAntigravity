@@ -1,4 +1,5 @@
 export * from "./types.ts";
+export type { Capability } from "./core/capability.ts";
 export type { ProductConfig, ToolVocabulary } from "./product.ts";
 export { MAX_PARAM_CHARS, redactText, sanitizeParams } from "./sanitize.ts";
 export * as opencode from "./products/opencode.ts";
@@ -16,7 +17,7 @@ export {
 export { checkCall, parsePlan, type ParsePlanResult, type PlanCheck } from "./intent.ts";
 export { checkBuiltin, type BuiltinContext } from "./builtin-rules.ts";
 export { decide, type DecideInput } from "./decide.ts";
-export { toAuditRow, type AuditInput, type AuditProduct } from "./audit.ts";
+export { toAuditRow, clientRowId, snapshotAuditContext, fallbackAuditRow, type AuditSnapshot, type AuditInput, type AuditProduct } from "./audit.ts";
 export {
   bucketByHour,
   callKey,
@@ -39,5 +40,6 @@ export {
   type UsageParts,
   type UsageSnapshot,
 } from "./usage.ts";
-export { createOutbox, MAX_ATTEMPTS, ROTATE_BYTES, type Outbox, type SendResult } from "./outbox.ts";
+export { createOutbox, MAX_ATTEMPTS, ROTATE_BYTES, type Outbox, type SendResult, type QueueLogin, type OutboxStatus } from "./outbox.ts";
+export { AUDIT_SIZE_LIMITS } from "./io/audit-size.ts";
 export { isAlive, tryLock, withLock } from "./shared-lock.ts";

@@ -29,6 +29,7 @@ import { intentValiditySeconds } from "@armorantigravity/intent";
 import { stubDecide } from "./stub.ts";
 import { surfaceFromTranscriptPath } from "./surface.ts";
 import { applyStagedUpdate, createUpdater, optedOut, readUpdateStatus, type Updater } from "./update.ts";
+import { auditIdentity, captureFallback, queueLogin } from "./capture.ts";
 
 export const SESSION_IDLE_MS = 30 * 60 * 1000;
 const IDLE_SWEEP_MS = 60_000;
@@ -179,6 +180,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
         const done = handleLine(line).then((res) => {
           if (!socket.destroyed) socket.write(res.reply);
           if (res.event) setImmediate(emit, res.event);
+        }).catch(() => {
+          log.error("hook audit capture failed");
+          socket.destroy();
         });
         inflight.add(done);
         void done.finally(() => inflight.delete(done));
@@ -191,15 +195,36 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   async function handleLine(line: string): Promise<{ reply: string; event: DaemonEvent | null }> {
     const frame = parseHookFrame(line);
     if (frame) {
-      const { response, event } = await handleHook(crypto.randomUUID(), frame.event, frame.receivedAt, frame.payload);
+      const id = crypto.randomUUID();
+      const fallback = makeFallback({ id, payload: frame.payload, receivedAt: frame.receivedAt }, auth.mode(), auth.state());
+      const { response, event } = await handleHook(id, frame.event, frame.receivedAt, frame.payload, fallback);
       return { reply: hookReplyLine(response), event };
     }
     const json = await handleJsonLine(line);
     return { reply: `${JSON.stringify(json.reply)}\n`, event: json.event };
   }
 
+  function makeFallback(raw: unknown, mode: Mode, capturedAuth: ReturnType<Auth["state"]>): (event: HookEvent, code: string, reason: string) => Promise<HookResponse> {
+    return async (event: HookEvent, code: string, reason: string): Promise<HookResponse> => {
+      const response = fallbackResponse(event, mode, code, reason);
+      if (response && "decision" in response && response.decision === "deny") {
+        const value = raw as { id?: string; payload?: unknown; receivedAt?: number; audit?: { rowId?: unknown; sessionId?: unknown; binding?: { backend?: unknown; keyId?: unknown } | null } };
+        const carried = value.audit;
+        const identity = carried && typeof carried.rowId === "string" && /^[0-9a-f-]{36}$/i.test(carried.rowId)
+          ? { rowId: carried.rowId, ...(typeof carried.sessionId === "string" ? { sessionId: carried.sessionId } : {}) }
+          : auditIdentity({ id: value.id || crypto.randomUUID(), payload: value.payload }, paths.dataDir);
+        const binding = carried ? carried.binding && typeof carried.binding.backend === "string" && typeof carried.binding.keyId === "string"
+          ? { backend: carried.binding.backend, keyId: carried.binding.keyId } : null
+          : queueLogin("login" in capturedAuth ? capturedAuth.login : null);
+        await captureFallback(paths.dataDir, identity, typeof value.receivedAt === "number" && Number.isFinite(value.receivedAt) ? value.receivedAt : Date.now(), binding, capturedAuth.kind === "logged_out");
+      }
+      return response;
+    };
+  }
+
   async function handleJsonLine(line: string): Promise<{ reply: DaemonResponse | McpOutcomeResponse; event: DaemonEvent | null }> {
     const mode = auth.mode();
+    const capturedAuth = auth.state();
     let raw: unknown;
     try {
       raw = JSON.parse(line);
@@ -213,22 +238,23 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
       return { reply: { v: PROTOCOL_VERSION, id: outcome.id, text }, event: null };
     }
     const envelope = parseEnvelope(raw);
+    const fallback = makeFallback(raw, mode, capturedAuth);
     if (!envelope.ok) {
       log.warn("rejected request", { reason: envelope.reason, id: envelope.id });
-      const response = envelope.event ? fallbackResponse(envelope.event, mode, "protocol_mismatch", envelope.reason) : null;
+      const response = envelope.event ? await fallback(envelope.event, "protocol_mismatch", envelope.reason) : null;
       return { reply: { v: PROTOCOL_VERSION, id: envelope.id, response }, event: null };
     }
     const { id, event, receivedAt } = envelope;
-    const handled = await handleHook(id, event, receivedAt, envelope.payload);
+    const handled = await handleHook(id, event, receivedAt, envelope.payload, fallback);
     return { reply: { v: PROTOCOL_VERSION, id, response: handled.response }, event: handled.event };
   }
 
-  async function handleHook(id: string, event: HookEvent, receivedAt: number, rawPayload: unknown): Promise<{ response: HookResponse; event: DaemonEvent | null }> {
+  async function handleHook(id: string, event: HookEvent, receivedAt: number, rawPayload: unknown, fallback: (event: HookEvent, code: string, reason: string) => Promise<HookResponse>): Promise<{ response: HookResponse; event: DaemonEvent | null }> {
     const mode = auth.mode();
     const payload = parseHookPayload(event, rawPayload);
     if (!payload) {
       log.warn("malformed hook payload", { id, event });
-      return { response: fallbackResponse(event, mode, "malformed_payload", "the hook payload is missing required fields"), event: null };
+      return { response: await fallback(event, "malformed_payload", "the hook payload is missing required fields"), event: null };
     }
 
     const now = Date.now();
@@ -253,7 +279,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
       response = await handler(hook);
     } catch (error) {
       log.error("decision handler failed", { id, event, error: String(error) });
-      response = fallbackResponse(event, mode, "internal_error", "guard error");
+      response = await fallback(event, "internal_error", "guard error");
     }
 
     if (event === "Stop") {

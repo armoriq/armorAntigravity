@@ -14,7 +14,7 @@ export interface HookContext {
   readonly auth: AuthState;
 }
 
-// Runs on the hook path: keep it in memory. Network work belongs in a pump.
+// Runs on the hook path: append audit rows synchronously. Network work belongs in a pump.
 export type DecisionHandler = (hook: HookContext) => HookResponse | Promise<HookResponse>;
 
 export type DaemonEvent =

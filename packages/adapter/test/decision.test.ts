@@ -27,7 +27,7 @@ const decideWith = (lists?: BackendToolLists, steps: readonly string[] | null = 
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).forEach((c) => c()));
 
-function setup(opts: { policy?: unknown; decide?: DecideFn; gate?: McpGate; bundle?: PolicyBundle; onDecision?: (r: DecisionRecord) => void } = {}) {
+function setup(opts: { policy?: unknown; decide?: DecideFn; gate?: McpGate; bundle?: PolicyBundle; onDecision?: (r: DecisionRecord) => void; onDecisionError?: (error: unknown) => void } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "agd-decision-"));
   const path = join(dir, "policy.json");
   if (opts.policy !== undefined) writeFileSync(path, JSON.stringify(opts.policy));
@@ -46,6 +46,7 @@ function setup(opts: { policy?: unknown; decide?: DecideFn; gate?: McpGate; bund
     guard: { home, protectedPaths: guardPaths(home) },
     log,
     onDecision: opts.onDecision ?? ((r) => records.push(r)),
+    ...(opts.onDecisionError ? { onDecisionError: opts.onDecisionError } : {}),
   });
   return { handle, records, log, policy };
 }
@@ -250,6 +251,15 @@ describe("MCP server gate (#19)", () => {
 });
 
 describe("failures", () => {
+  test("a durable capture failure reaches the daemon fallback instead of returning an unrecorded decision", () => {
+    const failure = new Error("audit append failed");
+    const { handle } = setup({
+      policy: rule("no-shell", "forbid", "run_command"),
+      onDecision: () => { throw failure; },
+      onDecisionError: error => { throw error; },
+    });
+    expect(() => handle(hook("PreToolUse", runCommand("ls")))).toThrow("audit append failed");
+  });
   test("a throwing decide denies in enforce and allows in monitor", () => {
     const decide: DecideFn = () => {
       throw new Error("session store unavailable");

@@ -1,4 +1,4 @@
-import type { AuditRow, Decision } from "@armorantigravity/core";
+import type { AuditRow, Decision, Login } from "@armorantigravity/core";
 import type { HookPayload, Surface } from "@armorantigravity/protocol";
 import { attribute } from "./attribution.ts";
 import type { EvidenceDeps, Uploads } from "./context.ts";
@@ -48,7 +48,7 @@ export type DecidedCall = {
 
 export interface EvidenceRecorder {
   decided(call: DecidedCall): void;
-  audit(row: AuditRow, context: { readonly surface: Surface }): void;
+  audit(row: AuditRow, context: { readonly surface: Surface; readonly login?: Login }): void;
 }
 
 export type EvidenceOptions = {
@@ -211,7 +211,10 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
           return;
         }
         case "session_start":
+          void audit.loginChanged(false);
+          return;
         case "auth":
+          void audit.loginChanged();
           return;
         default: {
           const exhaustive: never = event;
@@ -233,7 +236,7 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
       }
       inOrder("decision span", () => traces.record({ kind: "decision", call: span, decision: call.decision, at: call.at }));
     },
-    audit: (row, { surface }) => audit.enqueue(attribute(row, surface)),
+    audit: (row, { surface, login }) => audit.enqueue(attribute(row, surface), login),
   };
 
   function start(): void {

@@ -19,7 +19,7 @@ import {
   type PolicyAttribution,
   type SessionPair,
 } from "@armorantigravity/adapter";
-import { DEFAULT_POLICY_SOURCE, toAuditRow, type AuditStatus, type Capability, type CompiledPolicy, type Decision, type Session as CoreSession, type SessionID, type ToolCall as CoreToolCall } from "@armorantigravity/core";
+import { DEFAULT_POLICY_SOURCE, snapshotAuditContext, toAuditRow, type AuditSnapshot, type AuditStatus, type Capability, type CompiledPolicy, type Decision, type Login, type Session as CoreSession, type SessionID, type ToolCall as CoreToolCall } from "@armorantigravity/core";
 import { callIdOf, createAgySource, evidencePlugin, type EvidenceRecorder } from "@armorantigravity/evidence";
 import {
   AGENT_ID,
@@ -53,6 +53,8 @@ type OpenCall = {
   readonly attribution: PolicyAttribution;
   readonly capability: Capability;
   readonly at: number;
+  readonly snapshot: AuditSnapshot;
+  readonly login: Login | null;
 };
 
 const BUILTIN_ATTRIBUTION: PolicyAttribution = { source: "builtin", v2: null, ruleId: null, shadow: [] };
@@ -177,19 +179,22 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     decision: Decision,
     attribution: PolicyAttribution,
     status: AuditStatus,
-    extra: { at: number; durationMs: number | null; error: string | null; capability: Capability },
+    extra: { at: number; durationMs: number | null; error: string | null; capability: Capability; snapshot: AuditSnapshot; login: Login | null },
   ) => {
-    const { session, root } = sessions(surface, call.sessionId);
-    const login = auth.uploadLogin();
+    const { login, ...captured } = extra;
     // Logged out is monitor mode: nothing is recorded, so no row can upload later under no user.
     if (!login) return;
-    const row = toAuditRow({ call, session, root, status, decision, output: null, ...extra, userId: login.userId || undefined, userEmail: login.email || undefined }, ANTIGRAVITY);
-    recorder.audit(withAttribution(row, attribution), { surface });
+    const row = toAuditRow({ call, status, decision, output: null, ...captured, userId: login.userId || undefined, userEmail: login.email || undefined }, ANTIGRAVITY);
+    recorder.audit(withAttribution(row, attribution), { surface, login });
   };
 
   const onDecision = (surface: Surface, record: DecisionRecord) => {
-    const call: CoreToolCall = { sessionId: toSessionId(record.conversationId), callId: callIdOf(record.conversationId, record.stepIdx), tool: record.call.tool, args: record.call.args };
+    const call: CoreToolCall = { sessionId: toSessionId(record.conversationId), callId: String(record.stepIdx), tool: record.call.tool, args: record.call.args };
     const decision = toCoreDecision(record.decision);
+    const { session, root } = sessions(surface, call.sessionId);
+    const snapshot = snapshotAuditContext(session, root, decision);
+    const login = auth.uploadLogin();
+    const key = `${surface}:${callIdOf(record.conversationId, record.stepIdx)}`;
     recorder.decided({
       conversationId: record.conversationId,
       stepIdx: record.stepIdx,
@@ -200,21 +205,21 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
       at: record.at,
     });
     const capability = capabilityOf(record.call);
-    if (record.status !== "allowed") auditRow(surface, call, decision, record.attribution, record.status, { at: record.at, durationMs: null, error: null, capability });
+    if (record.status !== "allowed") auditRow(surface, call, decision, record.attribution, record.status, { at: record.at, durationMs: null, error: null, capability, snapshot, login });
     // A held call the user approves still runs; its result row comes from PostToolUse.
     if (record.status !== "blocked") {
-      open.set(call.callId, { surface, call, decision, attribution: record.attribution, capability, at: record.at });
-      if (open.size > MAX_OPEN_CALLS) open.delete(open.keys().next().value ?? call.callId);
+      open.set(key, { surface, call, decision, attribution: record.attribution, capability, at: record.at, snapshot, login });
+      if (open.size > MAX_OPEN_CALLS) open.delete(open.keys().next().value ?? key);
     }
   };
 
-  const onResult = (payload: PostToolUse, at: number) => {
-    const callId = callIdOf(payload.conversationId, payload.stepIdx);
+  const onResult = (payload: PostToolUse, at: number, surface: Surface) => {
+    const callId = `${surface}:${callIdOf(payload.conversationId, payload.stepIdx)}`;
     const opened = open.get(callId);
     if (!opened) return;
     open.delete(callId);
     const status: AuditStatus = payload.error === "" ? "success" : "failed";
-    auditRow(opened.surface, opened.call, opened.decision, opened.attribution, status, { at, durationMs: Math.max(0, at - opened.at), error: payload.error || null, capability: opened.capability });
+    auditRow(opened.surface, opened.call, opened.decision, opened.attribution, status, { at, durationMs: Math.max(0, at - opened.at), error: payload.error || null, capability: opened.capability, snapshot: opened.snapshot, login: opened.login });
   };
 
   // Spec 0002 posture. Signed in and the backend unreachable: only read calls run. Signed out by a 401
@@ -266,6 +271,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
         onDecision: (record) => onDecision(surface, record),
         orgMonitor: () => auth.orgMonitor(),
         resolveHold: createHoldResolver({ access, plan: (id) => signedPlan(surface, id), agentId: AGENT_ID, builtinServer: AGENT_ID, log }),
+        onDecisionError: error => { throw error; },
       });
       handlers.set(surface, handler);
     }
@@ -279,6 +285,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     // The plugin's own intent tools are decided before this runs; they need the backend anyway and fail on their own.
     decide: withIntent(runtime, async (hook: HookContext) => {
       const surface = hook.session.surface;
+      if (hook.payload.event === "PostToolUse") onResult(hook.payload, hook.receivedAt, surface);
       if (hook.payload.event !== "PreToolUse") return handlerFor(surface)(hook);
       const blocked = await unreachable(surface, hook.payload, hook.receivedAt);
       // A probe can turn a 401 into local-only mode; decide with the mode it left behind.
@@ -287,7 +294,6 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     observe(event) {
       intent.observe(event);
       if (event.kind === "session_start") syncOrg();
-      if (event.kind === "hook" && event.hook.payload.event === "PostToolUse") onResult(event.hook.payload, event.hook.receivedAt);
     },
     pumps: [
       ...intent.pumps,
