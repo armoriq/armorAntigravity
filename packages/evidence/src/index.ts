@@ -2,6 +2,7 @@ export { AGENT_ID, PRODUCT, TITLE_SOURCE, type EvidenceDeps, type Uploads } from
 export { canonicalModel } from "./model.ts";
 export { attribute, SURFACE_KEY } from "./attribution.ts";
 export { createHealthPump, type HealthPump } from "./pumps/health.ts";
+export { createRunsPump, runCapability, runReportingEnabled, type RunsPump } from "./pumps/runs.ts";
 export {
   callIdOf,
   createEvidence,

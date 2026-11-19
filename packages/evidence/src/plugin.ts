@@ -5,11 +5,13 @@ import type { EvidenceDeps, Uploads } from "./context.ts";
 import { createAuditPump, type AuditPump } from "./pumps/audit.ts";
 import { createHistoryPump, type HistoryPump } from "./pumps/history.ts";
 import { createHealthPump, type HealthPump } from "./pumps/health.ts";
+import { createRunsPump, runReportingEnabled, type RunsPump } from "./pumps/runs.ts";
 import { createLatencyPump, type LatencyPump } from "./pumps/latency.ts";
 import { createTracePump, type ModelCall, type TracePump, type ToolSpan } from "./pumps/traces.ts";
 import { createUsagePump, type UsagePump } from "./pumps/usage.ts";
 import { observeConversation } from "./usage/observe.ts";
 import { EMPTY_SOURCE, type ConversationRef, type UsageSource } from "./usage/source.ts";
+import { auditLogin } from "./pumps/audit.ts";
 
 // Structural slices of the daemon's plugin types (packages/daemon/src/plugin.ts), so the daemon
 // can import this package without a cycle.
@@ -36,6 +38,7 @@ export type DaemonContextView = {
   readonly log: EvidenceDeps["log"];
   readonly paths: { readonly dataDir: string };
   readonly auth: AuthView;
+  readonly runReportingEnabled?: boolean;
 };
 
 // What the decision plugin hands over: core's Decision for the trace and, when the call is
@@ -52,17 +55,19 @@ export type DecidedCall = {
 
 export interface EvidenceRecorder {
   readonly health: Pick<HealthPump, "planRequestFailed" | "planRequestSucceeded">;
+  readonly runs: RunsPump;
   decided(call: DecidedCall): void;
   audit(row: AuditRow, context: { readonly surface: Surface; readonly login?: Login }): void;
 }
 
 export type EvidenceOptions = {
+  readonly runReportingEnabled?: boolean;
   readonly source?: UsageSource;
   // The root conversation a subagent belongs to; identity until the spike shows how children name it.
   readonly rootOf?: (conversationId: string) => string;
 };
 
-export type EvidencePumps = { audit: AuditPump; health: HealthPump; traces: TracePump; usage: UsagePump; history: HistoryPump; latency: LatencyPump };
+export type EvidencePumps = { audit: AuditPump; health: HealthPump; runs: RunsPump; traces: TracePump; usage: UsagePump; history: HistoryPump; latency: LatencyPump };
 
 const MAX_OPEN_CALLS = 10_000;
 const MAX_SEEN_KEYS = 50_000;
@@ -86,11 +91,18 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
   const rootOf = options.rootOf ?? ((id: string) => id);
   const health = createHealthPump(deps);
   const audit = createAuditPump({ ...deps, health });
+  let runs: RunsPump;
+  try { runs = createRunsPump({ ...deps, health, enabled: options.runReportingEnabled ?? runReportingEnabled(process.env) }); }
+  catch {
+    deps.log.error("runs storage initialization failed; reporting disabled for this daemon");
+    try { health.outbox.captureFailure(); } catch { deps.log.error("run capture failure count could not be saved"); }
+    runs = createRunsPump({ ...deps, enabled: false });
+  }
   const traces = createTracePump(deps);
   const usage = createUsagePump(deps);
   const history = createHistoryPump({ ...deps, usage, source, rootOf });
   const latency = createLatencyPump({ ...deps, usage });
-  const pumps: EvidencePumps = { audit, health, traces, usage, history, latency };
+  const pumps: EvidencePumps = { audit, health, runs, traces, usage, history, latency };
 
   const started = new Map<string, number>();
   const decided = new Map<string, ToolSpan>();
@@ -221,10 +233,12 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
         case "session_start":
           void audit.loginChanged(false);
           void health.loginChanged(false);
+          void runs.loginChanged(false);
           return;
         case "auth":
           void audit.loginChanged();
           void health.loginChanged();
+          void runs.loginChanged();
           return;
         default: {
           const exhaustive: never = event;
@@ -238,6 +252,7 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
 
   const recorder: EvidenceRecorder = {
     health,
+    runs,
     decided(call) {
       const callId = callIdOf(call.conversationId, call.stepIdx);
       const span: ToolSpan = { sessionId: rootOf(call.conversationId), callId, tool: call.tool, args: call.args, mcpServer: call.mcpServer };
@@ -252,6 +267,7 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
 
   function start(): void {
     health.start();
+    runs.start();
     audit.start();
     traces.start();
     usage.start();
@@ -274,11 +290,17 @@ export function evidencePlugin(options: EvidenceOptions & { onRecorder?: (record
   return {
     name: "evidence",
     setup(ctx: DaemonContextView) {
-      const evidence = createEvidence({ dataDir: ctx.paths.dataDir, uploads: uploadsFrom(ctx.auth), log: ctx.log }, options);
+      const evidence = createEvidence({ dataDir: ctx.paths.dataDir, uploads: uploadsFrom(ctx.auth), log: ctx.log }, { ...options, ...(ctx.runReportingEnabled === undefined ? {} : { runReportingEnabled: ctx.runReportingEnabled }) });
       options.onRecorder?.(evidence.recorder);
       evidence.start();
-      const { audit, health, traces, usage, history, latency } = evidence.pumps;
-      const unsubscribe = ctx.auth.onAuthenticated?.(login => { void audit.authenticationSucceeded(login).catch(() => ctx.log.error("audit authentication restore failed")); });
+      const { audit, health, runs, traces, usage, history, latency } = evidence.pumps;
+      const unsubscribe = ctx.auth.onAuthenticated?.(async login => {
+        const binding = auditLogin(login);
+        const restoring = [audit.authenticationSucceeded(login), health.outbox.authenticationSucceeded(binding).then(() => health.kick())];
+        if (runs.enabled) restoring.push(runs.outbox.authenticationSucceeded(binding).then(() => runs.kick()));
+        const results = await Promise.allSettled(restoring);
+        if (results.some(result => result.status === "rejected")) ctx.log.error("reporting authentication restore failed");
+      });
       const tracesAfterSettle: Pump = {
         name: traces.name,
         kick: () => traces.kick(),
@@ -291,9 +313,12 @@ export function evidencePlugin(options: EvidenceOptions & { onRecorder?: (record
       // Health stops after audit so its final loss reports remain durable.
       let auditStopping: Promise<void> | null = null;
       const stopAudit = () => (auditStopping ??= audit.stop());
+      let runsStopping: Promise<void> | null = null;
+      const stopRuns = () => (runsStopping ??= runs.stop());
       const auditBeforeHealth: Pump = { name: audit.name, kick: () => { void audit.kick(); }, stop: async () => { unsubscribe?.(); await stopAudit(); } };
-      const healthAfterAudit: Pump = { name: health.name, kick: () => { void health.kick(); }, stop: async () => { await stopAudit(); await health.stop(); } };
-      const pumps: readonly Pump[] = [tracesAfterSettle, latency, history, usage, auditBeforeHealth, healthAfterAudit];
+      const healthAfterAudit: Pump = { name: health.name, kick: () => { void health.kick(); }, stop: async () => { await Promise.allSettled([stopAudit(), stopRuns()]); await health.stop(); } };
+      const runsBeforeHealth: Pump = { name: runs.name, kick: () => { void runs.kick(); }, stop: stopRuns };
+      const pumps: readonly Pump[] = [tracesAfterSettle, latency, history, usage, auditBeforeHealth, healthAfterAudit, runsBeforeHealth];
       return { observe: evidence.observe, pumps };
     },
   };
