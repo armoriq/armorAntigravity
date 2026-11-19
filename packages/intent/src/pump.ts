@@ -1,5 +1,5 @@
 import type { Conversation, Registry } from "./registry.ts";
-import type { ConversationKey, IntentBackend, Log, Login, Plan } from "./types.ts";
+import type { ConversationKey, IntentBackend, Log, Login, Mode, Plan } from "./types.ts";
 
 export const REFRESH_BEFORE_MS = 60_000;
 export const CHECK_EVERY_MS = 15_000;
@@ -25,6 +25,7 @@ export function createTokenPump(deps: {
   registry: Registry;
   backend: IntentBackend;
   login: () => Login | null;
+  mode?: () => Mode;
   log: Log;
   onUnauthorized?: () => void;
   now?: () => number;
@@ -57,23 +58,24 @@ export function createTokenPump(deps: {
     const latest = new Map<ConversationKey, number>();
     for (const c of registry.all()) {
       const root = registry.root(c.key)?.key ?? c.key;
-      latest.set(root, Math.max(latest.get(root) ?? 0, c.lastActivity));
+      latest.set(root, Math.max(latest.get(root) ?? 0, c.lastActivityAt));
     }
     return latest;
   };
 
   async function cycle(): Promise<void> {
     const auth = login();
+    registry.syncAuth(auth, deps.mode?.() ?? "enforce");
     for (const key of failing.keys()) if (!registry.has(key)) failing.delete(key);
     const activity = activityByRoot();
     const idle = (c: Conversation) => {
       const at = stoppedAt.get(c.key);
-      const last = activity.get(c.key) ?? c.lastActivity;
+      const last = activity.get(c.key) ?? c.lastActivityAt;
       return at !== undefined && now() - Math.max(at, last) >= idleMs;
     };
     for (const c of [...registry.all()]) {
       if (stopped) return;
-      if (now() - (activity.get(c.key) ?? c.lastActivity) >= FORGET_AFTER_MS) {
+      if (now() - (activity.get(c.key) ?? c.lastActivityAt) >= FORGET_AFTER_MS) {
         if (auth && live(c)) revokePlan(auth, c.key, c.plan.id, "antigravity conversation expired");
         registry.close(c.key);
         stoppedAt.delete(c.key);
@@ -90,28 +92,45 @@ export function createTokenPump(deps: {
   }
 
   async function refresh(auth: Login, c: Conversation, plan: Plan): Promise<void> {
-    const { id: _id, ...unminted } = plan;
-    const result = await backend.mint(auth, unminted, c.ref.conversationId);
-    if (!result.ok) return failed(c.key, result.reason);
-    failing.delete(c.key);
-    const { planId, token } = result.value;
-    const current = registry.get(c.key);
-    // stop() already revoked the plan ids it could see; this one was minted after.
-    if (stopped) {
-      if (planId && planId !== plan.id) revokePlan(auth, c.key, planId, "armoriq-agd shutting down");
-      return;
+    const release = registry.acquire(c.key);
+    if (!release) return;
+    const generation = registry.generation(c.key)!;
+    try {
+      const { id: _id, ...unminted } = plan;
+      const result = await backend.mint(auth, unminted, c.ref.conversationId);
+      registry.syncAuth(login(), deps.mode?.() ?? "enforce");
+      if (!result.ok) {
+        if (registry.isCurrent(c.key, generation)) failed(c.key, result.reason);
+        return;
+      }
+      failing.delete(c.key);
+      const { planId, token } = result.value;
+      const current = registry.get(c.key);
+      // stop() already revoked the plan ids it could see; this one was minted after.
+      if (stopped) {
+        if (planId && planId !== plan.id) revokePlan(auth, c.key, planId, "armoriq-agd shutting down");
+        return;
+      }
+      if (!current || !registry.isCurrent(c.key, generation) || current.plan !== plan) {
+        // Replaced or retired while the mint ran, so this result cannot authorize tools.
+        if (planId && planId !== plan.id) revokePlan(auth, c.key, planId, current ? "plan replaced during token refresh" : "antigravity conversation closed");
+        return;
+      }
+      if (token.status === "refused" && token.code === "account_revoked" && deps.onUnauthorized) {
+        deps.onUnauthorized();
+        registry.syncAuth(login(), deps.mode?.() ?? "enforce");
+        return;
+      }
+      if (token.status === "refused" || planId === plan.id) {
+        registry.setToken(c.key, token, generation);
+        return;
+      }
+      const cursor = current.stepCursor;
+      registry.setPlan(c.key, { ...plan, id: planId }, token, generation, "refresh");
+      if (cursor > 0) registry.advance(c.key, cursor - 1);
+    } finally {
+      release();
     }
-    if (!current || current.plan !== plan) {
-      // Re-registered or closed while the mint ran, so nothing will ever use or revoke this plan id.
-      if (planId && planId !== plan.id) revokePlan(auth, c.key, planId, current ? "plan replaced during token refresh" : "antigravity conversation closed");
-      return;
-    }
-    // Signed out by a 401: the plan and its last token stay, so the session resumes once the key is accepted.
-    if (token.status === "refused" && token.code === "account_revoked" && deps.onUnauthorized) return deps.onUnauthorized();
-    if (token.status === "refused" || planId === plan.id) return registry.setToken(c.key, token);
-    const cursor = current.stepCursor;
-    registry.setPlan(c.key, { ...plan, id: planId }, token);
-    if (cursor > 0) registry.advance(c.key, cursor - 1);
   }
 
   function failed(key: ConversationKey, reason: string): void {

@@ -44,6 +44,7 @@ export interface Login {
   readonly backend: string;
   readonly apiKey: string;
   readonly userId: string;
+  readonly orgId?: string;
 }
 
 export type CallResult<T> =

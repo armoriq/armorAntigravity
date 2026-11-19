@@ -41,6 +41,7 @@ export function withIntent<H extends IntentHook>(
 export function intentRegistration(runtime: IntentRuntime): IntentRegistration {
   return {
     observe(event) {
+      if (event.kind === "auth") runtime.authChanged();
       if (event.kind !== "session_end" || !event.session) return;
       runtime.conversationEnded({ surface: event.session.surface, conversationId: event.session.conversationId });
     },

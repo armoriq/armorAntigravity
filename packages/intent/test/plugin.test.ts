@@ -60,7 +60,7 @@ describe("withIntent", () => {
     expect(rt.root({ surface: "cli", conversationId: CONV })).not.toBeNull();
   });
 
-  test("the directive is injected while no plan is registered, and appended to the inner steps", async () => {
+  test("the directive is injected while the current prompt has no registered plan, and appended to the inner steps", async () => {
     const { hook, setReply } = setup();
     expect(await hook(preInvocation)).toEqual({ injectSteps: [{ type: "ephemeralMessage", text: INTENT_DIRECTIVE }] });
     setReply({ injectSteps: [{ type: "userMessage", text: "core" }] });
@@ -72,7 +72,8 @@ describe("withIntent", () => {
     });
     await hook(register);
     setReply(null);
-    expect(await hook(preInvocation)).toBeNull();
+    expect(await hook({ ...preInvocation, invocationNum: 1 })).toBeNull();
+    expect(await hook({ ...preInvocation, initialNumSteps: 3 })).toEqual({ injectSteps: [{ type: "ephemeralMessage", text: INTENT_DIRECTIVE }] });
   });
 
   test("monitor mode leaves the inner PreInvocation response untouched", async () => {
