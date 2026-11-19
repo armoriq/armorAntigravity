@@ -154,6 +154,8 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
   const runtime: IntentRuntime = createIntentRuntime({
     client: auth.client,
     health: recorder.health,
+    runs: recorder.runs,
+    runToolName: call => mapToolCall(call).tool,
     stateFile: path.join(ctx.paths.dataDir, "intent-state.json"),
     login: () => auth.uploadLogin(),
     mode: () => auth.mode(),
@@ -238,6 +240,8 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     if ((state.kind !== "active" && state.kind !== "refused") || auth.mode() === "monitor") return null;
     const call: MappedCall = mapToolCall(payload.toolCall);
     if (capabilityOf(call) === "read") return null;
+    const root = runtime.root({ surface, conversationId: payload.conversationId });
+    const runId = root?.ref.conversationId === payload.conversationId ? root.promptId : null;
     const reach = await reachability.check(state.login);
     if (reach.kind !== "unreachable") return null;
     const decision: AdapterDecision = {
@@ -248,6 +252,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     };
     const response = toHookResponse(decision);
     onDecision(surface, { conversationId: payload.conversationId, stepIdx: payload.stepIdx, at, call, decision, status: "blocked", response, attribution: BUILTIN_ATTRIBUTION });
+    try { recorder.runs.unreachable(runId); } catch { log.error("run bookkeeping failed"); }
     return response;
   };
 

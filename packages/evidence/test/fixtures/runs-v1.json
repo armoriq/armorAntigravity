@@ -1,0 +1,321 @@
+{
+  "capabilities": {
+    "armorclaude": {
+      "normalization": "Trim and lowercase the host tool name.",
+      "sources": [
+        "scripts/lib/common.mjs",
+        "scripts/lib/backend-posture.mjs",
+        "scripts/lib/engine.mjs:handlePreToolUse"
+      ],
+      "rules": [
+        {
+          "patterns": [
+            "^(?:mcp__armorclaude-policy__|mcp__plugin_armorclaude_armorclaude-policy__)?(?:register_intent_plan|policy_read|trust_revoke|trust_reanchor|trust_delegate)$"
+          ],
+          "gated": false,
+          "counted": false
+        },
+        {
+          "patterns": [
+            "^skill$"
+          ],
+          "gated": false,
+          "counted": true,
+          "when": {
+            "managementSkill": "armor or armorclaude:armor or any skill ending in :armor"
+          }
+        },
+        {
+          "patterns": [
+            "^(?:toolsearch|todowrite|listmcpresourcestool|readmcpresourcetool|exitplanmode)$"
+          ],
+          "gated": false,
+          "counted": true
+        },
+        {
+          "patterns": [
+            "^(?:read|grep|glob|websearch|webfetch)$"
+          ],
+          "gated": true,
+          "counted": true,
+          "when": {
+            "policyV2Action": "hold"
+          }
+        },
+        {
+          "patterns": [
+            "^(?:read|grep|glob|websearch|webfetch)$"
+          ],
+          "gated": false,
+          "counted": true
+        },
+        {
+          "patterns": [
+            "^.*$"
+          ],
+          "gated": true,
+          "counted": true
+        }
+      ],
+      "notes": [
+        "Backend capability labels also call ls and notebookread read, but those names do not bypass the intent gate."
+      ]
+    },
+    "armorcodex": {
+      "normalization": "Trim, preserve MCP prefixes, remove the first double underscore from other names, lowercase, then resolve exec_command, shell, local_shell, unified_exec and container.exec to bash.",
+      "sources": [
+        "plugins/armorcodex/scripts/lib/common.mjs",
+        "plugins/armorcodex/scripts/lib/backend-posture.mjs",
+        "plugins/armorcodex/scripts/lib/engine.mjs:handlePreToolUse"
+      ],
+      "rules": [
+        {
+          "patterns": [
+            "^(?:register_intent_plan|policy_read|policy_update)$",
+            "^(?:.*mcp__armorcodex[-_]policy__|.*armorcodex[-_]policy[.]).*(?:register_intent_plan|policy_read|policy_update)$"
+          ],
+          "gated": false,
+          "counted": false
+        },
+        {
+          "patterns": [
+            "^(?:toolsearch|todowrite|listmcpresourcestool|readmcpresourcetool|read|grep|glob|websearch|webfetch)$"
+          ],
+          "gated": false,
+          "counted": true
+        },
+        {
+          "patterns": [
+            "^.*$"
+          ],
+          "gated": true,
+          "counted": true
+        }
+      ],
+      "notes": [
+        "The current own tool exemption includes policy_update and exposes no trust tools. Codex currently hooks Bash, apply_patch and MCP calls, so it sees no native read calls. Backend capability labels do not define plan exemptions."
+      ]
+    },
+    "armoropencode": {
+      "normalization": "Use the canonical OpenCode tool name. The V2 adapter resolves its host vocabulary before this table.",
+      "sources": [
+        "src/core/decide.ts",
+        "src/core/intent.ts:READ_ONLY_TOOLS",
+        "src/core/builtin-rules.ts",
+        "src/tools/intent.ts:OWN_TOOL_NAMES"
+      ],
+      "rules": [
+        {
+          "patterns": [
+            "^(?:register_intent_plan|policy_read|trust_reanchor|trust_revoke)$"
+          ],
+          "gated": false,
+          "counted": false
+        },
+        {
+          "patterns": [
+            "^(?:read|grep|glob|list|webfetch|websearch|todoread|todowrite)$"
+          ],
+          "gated": false,
+          "counted": true
+        },
+        {
+          "patterns": [
+            "^.*$"
+          ],
+          "gated": true,
+          "counted": true
+        }
+      ],
+      "notes": [
+        "A shadowed own tool name is denied by the builtin guard. Only the trusted plugin tool is excluded from counters."
+      ]
+    },
+    "armorantigravity": {
+      "normalization": "Use mapToolCall canonical names. read_file, Read and NotebookRead resolve to view_file; LS and list resolve to list_dir; Glob to find_by_name; Grep to grep_search. Trusted armoriq MCP own tools resolve to bare names.",
+      "sources": [
+        "packages/intent/src/directive.ts",
+        "packages/adapter/src/tools.ts",
+        "packages/adapter/src/product.ts:ANTIGRAVITY_TOOLS",
+        "packages/core/src/decide.ts",
+        "packages/intent/src/own-tools.ts"
+      ],
+      "rules": [
+        {
+          "patterns": [
+            "^(?:register_intent_plan|trust_reanchor|trust_revoke|trust_delegate|policy_read)$"
+          ],
+          "gated": false,
+          "counted": false
+        },
+        {
+          "patterns": [
+            "^(?:view_file|list_dir|find_by_name|grep_search)$"
+          ],
+          "gated": false,
+          "counted": true
+        },
+        {
+          "patterns": [
+            "^.*$"
+          ],
+          "gated": true,
+          "counted": true
+        }
+      ],
+      "notes": [
+        "search_web and read_url_content require a plan, including calls reached through WebSearch and WebFetch aliases. Browser actions, subagent tools, external MCP tools and unknown tools also require a plan."
+      ]
+    }
+  },
+  "adapterHooks": {
+    "armorclaude": {
+      "start": [
+        "UserPromptSubmit"
+      ],
+      "end": [
+        "Stop"
+      ],
+      "nextPrompt": [
+        "UserPromptSubmit"
+      ],
+      "sessionEnd": [
+        "SessionEnd"
+      ],
+      "cancel": [],
+      "error": [],
+      "recovery": [
+        "SessionStart"
+      ],
+      "toolAttempt": [
+        "PreToolUse"
+      ],
+      "toolError": [
+        "PostToolUseFailure"
+      ],
+      "notes": [
+        "No separate cancel or turn error hook is registered. SessionEnd or the next prompt or plugin start closes an abandoned run. UserPromptExpansion is not a second run."
+      ]
+    },
+    "armorcodex": {
+      "start": [
+        "UserPromptSubmit"
+      ],
+      "end": [
+        "Stop"
+      ],
+      "nextPrompt": [
+        "UserPromptSubmit"
+      ],
+      "sessionEnd": [
+        "SessionEnd"
+      ],
+      "cancel": [],
+      "error": [],
+      "recovery": [
+        "SessionStart"
+      ],
+      "toolAttempt": [
+        "PreToolUse"
+      ],
+      "toolError": [],
+      "notes": [
+        "PermissionRequest is not another tool attempt. No separate cancel or error hook is registered; use SessionEnd, the next prompt or recovery when Stop is absent."
+      ]
+    },
+    "armoropencode": {
+      "v1": {
+        "start": [
+          "chat.message"
+        ],
+        "end": [
+          "session.status:idle"
+        ],
+        "nextPrompt": [
+          "chat.message"
+        ],
+        "sessionEnd": [
+          "session.deleted"
+        ],
+        "cancel": [],
+        "error": [],
+        "recovery": [
+          "plugin_start"
+        ],
+        "toolAttempt": [
+          "tool.execute.before"
+        ],
+        "toolError": [
+          "message.part.updated:tool.state.status=error"
+        ],
+        "notes": [
+          "The current V1 adapter has no separate cancel or session error callback. Idle, the next prompt, session deletion or recovery closes an abandoned run."
+        ]
+      },
+      "v2": {
+        "start": [
+          "ctx.session.hook(\"prompt\")"
+        ],
+        "end": [
+          "session.execution.succeeded",
+          "session.execution.failed",
+          "session.execution.interrupted"
+        ],
+        "nextPrompt": [
+          "ctx.session.hook(\"prompt\")"
+        ],
+        "sessionEnd": [
+          "session.deleted"
+        ],
+        "cancel": [
+          "session.execution.interrupted"
+        ],
+        "error": [
+          "session.execution.failed"
+        ],
+        "recovery": [
+          "plugin_start"
+        ],
+        "toolAttempt": [
+          "ctx.tool.hook(\"execute.before\")"
+        ],
+        "toolError": [
+          "ctx.tool.hook(\"execute.after\"):status=error"
+        ],
+        "notes": [
+          "V2 does not emit session.idle or session.status."
+        ]
+      }
+    },
+    "armorantigravity": {
+      "start": [
+        "PreInvocation:invocationNum=0"
+      ],
+      "end": [
+        "Stop"
+      ],
+      "nextPrompt": [
+        "PreInvocation:invocationNum=0"
+      ],
+      "sessionEnd": [],
+      "cancel": [
+        "Stop:terminationReason"
+      ],
+      "error": [
+        "Stop:error"
+      ],
+      "recovery": [
+        "plugin_start"
+      ],
+      "toolAttempt": [
+        "PreToolUse"
+      ],
+      "toolError": [
+        "PostToolUse:error"
+      ],
+      "notes": [
+        "Ignore child invocations and parent invocations caused by a child send_message. PostInvocation is not a turn end. There is no session end hook; the next prompt or recovery closes a run without Stop. Stop carries terminationReason and error, with no separate cancel or error event."
+      ]
+    }
+  }
+}

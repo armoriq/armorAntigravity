@@ -77,3 +77,13 @@ export async function healthStatus(env: Env): Promise<ReportingStatus> {
   current = binding;
   return reportingStatus(paths.dataDir, "health", outbox.status(), binding);
 }
+
+export async function runsStatus(env: Env): Promise<ReportingStatus> {
+  const paths = resolvePaths(env);
+  const config = readConfig(paths.configFile, quiet);
+  const binding = queueLogin(readLogin(env, config.backendUrl));
+  let current: QueueLogin | null = null;
+  const outbox = createOutbox(paths.dataDir, "runs", quiet, { login: () => current });
+  current = binding;
+  return reportingStatus(paths.dataDir, "runs", outbox.status(), binding);
+}

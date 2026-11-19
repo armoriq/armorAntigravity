@@ -165,6 +165,13 @@ test("repeated status calls create no queue writers", async () => {
   expect(existsSync(path.join(dir, "outbox", "audit-v2"))).toBe(false);
 });
 
+test("health and runs status are read only even with reporting disabled", async () => {
+  const { dir, env } = store();
+  for (let n = 0; n < 3; n++) { await capture.healthStatus(env); await capture.runsStatus(env); }
+  expect(existsSync(path.join(dir, "outbox", "health-v2"))).toBe(false);
+  expect(existsSync(path.join(dir, "outbox", "runs-v2"))).toBe(false);
+});
+
 test("local status counts retained health events and the persisted endpoint pause", async () => {
   const { dir, env } = store();
   const health = createOutbox(dir, "health", quiet, { login: () => binding });
@@ -178,4 +185,18 @@ test("local status counts retained health events and the persisted endpoint paus
   const output = await new Response(proc.stdout).text();
   expect(await proc.exited).toBe(0);
   expect(output).toContain("health: 1 pending, 1 undeliverable, 0 dead letters, paused");
+});
+
+test("local status retains runs and shows endpoint and login pauses", async () => {
+  const { dir, env } = store();
+  const runs = createOutbox(dir, "runs", quiet, { login: () => binding });
+  runs.enqueue({ run_id: "run", report_seq: 1, session_id: "root", started_at: new Date().toISOString(), tool_calls: 0, gated_tool_calls: 0, plan_ids: [] });
+  await runs.drain(async () => ({ ok: false, endpointStatus: 404 }));
+  await runs.persist();
+  expect(await capture.runsStatus(env)).toMatchObject({ pending: 1, undeliverable: 1, deadLetters: 0, captureFailures: 0, paused: true });
+  expect(await capture.runsStatus({ ...env, ARMORIQ_API_KEY: "ak_test_other_login" })).toMatchObject({ pending: 1, undeliverable: 1, paused: false });
+  const proc = Bun.spawn(["bun", "packages/cli/src/main.ts", "status"], { env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(proc.stdout).text();
+  expect(await proc.exited).toBe(0);
+  expect(output).toContain("runs: 1 pending, 1 undeliverable, 0 dead letters, paused");
 });
