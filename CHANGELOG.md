@@ -7,6 +7,13 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-17
+
+### Changed
+
+- No functional changes. This release exists so every 0.2.0 install, the first with a self-updating
+  daemon, moves to a newer release by itself, which proves the update path on real installs.
+
 ## [0.2.0] - 2026-11-16
 
 ### Changed

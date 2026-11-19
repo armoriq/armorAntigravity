@@ -1,4 +1,5 @@
-import { DEFAULT_SOCKET_PATH, FALLBACK_DIR_NAME, MODE_FILE_NAME, SOCKET_PATH_ENV } from "@armorantigravity/protocol";
+import { FALLBACK_DIR_NAME, MODE_FILE_NAME } from "@armorantigravity/protocol";
+import { resolveArmoriqDir, resolveSocketPath } from "@armorantigravity/protocol/socket";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -20,9 +21,9 @@ export interface Paths {
 }
 
 export function resolvePaths(env: Env): Paths {
-  const armoriqDir = env.ARMORIQ_HOME?.trim() || path.join(homedir(), ".armoriq");
+  const armoriqDir = resolveArmoriqDir(env, homedir());
   const dataDir = path.join(armoriqDir, PRODUCT);
-  const socket = expandHome(env[SOCKET_PATH_ENV]?.trim() || DEFAULT_SOCKET_PATH.replace("~/.armoriq", armoriqDir));
+  const socket = resolveSocketPath(env, homedir());
   return {
     armoriqDir,
     dataDir,
@@ -35,8 +36,4 @@ export function resolvePaths(env: Env): Paths {
     sessionsDir: path.join(dataDir, "sessions"),
     logFile: path.join(dataDir, "logs", "agd.log"),
   };
-}
-
-function expandHome(p: string): string {
-  return p === "~" || p.startsWith("~/") ? path.join(homedir(), p.slice(1)) : p;
 }
