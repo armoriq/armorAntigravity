@@ -87,9 +87,6 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   const idleMs = opts.sessionIdleMs ?? SESSION_IDLE_MS;
   const pumps: Pump[] = [];
   const fallbackSpool = createFallbackSpool({ dataDir: paths.dataDir, socket: paths.socket, log });
-  await fallbackSpool.kick();
-  fallbackSpool.start();
-  pumps.push(fallbackSpool);
   const abort = async (error: unknown): Promise<never> => {
     await Promise.allSettled([...pumps.map((p) => p.stop()), updater.stop()]);
     auth.stop();
@@ -149,6 +146,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   let restartRequested = false;
   const connections = new Set<Socket>();
   const server = await listen(paths.socket, (socket) => serve(socket)).catch(abort);
+  pumps.push(fallbackSpool);
+  fallbackSpool.start();
+  setImmediate(() => { void fallbackSpool.kick(); });
 
   const sweep = setInterval(() => {
     const now = Date.now();

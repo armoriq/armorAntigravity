@@ -184,11 +184,11 @@ async function cmdStatus(): Promise<number> {
   info(`daemon: ${(await waitForSocket(l.socket, 0)) ? `listening on ${l.socket}` : "not running"}`);
   info(`updates: ${updateLine(l.dataDir)}`);
   const audit = await auditStatus(process.env);
-  info(`audit: ${audit.pending} pending, ${audit.undeliverable} undeliverable, ${audit.deadLetters} dead letters, ${audit.captureFailures} capture failures, ${audit.legacyPending ?? 0} written by an older version without a login binding`);
+  info(`audit: ${audit.pending} pending, ${audit.undeliverable} undeliverable, ${audit.deadLetters} dead letters, ${audit.captureFailures} capture failures, ${audit.spoolPending} in fallback spool, ${audit.legacyPending ?? 0} written by an older version without a login binding`);
   const health = await healthStatus(process.env);
-  info(`health: ${health.pending} pending, ${health.undeliverable} undeliverable, ${health.deadLetters} dead letters${health.paused ? ", paused" : ""}${health.held.length ? `, held: ${health.held.join(", ")}` : ""}`);
+  info(`health: ${health.pending} pending, ${health.undeliverable} undeliverable, ${health.deadLetters} dead letters${health.paused ? ", paused" : ""}${health.holds?.length ? `, held: ${health.holds.join(", ")}` : ""}, ${health.captureFailures} capture failures`);
   const runs = await runsStatus(process.env);
-  info(`runs: ${runs.pending} pending, ${runs.undeliverable} undeliverable, ${runs.deadLetters} dead letters${runs.paused ? ", paused" : ""}${runs.held.length ? `, held: ${runs.held.join(", ")}` : ""}`);
+  info(`runs: ${runs.pending} pending, ${runs.undeliverable} undeliverable, ${runs.deadLetters} dead letters${runs.paused ? ", paused" : ""}${runs.holds?.length ? `, held: ${runs.holds.join(", ")}` : ""}, ${runs.captureFailures} capture failures`);
   reportSurfaces();
   return 0;
 }

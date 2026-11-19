@@ -6,7 +6,8 @@ import { auditLogin, DEFAULT_TIMING, type PumpTiming } from "./audit.ts";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { reportingDelivery, type ReportingStatus } from "../io/reporting-delivery.ts";
+import { reportingDelivery } from "../io/reporting-delivery.ts";
+import type { OutboxStatus } from "@armorantigravity/core";
 import type { QueueLogin } from "@armorantigravity/core";
 
 type EventLogin = Pick<Login, "backend" | "apiKey">;
@@ -14,7 +15,7 @@ export type HealthPump = Omit<Pump, "kick"> & {
   readonly name: "health";
   readonly outbox: Outbox<ClientEvent>;
   kick(): Promise<void>;
-  status(): ReportingStatus;
+  status(): OutboxStatus;
   loginChanged(revalidated?: boolean): Promise<void>;
   planRequestFailed(login: EventLogin, key: string, reason: PlanFailureReason, notBefore?: number): Promise<void>;
   planRequestSucceeded(login: EventLogin, key: string): Promise<void>;
@@ -35,7 +36,7 @@ export function createHealthPump(deps: EvidenceDeps & {
     timing: { baseMs: timing.minBackoffMs, maxMs: timing.maxBackoffMs, lockTtlMs: 60_000, authProbeMs: timing.authProbeMs },
   });
   initialized = true;
-  const delivery = reportingDelivery(deps, "health", deps.clock?.now);
+  const delivery = reportingDelivery(deps);
   const requestMarker = (auth: EventLogin, key: string) => join(deps.dataDir, "health-plan-requests", createHash("sha256").update(JSON.stringify([auditLogin(auth), key])).digest("hex"));
   const previousFailures = new Set(outbox.readPending().filter(entry => entry.notBefore !== undefined).map(entry => entry.row.event_id));
   const post = deps.post ?? postClientEvents;
@@ -51,13 +52,13 @@ export function createHealthPump(deps: EvidenceDeps & {
       const auth = deps.uploads.login();
       const identity = auditLogin(auth);
       if (!auth || !identity || identity.backend !== binding.backend || identity.keyId !== binding.keyId) return { ok: false, deferred: true };
-      return delivery.send(binding, () => post(auth, deps.uploads, events));
+      return post(auth, deps.uploads, events);
     }, undefined, { probe: deps.probe ?? delivery.probe }).then(() => {}).catch(() => deps.log.error("health pump failed")).finally(() => { running = null; });
     return running;
   }
 
   return {
-    name: "health", outbox, kick, status: () => delivery.status(outbox.status()),
+    name: "health", outbox, kick, status: () => outbox.status(),
     async planRequestFailed(auth, key, reason, notBefore) {
       const markerDir = join(deps.dataDir, "health-plan-requests");
       mkdirSync(markerDir, { recursive: true, mode: 0o700 });

@@ -8,7 +8,6 @@ import { readConfig } from "./config.ts";
 import { resolvePaths, type Env } from "./paths.ts";
 import { surfaceFromTranscriptPath } from "./surface.ts";
 import { fallbackSpoolStatus } from "./fallback-spool.ts";
-import { reportingStatus, type ReportingStatus } from "@armorantigravity/evidence";
 
 const quiet = { info() {}, warn() {}, error() {} };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -28,7 +27,7 @@ export function auditIdentity(request: Pick<DaemonRequest, "id" | "payload">, da
       while (!seen.has(key)) {
         seen.add(key);
         const conversation = conversations.get(key);
-        if (!conversation) break;
+        if (!conversation) { sessionId = key.slice(key.indexOf(":") + 1); break; }
         sessionId = conversation.ref.conversationId;
         if (!conversation.parent) break;
         key = conversation.parent;
@@ -54,7 +53,7 @@ export async function captureFallback(dataDir: string, identity: AuditIdentity, 
   } finally { await outbox.persist(); }
 }
 
-export async function auditStatus(env: Env): Promise<OutboxStatus> {
+export async function auditStatus(env: Env): Promise<OutboxStatus & { spoolPending: number }> {
   const paths = resolvePaths(env);
   const config = readConfig(paths.configFile, quiet);
   const binding = queueLogin(readLogin(env, config.backendUrl));
@@ -65,25 +64,26 @@ export async function auditStatus(env: Env): Promise<OutboxStatus> {
   statusLogin = binding;
   await outbox.persist();
   const status = outbox.status();
-  return { ...status, captureFailures: status.captureFailures + fallbackSpoolStatus(paths.socket).quarantined };
+  const spool = fallbackSpoolStatus(paths.socket);
+  return { ...status, spoolPending: spool.pending, captureFailures: status.captureFailures + spool.quarantined + spool.failures };
 }
 
-export async function healthStatus(env: Env): Promise<ReportingStatus> {
+export async function healthStatus(env: Env): Promise<OutboxStatus> {
   const paths = resolvePaths(env);
   const config = readConfig(paths.configFile, quiet);
   const binding = queueLogin(readLogin(env, config.backendUrl));
   let current: QueueLogin | null = null;
   const outbox = createOutbox(paths.dataDir, "health", quiet, { login: () => current });
   current = binding;
-  return reportingStatus(paths.dataDir, "health", outbox.status(), binding);
+  return outbox.status();
 }
 
-export async function runsStatus(env: Env): Promise<ReportingStatus> {
+export async function runsStatus(env: Env): Promise<OutboxStatus> {
   const paths = resolvePaths(env);
   const config = readConfig(paths.configFile, quiet);
   const binding = queueLogin(readLogin(env, config.backendUrl));
   let current: QueueLogin | null = null;
   const outbox = createOutbox(paths.dataDir, "runs", quiet, { login: () => current });
   current = binding;
-  return reportingStatus(paths.dataDir, "runs", outbox.status(), binding);
+  return outbox.status();
 }

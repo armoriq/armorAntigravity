@@ -139,7 +139,7 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
             const current = registry.get(key);
             if (current?.parent === null && current.promptId && current.promptId !== previous) {
               runs?.end(previous, "next_prompt", now());
-              runs?.begin(current.promptId, current.ref.conversationId, current.promptOpenSince ?? now(), opts.mode() === "enforce" && opts.policy().intentRequired);
+              runs?.begin(current.promptId, current.ref.conversationId, current.promptOpenSince ?? now(), opts.mode() === "enforce");
               void runs?.kick();
             }
           }
@@ -150,7 +150,7 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
           const conv = registry.get(key);
           if (conv?.parent === null && !linker.mightBeChild(ref)) {
             const canonical = opts.runToolName?.(payload.toolCall) ?? ownToolCall(name, args)?.tool ?? planToolName(name);
-            runs?.attempt(conv.promptId, String(payload.stepIdx), canonical, opts.mode() === "enforce" && opts.policy().intentRequired);
+            runs?.attempt(conv.promptId, String(payload.stepIdx), canonical, opts.mode() === "enforce");
           }
           if (name === "invoke_subagent") linker.noteSpawn(ref, now());
           if (name === "send_message" && isPlainObject(args) && typeof args.Recipient === "string") {

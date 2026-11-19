@@ -185,27 +185,45 @@ static void spawn_daemon(void) {
   _exit(127);
 }
 
-// The daemon writes one file per event holding the exact bytes to print. The file is read whole before
-// anything is printed, because a tool call that would print nothing has to become the deny instead:
-// Antigravity reads empty PreToolUse output as no opinion and runs the call. Missing, unreadable, empty
-// and unopenable all land there, so nothing short of a file with content in it can fail open.
-static void spool_fallback(const char *socket_path, const Buffer *frame, const char *reason, const char *printed, size_t printed_len) {
-  if (!frame || frame->len > MAX_REPLY_BYTES) return;
-  char dir[PATH_MAX], temporary[PATH_MAX], complete[PATH_MAX], context_path[PATH_MAX];
+static int socket_directory(const char *socket_path, char *out, size_t size) {
   const char *slash = strrchr(socket_path, '/');
-  size_t dir_len = slash ? (size_t)(slash - socket_path) : 0;
-  if (snprintf(dir, sizeof dir, "%.*s/fallback-spool", (int)dir_len, socket_path) >= (int)sizeof dir) return;
+  if (!slash) return snprintf(out, size, ".") < (int)size;
+  size_t len = slash == socket_path ? 1 : (size_t)(slash - socket_path);
+  return snprintf(out, size, "%.*s", (int)len, socket_path) < (int)size;
+}
+
+static void count_spool_failure(const char *socket_path) {
+  char parent[PATH_MAX], path[PATH_MAX];
+  if (!socket_directory(socket_path, parent, sizeof parent) || snprintf(path, sizeof path, "%s/fallback-spool-failures", parent) >= (int)sizeof path) return;
+  int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_NONBLOCK, 0600);
+  if (fd < 0) {
+    static const char message[] = "ArmorIQ capture failure: fallback record and count could not be saved\n";
+    write_all(STDERR_FILENO, message, sizeof message - 1);
+    return;
+  }
+  fchmod(fd, 0600);
+  write_all(fd, "1", 1);
+  fsync(fd);
+  close(fd);
+  int directory = open(parent, O_RDONLY);
+  if (directory >= 0) { fsync(directory); close(directory); }
+}
+
+static void spool_fallback(const char *socket_path, const Buffer *frame, const char *reason, const char *printed, size_t printed_len) {
+  char parent[PATH_MAX], dir[PATH_MAX], temporary[PATH_MAX], complete[PATH_MAX], context_path[PATH_MAX];
+  if (!socket_directory(socket_path, parent, sizeof parent) || snprintf(dir, sizeof dir, "%s/fallback-spool", parent) >= (int)sizeof dir) { count_spool_failure(socket_path); return; }
   for (char *part = dir + 1; *part; part++) {
     if (*part != '/') continue;
     *part = '\0';
-    int made = mkdir(dir, 0700);
+    mkdir(dir, 0700);
     *part = '/';
-    if (made != 0 && errno != EEXIST) return;
   }
-  if (mkdir(dir, 0700) != 0 && errno != EEXIST) return;
+  if (mkdir(dir, 0700) != 0 && errno != EEXIST) { count_spool_failure(socket_path); return; }
+  int parent_fd = open(parent, O_RDONLY);
+  if (parent_fd >= 0) { fsync(parent_fd); close(parent_fd); }
   char context[4096];
   size_t context_len = 0;
-  if (snprintf(context_path, sizeof context_path, "%.*s/fallback/capture-context", (int)dir_len, socket_path) < (int)sizeof context_path) {
+  if (snprintf(context_path, sizeof context_path, "%s/fallback/capture-context", parent) < (int)sizeof context_path) {
     int context_fd = open(context_path, O_RDONLY | O_NONBLOCK);
     if (context_fd >= 0) {
       ssize_t got = read(context_fd, context, sizeof context);
@@ -214,16 +232,24 @@ static void spool_fallback(const char *socket_path, const Buffer *frame, const c
     }
   }
   char header[160];
-  int n = snprintf(header, sizeof header, "agds1 %s %zu %zu %zu\n", reason, frame->len, printed_len, context_len);
-  if (n <= 0 || n >= (int)sizeof header || (size_t)n + frame->len + printed_len + context_len > MAX_REPLY_BYTES) return;
+  size_t frame_len = frame ? frame->len : 0;
+  if (frame_len > MAX_REPLY_BYTES) { frame_len = 0; reason = "frame_too_large"; }
+  int n = snprintf(header, sizeof header, "agds1 %s %zu %zu %zu\n", reason, frame_len, printed_len, context_len);
+  if (n <= 0 || n >= (int)sizeof header) { count_spool_failure(socket_path); return; }
+  if ((size_t)n + frame_len + printed_len + context_len > MAX_REPLY_BYTES) {
+    frame_len = 0;
+    reason = "frame_too_large";
+    if (printed_len > MAX_REPLY_BYTES - sizeof header - sizeof context) printed_len = 0;
+    n = snprintf(header, sizeof header, "agds1 %s 0 %zu %zu\n", reason, printed_len, context_len);
+  }
   int fd = -1;
   for (int attempt = 0; attempt < 8; attempt++) {
-    if (snprintf(temporary, sizeof temporary, "%s/record-%ld-%lld-%ld-%d.tmp", dir, (long)getpid(), wall_ms(), monotonic_ms(), attempt) >= (int)sizeof temporary) return;
+    if (snprintf(temporary, sizeof temporary, "%s/record-%ld-%lld-%ld-%d.tmp", dir, (long)getpid(), wall_ms(), monotonic_ms(), attempt) >= (int)sizeof temporary) { count_spool_failure(socket_path); return; }
     fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NONBLOCK, 0600);
     if (fd >= 0 || errno != EEXIST) break;
   }
-  if (fd < 0) return;
-  int ok = write_all(fd, header, (size_t)n) && write_all(fd, frame->data, frame->len) &&
+  if (fd < 0) { count_spool_failure(socket_path); return; }
+  int ok = write_all(fd, header, (size_t)n) && (!frame_len || write_all(fd, frame->data, frame_len)) &&
            write_all(fd, printed, printed_len) && write_all(fd, context, context_len) && fsync(fd) == 0;
   close(fd);
   // Failed or interrupted writes remain recognizable as temporary records, never as complete ones.
@@ -233,13 +259,15 @@ static void spool_fallback(const char *socket_path, const Buffer *frame, const c
   if (directory >= 0) { fsync(directory); close(directory); }
 }
 
+// The daemon writes one file per event holding the exact bytes to print. The file is read whole before
+// anything is printed, because a tool call that would print nothing has to become the deny instead:
+// Antigravity reads empty PreToolUse output as no opinion and runs the call. Missing, unreadable, empty
+// and unopenable all land there, so nothing short of a file with content in it can fail open.
 static int print_fallback(const char *socket_path, const char *event, const Buffer *frame, const char *reason) {
   int tool_call = strcmp(event, "PreToolUse") == 0;
-  char path[PATH_MAX];
-  const char *slash = strrchr(socket_path, '/');
-  size_t dir_len = slash ? (size_t)(slash - socket_path) : 0;
+  char parent[PATH_MAX], path[PATH_MAX];
   Buffer file = {0};
-  int ok = snprintf(path, sizeof path, "%.*s/fallback/%s", (int)dir_len, socket_path, event) < (int)sizeof path;
+  int ok = socket_directory(socket_path, parent, sizeof parent) && snprintf(path, sizeof path, "%s/fallback/%s", parent, event) < (int)sizeof path;
   int fd = ok ? open(path, O_RDONLY) : -1;
   if (fd >= 0) {
     for (;;) {

@@ -146,6 +146,61 @@ test("a compiled deny creates its spool even before the socket directory exists"
   expect(readdirSync(path.join(dataDir(), "fallback-spool")).filter(file => file.endsWith(".spool"))).toHaveLength(1);
 }, 10_000);
 
+// regression: #0010
+test("an oversized fallback frame leaves a counted marker", async () => {
+  const input = { ...toolPayload("oversize"), toolCall: { name: "write_to_file", args: { CodeContent: "x".repeat(4 * 1024 * 1024) } } };
+  expect(await hook(["PreToolUse"], JSON.stringify(input), { ARMORANTIGRAVITY_DAEMON: "/usr/bin/false" })).toMatchObject({ decision: "deny" });
+  const root = path.join(dataDir(), "fallback-spool");
+  const files = readdirSync(root).filter(file => file.endsWith(".spool"));
+  expect(files).toHaveLength(1);
+  const bytes = readFileSync(path.join(root, files[0]!));
+  expect(bytes.toString()).toStartWith("agds1 frame_too_large 0 ");
+  expect(bytes.length).toBeLessThan(4096);
+  const { createFallbackSpool } = await import(path.join(import.meta.dir, "../../daemon/src/fallback-spool.ts"));
+  const { auditStatus } = await import(path.join(import.meta.dir, "../../daemon/src/capture.ts"));
+  const spool = createFallbackSpool({ dataDir: dataDir(), socket: path.join(dataDir(), "agd.sock"), log: quiet });
+  try { await spool.kick(); } finally { await spool.stop(); }
+  expect(await auditStatus({})).toMatchObject({ captureFailures: 1, spoolPending: 0 });
+}, 10_000);
+
+// regression: #0010
+test.each(["directory", "temporary open"])("a fallback %s failure leaves a durable failure count", async failure => {
+  const root = path.join(dataDir(), "fallback-spool");
+  mkdirSync(dataDir(), { recursive: true });
+  if (failure === "directory") writeFileSync(root, "occupied");
+  else { mkdirSync(root); chmodSync(root, 0o500); }
+  try {
+    expect(await hook(["PreToolUse"], JSON.stringify(toolPayload("storage")), { ARMORANTIGRAVITY_DAEMON: "/usr/bin/false" })).toMatchObject({ decision: "deny" });
+    const counter = path.join(dataDir(), "fallback-spool-failures");
+    expect(readFileSync(counter, "utf8")).toBe("1");
+    const { auditStatus } = await import(path.join(import.meta.dir, "../../daemon/src/capture.ts"));
+    expect(await auditStatus({})).toMatchObject({ captureFailures: 1, spoolPending: 0 });
+  } finally { if (failure !== "directory") chmodSync(root, 0o700); }
+}, 10_000);
+
+// regression: #0010
+test("a relative socket path retains fallback records in its working directory", async () => {
+  const proc = Bun.spawn([CLIENT, "PreToolUse"], { cwd: sandbox.home, stdin: new TextEncoder().encode(JSON.stringify(toolPayload("relative"))), stdout: "pipe",
+    env: { ...process.env, ARMORANTIGRAVITY_SOCKET: "agd.sock", ARMORANTIGRAVITY_DAEMON: "/usr/bin/false" } });
+  expect(JSON.parse(await new Response(proc.stdout).text())).toMatchObject({ decision: "deny" });
+  expect(await proc.exited).toBe(0);
+  expect(readdirSync(path.join(sandbox.home, "fallback-spool")).filter(file => file.endsWith(".spool"))).toHaveLength(1);
+}, 10_000);
+
+// regression: #0010
+test("an ancestor mkdir returning EROFS does not prevent a writable spool", async () => {
+  const shim = path.join(buildDir, "mkdir-shim.h");
+  writeFileSync(shim, '#include <sys/stat.h>\n#include <errno.h>\n#include <stdlib.h>\n#include <string.h>\nstatic int ancestor_mkdir(const char *p, mode_t m) { if (getenv("READ_ONLY_ANCESTOR") && strcmp(p, getenv("READ_ONLY_ANCESTOR")) == 0) { errno = EROFS; return -1; } return mkdir(p, m); }\n#define mkdir ancestor_mkdir\n');
+  const hook = path.join(buildDir, "ancestor-hook");
+  const result = Bun.spawnSync(["cc", "-std=gnu11", "-O2", "-Wall", "-Wextra", "-include", shim, "-o", hook, path.join(import.meta.dir, "../src/agd-hook.c")], { stderr: "pipe" });
+  expect(result.exitCode).toBe(0);
+  const proc = Bun.spawn([hook, "PreToolUse"], { stdin: new TextEncoder().encode(JSON.stringify(toolPayload("ancestor"))), stdout: "pipe",
+    env: { ...process.env, READ_ONLY_ANCESTOR: sandbox.home, ARMORANTIGRAVITY_DAEMON: "/usr/bin/false" } });
+  expect(JSON.parse(await new Response(proc.stdout).text())).toMatchObject({ decision: "deny" });
+  expect(await proc.exited).toBe(0);
+  expect(readdirSync(path.join(dataDir(), "fallback-spool")).filter(file => file.endsWith(".spool"))).toHaveLength(1);
+}, 10_000);
+
 // A socket the hook can reach that is not this daemon: a stalled peer, a peer on an older protocol.
 function peer(socketPath: string, onLine: (socket: Socket) => void): Promise<Server> {
   mkdirSync(path.dirname(socketPath), { recursive: true });

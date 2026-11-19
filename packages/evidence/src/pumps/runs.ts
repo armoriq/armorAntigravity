@@ -40,21 +40,25 @@ export function createRunsPump(deps: EvidenceDeps & {
   probe?: (binding: QueueLogin) => Promise<boolean>;
 }) {
   if (!deps.enabled) return disabledRunsPump();
-  const outbox: Outbox<RunReport> = deps.enabled ? createOutbox(deps.dataDir, "runs", deps.log, { login: () => auditLogin(deps.uploads.login()), probeLogin: () => auditLogin(deps.uploads.probeLogin ? deps.uploads.probeLogin() : deps.uploads.login()), ...(deps.clock ? { clock: deps.clock } : {}) }) : inertOutbox();
+  const outbox: Outbox<RunReport> = deps.enabled ? createOutbox(deps.dataDir, "runs", deps.log, { preopen: false, login: () => auditLogin(deps.uploads.login()), probeLogin: () => auditLogin(deps.uploads.probeLogin ? deps.uploads.probeLogin() : deps.uploads.login()), ...(deps.clock ? { clock: deps.clock } : {}) }) : inertOutbox();
   const runs = new Map<string, RunState>();
   const saved = new Map<string, RunState>();
   const activity = new Map<string, number>();
+  const recovering = new Set<string>();
   const active = new Map<string, number>();
   const idle = new Set<() => void>();
   const now = deps.clock?.now ?? Date.now;
-  const delivery = reportingDelivery(deps, "runs", now);
+  const delivery = reportingDelivery(deps);
   const post = deps.post ?? postRunsBatch;
   let interval: ReturnType<typeof setInterval> | undefined;
   let running: Promise<void> | null = null;
   let again = false;
   let stopped = false;
   const owner = { id: randomUUID(), pid: process.pid };
-  if (deps.enabled) outbox.prepare(LOCAL);
+  if (deps.enabled) {
+    try { outbox.prepare(LOCAL); outbox.prepare(); }
+    catch (error) { void outbox.persist().catch(() => deps.log.error("runs initialization cleanup failed")); throw error; }
+  }
 
   function save(run: RunState, report?: RunReport, capture?: Capture, activityAt = now()): JournalCheckpoint {
     const previous = saved.get(run.runId);
@@ -64,6 +68,7 @@ export function createRunsPump(deps: EvidenceDeps & {
     else outbox.checkpoint(checkpoint, run.binding ?? LOCAL, report);
     saved.set(run.runId, structuredClone(run));
     activity.set(run.runId, activityAt);
+    recovering.delete(run.runId);
     return checkpoint;
   }
 
@@ -110,6 +115,7 @@ export function createRunsPump(deps: EvidenceDeps & {
       const adopted = { ...run, owner, version: run.version + 1 };
       save(adopted, undefined, undefined, activity.get(run.runId) ?? now());
       runs.set(run.runId, adopted);
+      recovering.add(run.runId);
       if (adopted.end) finalize(adopted);
     }
   }
@@ -129,14 +135,14 @@ export function createRunsPump(deps: EvidenceDeps & {
       for (const run of runs.values()) {
         try {
           if (run.end) finalize(run);
-          else if (now() - (activity.get(run.runId) ?? now()) >= 30 * 60_000) end(run.runId, "recovered", now());
+          else if (recovering.has(run.runId) && now() - (activity.get(run.runId) ?? now()) >= 30 * 60_000) end(run.runId, "recovered", now());
         } catch { deps.log.error("run finalization failed; checkpoint retained"); }
       }
       await outbox.drain(async (reports, binding) => {
         const login = deps.uploads.login();
         const identity = auditLogin(login);
         if (!login || identity?.backend !== binding.backend || identity.keyId !== binding.keyId) return { ok: false, deferred: true };
-        return delivery.send(binding, () => post(login, deps.uploads, reports));
+        return post(login, deps.uploads, reports);
       }, undefined, { probe: deps.probe ?? delivery.probe });
       if (deps.health) {
         await outbox.reportHealth(deps.health.outbox);
@@ -154,7 +160,7 @@ export function createRunsPump(deps: EvidenceDeps & {
 
   return {
     name: "runs", enabled: deps.enabled, outbox, commit, end, kick,
-    status: () => deps.enabled ? delivery.status(outbox.status()) : { ...outbox.status(), held: [] },
+    status: () => outbox.status(),
     begin(runId: string, sessionId: string, at: number, enforcing: boolean): void {
       if (!deps.enabled || runs.has(runId)) return;
       const binding = auditLogin(deps.uploads.login());
@@ -184,6 +190,7 @@ export function createRunsPump(deps: EvidenceDeps & {
     },
     registration(runId: string | null): () => void {
       if (!runId || !runs.has(runId)) return () => {};
+      recovering.delete(runId);
       active.set(runId, (active.get(runId) ?? 0) + 1);
       let settled = false;
       return () => {
@@ -264,7 +271,7 @@ function disabledRunsPump() {
   const done = async (..._args: unknown[]): Promise<void> => {};
   return {
     name: "runs", enabled: false, outbox, commit: noop, end: noop, kick: done,
-    status: () => ({ ...outbox.status(), held: [] as string[] }), begin: noop,
+    status: () => outbox.status(), begin: noop,
     attempt: (..._args: unknown[]): JournalCheckpoint | undefined => undefined,
     registration: (..._args: unknown[]) => noop, request: noop, reject: noop, unreachable: noop,
     loginChanged: done, start: noop, stop: done,

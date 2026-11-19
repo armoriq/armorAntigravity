@@ -13,7 +13,7 @@ export function parseClientEventsReply(status: number, body: unknown, headers: H
   const unauthorized = (): SendResult<ClientEvent> => ({ ok: false, endpointStatus: status, relogin: true, stallReason: "auth_paused", reason: "client events authentication refused" });
   if (status === 404) return failed("client events endpoint unavailable");
   if (status === 401) return unauthorized();
-  if (status === 403 && (body as { error?: unknown } | null)?.error === "org_required") return { ok: false, hold: "org_required", deferred: true, endpointStatus: status };
+  if (status === 403 && (body as { error?: unknown } | null)?.error === "org_required") return { ok: false, hold: "org_required", reason: "org_required", endpointStatus: status };
   if (body && typeof body === "object" && Object.hasOwn(body, "results")) {
     const results = (body as { results: unknown }).results;
     const sent = new Set(events.map(event => event.event_id));
@@ -32,7 +32,9 @@ export function parseClientEventsReply(status: number, body: unknown, headers: H
   }
   if (status === 403) return unauthorized();
   if (status === 400 || status === 422) return { ...failed(`client events returned ${status}`), legacyRefusal: true };
-  return failed(`client events returned ${status} without a valid results list`);
+  const inProgress = status === 409 && (body as { error?: unknown } | null)?.error === "request_in_progress";
+  return { ...failed(`client events returned ${status} without a valid results list`),
+    nonTransient: status >= 400 && status < 500 && ![408, 429].includes(status) && !inProgress, tooLarge: status === 413 };
 }
 
 export async function postClientEvents(login: Login, uploads: Uploads, events: readonly ClientEvent[], timeoutMs = BATCH_TIMEOUT_MS): Promise<ReportingResult<ClientEvent>> {

@@ -16,4 +16,3 @@ export {
 export { createAgySource, type AgySourceOptions } from "./usage/agy-source.ts";
 export { EMPTY_SOURCE, repoOf, sessionTitle, type ConversationRef, type SourceRead, type SourceStep, type UsageSource } from "./usage/source.ts";
 export { auditLogin } from "./pumps/audit.ts";
-export { reportingStatus, type ReportingStatus } from "./io/reporting-delivery.ts";

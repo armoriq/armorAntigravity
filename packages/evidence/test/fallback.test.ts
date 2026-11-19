@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createOutbox } from "@armorantigravity/core";
+import { clientRowId, createOutbox } from "@armorantigravity/core";
 import { createAuditPump } from "../src/pumps/audit.ts";
 import { login, quietLog, uploads } from "./support.ts";
 
@@ -44,6 +44,7 @@ async function fallback(signedIn: boolean, stdin = JSON.stringify(capture)) {
   return { dataDir, response, env };
 }
 
+// regression: #0010
 test("a C fallback is durable before exit and the daemon adopts one sanitized envelope", async () => {
   const { dataDir } = await fallback(true);
   const delivered: unknown[] = [];
@@ -54,7 +55,7 @@ test("a C fallback is durable before exit and the daemon adopts one sanitized en
   } });
   await pump.kick();
   expect(delivered).toEqual([{
-    client_row_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    client_row_id: clientRowId(capture.conversationId, `${capture.conversationId}:${capture.stepIdx}`, "decision"),
     session_id: capture.conversationId, tool: "unknown", action: "unknown", input: {},
     executed_at: expect.any(String), decision_code: "internal_error", status: "blocked",
   }]);

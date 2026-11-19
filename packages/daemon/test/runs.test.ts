@@ -188,6 +188,22 @@ test("forced monitor reports authenticated attempts with gated counters", () => 
   expect(h.reports()[1]).toMatchObject({ tool_calls: 1, gated_tool_calls: 1, no_plan_reason: "monitor_mode" });
 });
 
+// regression: #0013
+test.each([
+  ["enforce", null, "no_tool_use", 0, 0],
+  ["enforce", "read_file", "read_only", 1, 0],
+  ["enforce", "run_command", "not_registered", 1, 1],
+  ["monitor", "run_command", "not_registered", 1, 1],
+] as const)("%s prompt with %s uses the actual mode when intent is optional", (mode, name, reason, toolCalls, gatedToolCalls) => {
+  const options = { mode: mode as Mode, policy: { ...permitAll, intentRequired: false } };
+  const h = setup(options);
+  h.observe(prompt());
+  options.mode = "enforce";
+  if (name) h.observe(tool(name));
+  h.observe(stop);
+  expect(h.reports().at(-1)).toMatchObject({ report_seq: 2, no_plan_reason: reason, tool_calls: toolCalls, gated_tool_calls: gatedToolCalls });
+});
+
 test("session cleanup emits no session_end report; the next daemon recovers the run", async () => {
   const h = setup();
   h.observe(prompt());

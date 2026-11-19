@@ -299,44 +299,6 @@
       }
     }
   ],
-  "pendingProducerCodes": {
-    "armorcodex": {
-      "policyDenyAndPlanCheckCodes": [
-        "policy_denied",
-        "plan_check_denied"
-      ],
-      "missingPlanCodes": [
-        "intent_plan_missing"
-      ],
-      "driftAndParameterCodes": [
-        "intent_drift",
-        "intent_parameter_mismatch",
-        "intent_plan_empty"
-      ],
-      "expiryCodes": [
-        "intent_token_expired"
-      ],
-      "slowIssuanceCodes": [
-        "intent_token_not_issued"
-      ],
-      "csrgAndVerifyCodes": [
-        "crypto_policy_mismatch",
-        "csrg_proof_invalid",
-        "csrg_proof_missing",
-        "remote_verify_denied",
-        "remote_verify_failed"
-      ],
-      "invalidInputInternalErrorAndMissingToolNameCodes": [
-        "invalid_payload",
-        "missing_tool_name",
-        "internal_error"
-      ]
-    },
-    "armorantigravity": {
-      "mcpServerNotApprovedCodes": [],
-      "protocolAndCrashFallbackCodes": []
-    }
-  },
   "prefixRule": {
     "bracket": "^\\[([a-z][a-z0-9_]*)\\]",
     "token": "^([a-z][a-z0-9_]*)(?=$|:|\\s)",
