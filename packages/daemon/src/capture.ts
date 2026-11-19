@@ -7,6 +7,7 @@ import { readLogin } from "./auth.ts";
 import { readConfig } from "./config.ts";
 import { resolvePaths, type Env } from "./paths.ts";
 import { surfaceFromTranscriptPath } from "./surface.ts";
+import { fallbackSpoolStatus } from "./fallback-spool.ts";
 
 const quiet = { info() {}, warn() {}, error() {} };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -52,22 +53,6 @@ export async function captureFallback(dataDir: string, identity: AuditIdentity, 
   } finally { await outbox.persist(); }
 }
 
-export function prepareHookCapture(request: Pick<DaemonRequest, "id" | "payload" | "receivedAt">, env: Env) {
-  const paths = resolvePaths(env);
-  const config = readConfig(paths.configFile, quiet);
-  const login = readLogin(env, config.backendUrl);
-  let binding = queueLogin(login);
-  let identity: AuditIdentity;
-  try { identity = auditIdentity(request, paths.dataDir); }
-  catch {
-    // An unreadable relationship cannot be repaired by guessing a root or a future login.
-    identity = { rowId: request.id };
-    binding = null;
-  }
-  const at = request.receivedAt;
-  return { identity: { ...identity, binding }, stop: () => captureFallback(paths.dataDir, identity, at, binding, login === null) };
-}
-
 export async function auditStatus(env: Env): Promise<OutboxStatus> {
   const paths = resolvePaths(env);
   const config = readConfig(paths.configFile, quiet);
@@ -78,5 +63,6 @@ export async function auditStatus(env: Env): Promise<OutboxStatus> {
   const outbox = createOutbox(paths.dataDir, "audit", quiet, { login: () => statusLogin });
   statusLogin = binding;
   await outbox.persist();
-  return outbox.status();
+  const status = outbox.status();
+  return { ...status, captureFailures: status.captureFailures + fallbackSpoolStatus(paths.socket).quarantined };
 }
