@@ -85,7 +85,7 @@ export type PlanCaptureState = {
 
 export type SessionGeneration = Pick<PlanCaptureState, "promptId" | "promptGeneration" | "authGeneration">;
 
-export type Session = {
+export type Session = PlanCaptureState & {
   id: SessionID;
   parentId: SessionID | null;
   mode: Mode;

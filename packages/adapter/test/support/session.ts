@@ -32,7 +32,10 @@ export function registeredSession(opts: {
         heldTools: opts.lists?.heldTools ?? new Set(),
       }
     : null;
-  return { id: opts.id, parentId: null, mode: "enforce", plan, token, stepCursor: 0, revisionsThisMessage: 0, currentMessageId: "msg-1" };
+  return { id: opts.id, parentId: null, mode: "enforce", plan, token, stepCursor: 0, revisionsThisMessage: 0, currentMessageId: "msg-1",
+    promptId: "msg-1", promptGeneration: 1, retirementEpoch: 0, promptOpenSince: opts.now, lastActivityAt: opts.now,
+    countedPlanId: plan?.id ?? null, tokenPlanId: plan?.id ?? null, planHash: plan?.hash ?? null, kind: plan ? "new" : null,
+    tokenExpiresAt: token?.status === "active" ? token.expiresAt : null, authGeneration: 0, pendingRequest: null, unregisteredLocalPlan: null, seenMessageIds: ["msg-1"] };
 }
 
 export function coreDecide(opts: { home: string; steps: readonly string[] | null; lists?: BackendToolLists; now: number }) {
