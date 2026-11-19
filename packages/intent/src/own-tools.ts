@@ -3,7 +3,7 @@ import { logLegacyBackend } from "./backend.ts";
 import { intentValiditySeconds, planRequest, requestBody } from "./plan-request.ts";
 import { isPlainObject, mcpPart, parsePlan } from "./plan.ts";
 import type { Conversation, Generation, PlanKind, PendingRequest, Registry } from "./registry.ts";
-import { AGENT_ID, CLIENT_ID, conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PolicyView, type Token } from "./types.ts";
+import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PolicyView, type Token } from "./types.ts";
 
 export const OWN_TOOLS = ["register_intent_plan", "trust_reanchor", "trust_revoke", "trust_delegate", "policy_read"] as const;
 export type OwnTool = (typeof OWN_TOOLS)[number];
@@ -90,6 +90,7 @@ export interface OwnToolDeps {
   onRelogin?(reason: string): void;
   // A 401 on mint: the key is not accepted, which spec 0002 treats as signed out, not as a revoked account.
   onUnauthorized?(): void;
+  onAuthenticated?(login: Login): void;
   readonly log: Log;
   readonly now?: () => number;
   readonly validitySeconds?: number;
@@ -232,6 +233,7 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       return notRegistered(token.code);
     }
     if (!planId || !token.jwt || token.expiresAt <= now()) return notConfirmed("token response has no usable token or expiry");
+    deps.onAuthenticated?.(login);
     if (minted.value.legacy) logLegacyBackend(log);
     const plan: Plan = { ...draft, id: planId };
     registry.setPlan(conv.key, plan, token, generation, kind);

@@ -15,6 +15,16 @@ const B: ConversationRef = { surface: "cli", conversationId: "conv-b" };
 
 const plan = (goal: string, ...actions: string[]) => ({ goal, steps: actions.map((action) => ({ action })) });
 
+test("a successful mint reports the exact credential as revalidated", async () => {
+  const registry = createRegistry();
+  registry.open(A);
+  registry.beginPrompt(conversationKey(A), 0);
+  const accepted: unknown[] = [];
+  const tools = createOwnTools({ registry, backend: recordingBackend().backend, login: () => LOGIN, mode: () => "enforce", policy: () => permitAll, audit() {}, log: silentLog, onAuthenticated: login => accepted.push(login) });
+  expect(await tools.handle(A, "register_intent_plan", plan("print", "run_command"))).toMatch(/^Intent registered/);
+  expect(accepted).toEqual([LOGIN]);
+});
+
 describe("parallel conversations", () => {
   test("two conversations registering at the same time never see each other's plan", async () => {
     const h = harness({ gate: true });

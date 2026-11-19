@@ -116,7 +116,10 @@ function defaultReachability({ log, auth }: DaemonContext): Reachability {
     // A probe still in flight when the key changed must not decide the new key's state.
     onResponse: (probed, status, body) => {
       const state = auth.state();
-      if ("login" in state && loginBinding(state.login) === loginBinding(probed)) auth.reportStatus(status, body, "probe");
+      if ("login" in state && loginBinding(state.login) === loginBinding(probed)) {
+        auth.reportStatus(status, body, "probe");
+        if (status >= 200 && status < 300) auth.authenticationSucceeded(probed);
+      }
     },
   });
 }
@@ -160,6 +163,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     // The intent backend flags relogin only for this exact response (sdk isReloginRequired).
     onRelogin: () => auth.reportStatus(403, { error: "relogin_required" }, "mint"),
     onUnauthorized: () => auth.reportStatus(401, null, "mint"),
+    onAuthenticated: login => auth.authenticationSucceeded(login),
     log,
   });
   const intent = intentRegistration(runtime);
@@ -189,7 +193,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
   };
 
   const onDecision = (surface: Surface, record: DecisionRecord) => {
-    const call: CoreToolCall = { sessionId: toSessionId(record.conversationId), callId: String(record.stepIdx), tool: record.call.tool, args: record.call.args };
+    const call: CoreToolCall = { sessionId: toSessionId(record.conversationId), callId: callIdOf(record.conversationId, record.stepIdx), tool: record.call.tool, args: record.call.args };
     const decision = toCoreDecision(record.decision);
     const { session, root } = sessions(surface, call.sessionId);
     const snapshot = snapshotAuditContext(session, root, decision);

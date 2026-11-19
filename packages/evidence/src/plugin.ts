@@ -25,7 +25,10 @@ export type AuthView = {
   readonly client: Uploads["client"];
   readonly headers: Uploads["headers"];
   uploadLogin(): ReturnType<Uploads["login"]>;
+  authenticationLogin?(): ReturnType<Uploads["login"]>;
   reportStatus(status: number, body: unknown, source: "mint" | "upload"): void;
+  authenticationSucceeded?(login: Login): void;
+  onAuthenticated?(listener: (login: Login) => void): () => void;
 };
 
 export type DaemonContextView = {
@@ -70,7 +73,9 @@ export function uploadsFrom(auth: AuthView): Uploads {
     client: auth.client,
     headers: auth.headers,
     login: () => auth.uploadLogin(),
+    probeLogin: () => auth.authenticationLogin ? auth.authenticationLogin() : auth.uploadLogin(),
     report: (status, body) => auth.reportStatus(status, body, "upload"),
+    authenticationSucceeded: login => auth.authenticationSucceeded?.(login),
   };
 }
 
@@ -266,6 +271,8 @@ export function evidencePlugin(options: EvidenceOptions & { onRecorder?: (record
       options.onRecorder?.(evidence.recorder);
       evidence.start();
       const { audit, traces, usage, history, latency } = evidence.pumps;
+      const unsubscribe = ctx.auth.onAuthenticated?.(login => { void audit.authenticationSucceeded(login).catch(() => ctx.log.error("audit authentication restore failed")); });
+      const auditWithAuth: Pump = { name: audit.name, kick: () => { void audit.kick(); }, stop: async () => { unsubscribe?.(); await audit.stop(); } };
       const tracesAfterSettle: Pump = {
         name: traces.name,
         kick: () => traces.kick(),
@@ -275,7 +282,7 @@ export function evidencePlugin(options: EvidenceOptions & { onRecorder?: (record
         },
       };
       // Traces stop first: closing a turn can still need the usage client; audit last, it has the most to flush.
-      const pumps: readonly Pump[] = [tracesAfterSettle, latency, history, usage, audit];
+      const pumps: readonly Pump[] = [tracesAfterSettle, latency, history, usage, auditWithAuth];
       return { observe: evidence.observe, pumps };
     },
   };

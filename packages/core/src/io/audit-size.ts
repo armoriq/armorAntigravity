@@ -1,4 +1,4 @@
-import contract from "../contracts/block-capture-v1.json";
+import contract from "../contracts/block-capture-v1.json" with { type: "json" };
 
 export type SizeLimits = { maxRowBytes: number; maxBatchBytes: number; maxBatchRows: number; truncationMarker: Record<string, unknown> };
 
