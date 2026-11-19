@@ -165,3 +165,17 @@ test("repeated status calls create no queue writers", async () => {
   expect(existsSync(path.join(dir, "outbox", "audit-v2"))).toBe(false);
 });
 
+test("local status counts retained health events and the persisted endpoint pause", async () => {
+  const { dir, env } = store();
+  const health = createOutbox(dir, "health", quiet, { login: () => binding });
+  health.enqueue({ event_id: crypto.randomUUID(), type: "plan_request_failed", queue: "health", count: 1, reason_code: "network", occurred_at: new Date().toISOString() });
+  await health.drain(async () => ({ ok: false, endpointStatus: 404 }));
+  await health.persist();
+  expect(typeof capture.healthStatus).toBe("function");
+  expect(await capture.healthStatus(env)).toMatchObject({ pending: 1, undeliverable: 1, deadLetters: 0, captureFailures: 0, paused: true });
+  expect(await capture.healthStatus({ ...env, ARMORIQ_API_KEY: "ak_test_other_login" })).toMatchObject({ pending: 1, undeliverable: 1, paused: false });
+  const proc = Bun.spawn(["bun", "packages/cli/src/main.ts", "status"], { env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(proc.stdout).text();
+  expect(await proc.exited).toBe(0);
+  expect(output).toContain("health: 1 pending, 1 undeliverable, 0 dead letters, paused");
+});

@@ -73,6 +73,58 @@ describe("durable token transport", () => {
     const t = transport([{ data: { success: true, plan_id: "plan-1", kind: "new", jwt_token: "jwt", token: { expires_at: 180 } } }]);
     expect(await t.backend.mint(LOGIN, draft, "root", descriptor(), { now: () => 0 })).toMatchObject({ ok: true, value: { token: { expiresAt: 180_000 } } });
   });
+  test("reports one failed logical request after both attempts, with a provisional deadline", async () => {
+    const t = transport([{ status: 503 }, { status: 503 }]);
+    const failures: unknown[] = [];
+    await t.backend.mint(LOGIN, draft, "root", descriptor(), { now: () => 0, onFailure: (reason, notBefore) => { failures.push([reason, notBefore]); } });
+    expect(t.calls).toHaveLength(2);
+    expect(failures).toEqual([["server_error", 40_000]]);
+  });
+  test.each([
+    [{ status: 429, headers: { "retry-after": "41" } }, "rate_limited"],
+    [{ status: 409, data: { error: "request_in_progress" }, headers: { "retry-after": "41" } }, "request_in_progress"],
+    [{ status: 422 }, "rejected"],
+    [{ status: 401 }, "rejected"],
+    [{ error: "network error" }, "network"],
+  ] as const)("classifies the terminal request result %p as %s", async (reply, expected) => {
+    const t = transport([{ ...reply }, { ...reply }]);
+    const failures: string[] = [];
+    await t.backend.mint(LOGIN, draft, "root", descriptor(), { onFailure: reason => { failures.push(reason); } });
+    expect(failures).toEqual([expected]);
+  });
+  test("a recovered request cancels its provisional failure", async () => {
+    const t = transport([{ status: 503 }, {}]);
+    const failures: string[] = [];
+    let successes = 0;
+    await t.backend.mint(LOGIN, draft, "root", descriptor(), { onFailure: reason => { failures.push(reason); }, onSuccess: async () => { successes++; } });
+    expect(failures).toEqual([]);
+    expect(successes).toBe(1);
+  });
+  test.each(["new", "refresh"] as const)("a saved %s request gets a fresh retry budget after its logical deadline", async kind => {
+    const t = transport([{ status: 503 }, { status: 503 }, { data: { success: true, plan_id: "plan-1", kind, jwt_token: "jwt", token: { expires_at: Date.now() / 1000 + 180 } } }]);
+    let clock = 0;
+    const base = kind === "new" ? descriptor() : planRequest({ kind: "refresh", promptId: "prompt", countedPlanId: "plan-1", tokenExpiresAt: "2026-11-19T00:00:00Z" }, requestBody(LOGIN, draft, "root", 180));
+    const request = { ...base, deadlineAt: 40_000 };
+    const failures: unknown[] = [];
+    await t.backend.mint(LOGIN, draft, "root", request, { now: () => clock, sleep: async ms => { clock += ms; }, onFailure: (reason, notBefore) => { failures.push([reason, notBefore]); } });
+    clock = 60_000;
+    expect((await t.backend.mint(LOGIN, draft, "root", request, { now: () => clock })).ok).toBe(true);
+    expect(t.calls.map(c => c.headers["Idempotency-Key"])).toEqual([request.key, request.key, request.key]);
+    expect(t.calls.map(c => c.timeout)).toEqual([5000, 5000, 5000]);
+    expect(failures).toEqual([["server_error", 40_000]]);
+  });
+  test.each(["success", "failure"])("health storage errors cannot replace a mint %s", async outcome => {
+    const t = transport(outcome === "success" ? [{}] : [{ status: 422 }]);
+    const broken = async () => { throw new Error("health storage unavailable"); };
+    const result = await t.backend.mint(LOGIN, draft, "root", descriptor(), { onSuccess: broken, onFailure: broken });
+    expect(result).toMatchObject(outcome === "success" ? { ok: true } : { ok: false, status: 422 });
+  });
+  test("a local SDK exception is not reported as backend unreachable", async () => {
+    const backend = createSdkBackend({ client: { product: CLIENT_ID, version: "test" }, loadSdk: async () => { throw new Error("SDK initialization failed"); } });
+    const failures: string[] = [];
+    await backend.mint(LOGIN, draft, "root", descriptor(), { onFailure: reason => { failures.push(reason); } });
+    expect(failures).toEqual(["rejected"]);
+  });
   test("timeouts retry the saved request and leave its outcome unconfirmed", async () => {
     const t = transport([{ stall: true }, { stall: true }]);
     const request = descriptor();

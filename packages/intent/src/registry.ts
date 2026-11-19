@@ -9,6 +9,7 @@ export interface PendingRequest {
   readonly key: string;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: Readonly<Record<string, unknown>>;
+  readonly deadlineAt?: number;
 }
 
 export interface Generation {

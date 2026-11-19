@@ -4,6 +4,7 @@ import { attribute } from "./attribution.ts";
 import type { EvidenceDeps, Uploads } from "./context.ts";
 import { createAuditPump, type AuditPump } from "./pumps/audit.ts";
 import { createHistoryPump, type HistoryPump } from "./pumps/history.ts";
+import { createHealthPump, type HealthPump } from "./pumps/health.ts";
 import { createLatencyPump, type LatencyPump } from "./pumps/latency.ts";
 import { createTracePump, type ModelCall, type TracePump, type ToolSpan } from "./pumps/traces.ts";
 import { createUsagePump, type UsagePump } from "./pumps/usage.ts";
@@ -50,6 +51,7 @@ export type DecidedCall = {
 };
 
 export interface EvidenceRecorder {
+  readonly health: Pick<HealthPump, "planRequestFailed" | "planRequestSucceeded">;
   decided(call: DecidedCall): void;
   audit(row: AuditRow, context: { readonly surface: Surface; readonly login?: Login }): void;
 }
@@ -60,7 +62,7 @@ export type EvidenceOptions = {
   readonly rootOf?: (conversationId: string) => string;
 };
 
-export type EvidencePumps = { audit: AuditPump; traces: TracePump; usage: UsagePump; history: HistoryPump; latency: LatencyPump };
+export type EvidencePumps = { audit: AuditPump; health: HealthPump; traces: TracePump; usage: UsagePump; history: HistoryPump; latency: LatencyPump };
 
 const MAX_OPEN_CALLS = 10_000;
 const MAX_SEEN_KEYS = 50_000;
@@ -82,12 +84,13 @@ export function uploadsFrom(auth: AuthView): Uploads {
 export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}) {
   const source = options.source ?? EMPTY_SOURCE;
   const rootOf = options.rootOf ?? ((id: string) => id);
-  const audit = createAuditPump(deps);
+  const health = createHealthPump(deps);
+  const audit = createAuditPump({ ...deps, health });
   const traces = createTracePump(deps);
   const usage = createUsagePump(deps);
   const history = createHistoryPump({ ...deps, usage, source, rootOf });
   const latency = createLatencyPump({ ...deps, usage });
-  const pumps: EvidencePumps = { audit, traces, usage, history, latency };
+  const pumps: EvidencePumps = { audit, health, traces, usage, history, latency };
 
   const started = new Map<string, number>();
   const decided = new Map<string, ToolSpan>();
@@ -217,9 +220,11 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
         }
         case "session_start":
           void audit.loginChanged(false);
+          void health.loginChanged(false);
           return;
         case "auth":
           void audit.loginChanged();
+          void health.loginChanged();
           return;
         default: {
           const exhaustive: never = event;
@@ -232,6 +237,7 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
   }
 
   const recorder: EvidenceRecorder = {
+    health,
     decided(call) {
       const callId = callIdOf(call.conversationId, call.stepIdx);
       const span: ToolSpan = { sessionId: rootOf(call.conversationId), callId, tool: call.tool, args: call.args, mcpServer: call.mcpServer };
@@ -245,6 +251,7 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
   };
 
   function start(): void {
+    health.start();
     audit.start();
     traces.start();
     usage.start();
@@ -270,9 +277,8 @@ export function evidencePlugin(options: EvidenceOptions & { onRecorder?: (record
       const evidence = createEvidence({ dataDir: ctx.paths.dataDir, uploads: uploadsFrom(ctx.auth), log: ctx.log }, options);
       options.onRecorder?.(evidence.recorder);
       evidence.start();
-      const { audit, traces, usage, history, latency } = evidence.pumps;
+      const { audit, health, traces, usage, history, latency } = evidence.pumps;
       const unsubscribe = ctx.auth.onAuthenticated?.(login => { void audit.authenticationSucceeded(login).catch(() => ctx.log.error("audit authentication restore failed")); });
-      const auditWithAuth: Pump = { name: audit.name, kick: () => { void audit.kick(); }, stop: async () => { unsubscribe?.(); await audit.stop(); } };
       const tracesAfterSettle: Pump = {
         name: traces.name,
         kick: () => traces.kick(),
@@ -281,8 +287,13 @@ export function evidencePlugin(options: EvidenceOptions & { onRecorder?: (record
           await traces.stop();
         },
       };
-      // Traces stop first: closing a turn can still need the usage client; audit last, it has the most to flush.
-      const pumps: readonly Pump[] = [tracesAfterSettle, latency, history, usage, auditWithAuth];
+      // Traces stop first: closing a turn can still need the usage client; audit follows, it has the most to flush.
+      // Health stops after audit so its final loss reports remain durable.
+      let auditStopping: Promise<void> | null = null;
+      const stopAudit = () => (auditStopping ??= audit.stop());
+      const auditBeforeHealth: Pump = { name: audit.name, kick: () => { void audit.kick(); }, stop: async () => { unsubscribe?.(); await stopAudit(); } };
+      const healthAfterAudit: Pump = { name: health.name, kick: () => { void health.kick(); }, stop: async () => { await stopAudit(); await health.stop(); } };
+      const pumps: readonly Pump[] = [tracesAfterSettle, latency, history, usage, auditBeforeHealth, healthAfterAudit];
       return { observe: evidence.observe, pumps };
     },
   };

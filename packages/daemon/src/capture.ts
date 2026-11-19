@@ -8,6 +8,7 @@ import { readConfig } from "./config.ts";
 import { resolvePaths, type Env } from "./paths.ts";
 import { surfaceFromTranscriptPath } from "./surface.ts";
 import { fallbackSpoolStatus } from "./fallback-spool.ts";
+import { reportingStatus, type ReportingStatus } from "@armorantigravity/evidence";
 
 const quiet = { info() {}, warn() {}, error() {} };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -65,4 +66,14 @@ export async function auditStatus(env: Env): Promise<OutboxStatus> {
   await outbox.persist();
   const status = outbox.status();
   return { ...status, captureFailures: status.captureFailures + fallbackSpoolStatus(paths.socket).quarantined };
+}
+
+export async function healthStatus(env: Env): Promise<ReportingStatus> {
+  const paths = resolvePaths(env);
+  const config = readConfig(paths.configFile, quiet);
+  const binding = queueLogin(readLogin(env, config.backendUrl));
+  let current: QueueLogin | null = null;
+  const outbox = createOutbox(paths.dataDir, "health", quiet, { login: () => current });
+  current = binding;
+  return reportingStatus(paths.dataDir, "health", outbox.status(), binding);
 }

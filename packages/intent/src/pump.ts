@@ -1,7 +1,7 @@
 import type { Conversation, Registry } from "./registry.ts";
-import { logLegacyBackend } from "./backend.ts";
+import { logLegacyBackend, REQUEST_DEADLINE_MS } from "./backend.ts";
 import { intentValiditySeconds, planRequest, requestBody } from "./plan-request.ts";
-import type { ConversationKey, IntentBackend, Log, Login, Mode, Plan } from "./types.ts";
+import type { ConversationKey, IntentBackend, Log, Login, Mode, Plan, PlanRequestHealth } from "./types.ts";
 
 export const REFRESH_BEFORE_MS = 120_000;
 export const CHECK_EVERY_MS = 15_000;
@@ -39,6 +39,7 @@ export function createTokenPump(deps: {
   idleAfterStopMs?: number;
   validitySeconds?: number;
   mintPolicy?: () => Record<string, unknown> | undefined;
+  health?: PlanRequestHealth;
 }): TokenPump {
   const { registry, backend, login, log } = deps;
   const now = deps.now ?? Date.now;
@@ -115,7 +116,8 @@ export function createTokenPump(deps: {
       const { id: _id, ...unminted } = plan;
       const request = planRequest({ kind: "refresh", promptId: c.promptId!, countedPlanId: c.countedPlanId!, tokenExpiresAt: new Date(c.tokenExpiresAt!).toISOString() }, requestBody(auth, unminted, c.ref.conversationId, validity, deps.mintPolicy?.()));
       if (c.pendingRequest && c.pendingRequest.key !== request.key) return;
-      const descriptor = c.pendingRequest ?? request;
+      const saved = c.pendingRequest ?? request;
+      const descriptor = saved.deadlineAt === undefined ? { ...saved, deadlineAt: now() + REQUEST_DEADLINE_MS } : saved;
       try {
         if (!registry.setPendingRequest(c.key, descriptor, generation)) return;
       } catch {
@@ -126,7 +128,12 @@ export function createTokenPump(deps: {
         registry.syncAuth(login(), deps.mode?.() ?? "enforce");
         return stopped || !registry.isCurrent(c.key, generation) || !promptOpen(c);
       };
-      const result = await backend.mint(auth, unminted, c.ref.conversationId, descriptor, { cancelled, now });
+      const result = await backend.mint(auth, unminted, c.ref.conversationId, descriptor, {
+        cancelled,
+        now,
+        onFailure: (reason, notBefore) => deps.health?.planRequestFailed(auth, descriptor.key, reason, notBefore),
+        onSuccess: async () => { await deps.health?.planRequestSucceeded(auth, descriptor.key); },
+      });
       registry.syncAuth(login(), deps.mode?.() ?? "enforce");
       if (!result.ok) {
         if (registry.isCurrent(c.key, generation)) {

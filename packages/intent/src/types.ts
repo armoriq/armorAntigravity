@@ -50,7 +50,7 @@ export interface Login {
 
 export type CallResult<T> =
   | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly retryable: boolean; readonly reason: string; readonly relogin?: true; readonly unconfirmed?: boolean; readonly retryAfterMs?: number | undefined };
+  | { readonly ok: false; readonly retryable: boolean; readonly reason: string; readonly status?: number; readonly relogin?: true; readonly unconfirmed?: boolean; readonly retryAfterMs?: number | undefined };
 
 export interface Minted {
   readonly planId: string;
@@ -63,6 +63,14 @@ export interface RetryOptions {
   readonly cancelled?: () => boolean;
   readonly now?: () => number;
   readonly sleep?: (ms: number) => Promise<void>;
+  readonly onFailure?: (reason: PlanFailureReason, notBefore?: number) => void | Promise<void>;
+  readonly onSuccess?: () => Promise<void>;
+}
+
+export type PlanFailureReason = "timeout" | "network" | "rate_limited" | "server_error" | "request_in_progress" | "rejected";
+export interface PlanRequestHealth {
+  planRequestFailed(login: Login, key: string, reason: PlanFailureReason, notBefore?: number): Promise<void>;
+  planRequestSucceeded(login: Login, key: string): Promise<void>;
 }
 
 export interface DelegateRequest {
