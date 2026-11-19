@@ -1,5 +1,318 @@
 {
   "version": 1,
+  "clientRowId": {
+    "algorithm": "UUID v5",
+    "namespace": "38e3839f-d44e-5317-b41f-b2738b0a247a",
+    "name": "<root session id>:<tool call id>:<phase>",
+    "phases": [
+      "decision",
+      "result"
+    ],
+    "statusIncluded": false,
+    "vectors": [
+      {
+        "rootSessionId": "session-1",
+        "toolCallId": "tool-call-1",
+        "phase": "decision",
+        "clientRowId": "176f57b7-4cd2-54e6-88f1-369f22f5ab91"
+      },
+      {
+        "rootSessionId": "session-1",
+        "toolCallId": "tool-call-1",
+        "phase": "result",
+        "clientRowId": "9bfbba71-1197-5d58-b7f3-7265ea21ea3c"
+      },
+      {
+        "rootSessionId": "session-1",
+        "toolCallId": "tool-call-2",
+        "phase": "decision",
+        "clientRowId": "952e3a9d-2b78-5dca-b0ce-b934ba8fec8a"
+      },
+      {
+        "rootSessionId": "session-1",
+        "toolCallId": "tool-call-2",
+        "phase": "result",
+        "clientRowId": "445370be-7d4e-5a55-ba61-a95f0a897c71"
+      },
+      {
+        "rootSessionId": "root:session",
+        "toolCallId": "call:with:colons",
+        "phase": "decision",
+        "clientRowId": "686eefa2-6c6e-54db-8cdb-ff593553eaeb"
+      },
+      {
+        "rootSessionId": "root:session",
+        "toolCallId": "call:with:colons",
+        "phase": "result",
+        "clientRowId": "0bddb1ff-4902-5b2a-9b6e-8073e91c288e"
+      }
+    ]
+  },
+  "reasonCodes": [
+    {
+      "decisionCode": "policy_deny",
+      "producers": {
+        "backend": [
+          "block",
+          "agent_killed",
+          "intent_plan_killed",
+          "delegation_rejected",
+          "delegation_expired"
+        ],
+        "armorclaude": [
+          "policy_denied",
+          "policy_v2_block",
+          "mcp_server_denied",
+          "plan_check_denied"
+        ],
+        "armorcodex": [
+          "policy_denied",
+          "plan_check_denied"
+        ],
+        "armoropencode": [
+          "policy_forbid",
+          "backend_denied_tool"
+        ],
+        "armorantigravity": [
+          "policy_forbid",
+          "backend_denied_tool",
+          "mcp_server_denied"
+        ]
+      }
+    },
+    {
+      "decisionCode": "protected_resource",
+      "producers": {
+        "armorclaude": [
+          "protected_policy_file",
+          "policy_admin_command"
+        ],
+        "armorcodex": [],
+        "armoropencode": [
+          "builtin_protected",
+          "own_tool_shadowed"
+        ],
+        "armorantigravity": [
+          "builtin_protected",
+          "own_tool_shadowed"
+        ]
+      }
+    },
+    {
+      "decisionCode": "missing_plan",
+      "producers": {
+        "backend": [
+          "intent_token_required",
+          "intent_plan_not_found"
+        ],
+        "armorclaude": [
+          "intent_plan_missing"
+        ],
+        "armorcodex": [
+          "intent_plan_missing"
+        ],
+        "armoropencode": [
+          "intent_plan_missing"
+        ],
+        "armorantigravity": [
+          "intent_plan_missing"
+        ]
+      }
+    },
+    {
+      "decisionCode": "out_of_scope",
+      "producers": {
+        "backend": [
+          "tool_not_in_plan"
+        ],
+        "armorclaude": [
+          "intent_drift",
+          "intent_token_blocked"
+        ],
+        "armorcodex": [
+          "intent_drift",
+          "intent_parameter_mismatch",
+          "intent_plan_empty"
+        ],
+        "armoropencode": [
+          "intent_drift"
+        ],
+        "armorantigravity": [
+          "intent_drift"
+        ]
+      }
+    },
+    {
+      "decisionCode": "token_expired",
+      "producers": {
+        "backend": [
+          "intent_plan_expired"
+        ],
+        "armorclaude": [
+          "intent_token_expired"
+        ],
+        "armorcodex": [
+          "intent_token_expired"
+        ],
+        "armoropencode": [
+          "intent_token_expired"
+        ],
+        "armorantigravity": [
+          "intent_token_expired"
+        ]
+      }
+    },
+    {
+      "decisionCode": "plan_request_failed",
+      "producers": {
+        "armorclaude": [
+          "intent_planning_failed"
+        ],
+        "armorcodex": [
+          "intent_token_not_issued"
+        ],
+        "armoropencode": [],
+        "armorantigravity": []
+      }
+    },
+    {
+      "decisionCode": "integrity",
+      "producers": {
+        "backend": [
+          "invalid_intent_token",
+          "intent_token_agent_mismatch",
+          "intent_step_proof_missing",
+          "intent_anchor_chain_missing",
+          "intent_anchor_chain_broken",
+          "intent_anchor_chain_rejected"
+        ],
+        "armorclaude": [
+          "csrg_proof_invalid",
+          "csrg_proof_rejected",
+          "crypto_policy_mismatch",
+          "remote_verify_denied"
+        ],
+        "armorcodex": [
+          "crypto_policy_mismatch",
+          "csrg_proof_invalid",
+          "csrg_proof_missing",
+          "remote_verify_denied"
+        ],
+        "armoropencode": [],
+        "armorantigravity": []
+      }
+    },
+    {
+      "decisionCode": "account",
+      "producers": {
+        "backend": [
+          "agent_inactive"
+        ],
+        "armorclaude": [],
+        "armorcodex": [],
+        "armoropencode": [
+          "account_revoked",
+          "billing_blocked"
+        ],
+        "armorantigravity": [
+          "account_revoked",
+          "billing_blocked"
+        ]
+      }
+    },
+    {
+      "decisionCode": "approval_required",
+      "producers": {
+        "backend": [
+          "hold"
+        ],
+        "armorclaude": [
+          "policy_requires_approval",
+          "policy_v2_hold",
+          "mcp_server_unapproved"
+        ],
+        "armorcodex": [
+          "require_approval"
+        ],
+        "armoropencode": [
+          "hold"
+        ],
+        "armorantigravity": [
+          "approval_required"
+        ]
+      }
+    },
+    {
+      "decisionCode": "outage",
+      "producers": {
+        "backend": [
+          "step_verification_unavailable"
+        ],
+        "armorclaude": [
+          "backend_unreachable"
+        ],
+        "armorcodex": [
+          "backend_unreachable"
+        ],
+        "armoropencode": [
+          "backend_unreachable"
+        ],
+        "armorantigravity": [
+          "backend_unreachable"
+        ]
+      }
+    },
+    {
+      "decisionCode": "internal_error",
+      "producers": {
+        "backend": [
+          "agent_unresolved"
+        ],
+        "armorclaude": [
+          "internal_error",
+          "invalid_payload",
+          "missing_tool_name",
+          "remote_verify_failed"
+        ],
+        "armorcodex": [
+          "remote_verify_failed",
+          "invalid_payload",
+          "missing_tool_name",
+          "internal_error"
+        ],
+        "armoropencode": [
+          "internal_error"
+        ],
+        "armorantigravity": [
+          "internal_error",
+          "daemon_unavailable"
+        ]
+      }
+    },
+    {
+      "decisionCode": "other",
+      "producers": {
+        "armorclaude": [],
+        "armorcodex": [],
+        "armoropencode": [],
+        "armorantigravity": []
+      }
+    }
+  ],
+  "prefixRule": {
+    "bracket": "^\\[([a-z][a-z0-9_]*)\\]",
+    "token": "^([a-z][a-z0-9_]*)(?=$|:|\\s)",
+    "precedence": [
+      "valid decision_code",
+      "prefix token",
+      "other"
+    ],
+    "matching": "Exact match across every plugin column, then a decision code itself, then legacy reasons.",
+    "legacyReasons": {
+      "plan_revision": "plan_revision",
+      "backend_unreachable": "outage"
+    }
+  },
   "sizeLimits": {
     "source": "src/bootstrap/body-parsers.ts",
     "backendRequestLimit": "10mb",
@@ -28,5 +341,19 @@
       "status"
     ],
     "metadataOversizeReason": "oversize"
+  },
+  "reasonLabels": {
+    "policy_deny": "Policy denied",
+    "protected_resource": "Protected resource",
+    "missing_plan": "No plan registered",
+    "out_of_scope": "Outside the plan",
+    "token_expired": "Plan token expired",
+    "plan_request_failed": "Plan request failed",
+    "integrity": "Integrity check failed",
+    "account": "Account blocked",
+    "approval_required": "Needs approval",
+    "outage": "Backend unreachable",
+    "internal_error": "Internal error",
+    "other": "Other"
   }
 }

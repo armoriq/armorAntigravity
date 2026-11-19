@@ -340,7 +340,7 @@ describe("registration rules", () => {
     expect(await h.tools.handle(A, "register_intent_plan", { ...plan("g", "view_file"), reason: "next prompt revision" })).toMatch(/^Intent registered: plan plan-5 \(revision\)/);
   });
 
-  test("a revision re-anchors the old plan and writes a held plan_revision row", async () => {
+  test("a revision re-anchors the old plan without writing an audit row", async () => {
     const h = harness();
     await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"));
     const old = h.registry.root(conversationKey(A))!.plan!;
@@ -348,22 +348,8 @@ describe("registration rules", () => {
     await h.tools.settled();
     const next = h.registry.root(conversationKey(A))!.plan!;
     expect(h.reanchors).toEqual([{ planId: "plan-1", reason: "need a file" }]);
-    expect(h.audit).toEqual([
-      {
-        plan_id: "plan-2",
-        session_id: "conv-a",
-        agent_id: "antigravity",
-        client_id: "armorantigravity",
-        user_id: "user-1",
-        step_index: -1,
-        action: "plan_revision",
-        tool: "register_intent_plan",
-        input: { reason: "need a file", old_plan_id: "plan-1", old_plan_hash: old.hash, new_plan_hash: next.hash, revision: 2, trust_id: "trust-1" },
-        status: "held",
-        error_message: "plan_revision: need a file",
-        executed_at: expect.any(String),
-      },
-    ]);
+    expect(next.id).not.toBe(old.id);
+    expect(h.audit).toEqual([]);
   });
 
   test("a step the local policy forbids rejects the whole plan", async () => {
