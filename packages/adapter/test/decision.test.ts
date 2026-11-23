@@ -510,3 +510,35 @@ describe("policy v2", () => {
     expect(records[0]?.attribution).toMatchObject({ source: "builtin", ruleId: "builtin:guard_files" });
   });
 });
+
+describe("workspace Monitor", () => {
+  test("a guard hit, a forbid, a v2 hold and an unapproved MCP server all run; each record keeps the stop decision", async () => {
+    const hold = entry("Ask first", "org", "active", doc("ask", ORG, "      run_command: hold\n", "allow", APPROVAL));
+    const { policy, records, log } = setup({ policy: rule("no-search", "forbid", "search_web") });
+    const handle = createDecisionHandler({
+      decide: decideWith(),
+      policy,
+      bundle: fixedBundle([hold]),
+      mcpGate: createMcpGate({ access: () => null, log, ownServer: "armoriq" }),
+      guard: { home, protectedPaths: guardPaths(home) },
+      log,
+      onDecision: (r) => records.push(r),
+      resolveHold: () => Promise.reject(new Error("Monitor must not file an approval")),
+      orgMonitor: () => true,
+    });
+    const guarded = withTool({ name: "write_to_file", args: { TargetFile: `${home}/.armoriq/credentials.json`, CodeContent: "x" } });
+    const search = withTool({ name: "search_web", args: { query: "q" } });
+    for (const raw of [guarded, search, runCommand("ls"), stdinOf("pre-call_mcp_tool-global")]) expect(await handle(hook("PreToolUse", raw, "monitor"))).toEqual(ALLOW);
+    expect(records.map((r) => [r.call.name, r.status, r.decision.kind])).toEqual([
+      ["write_to_file", "allowed", "deny"],
+      ["search_web", "allowed", "deny"],
+      ["run_command", "allowed", "hold"],
+      ["call_mcp_tool", "allowed", "ask"],
+    ]);
+  });
+
+  test("signed out (no workspace Monitor) the same calls still stop, as before", () => {
+    const { handle } = setup({ policy: rule("no-search", "forbid", "search_web") });
+    expect(handle(hook("PreToolUse", withTool({ name: "search_web", args: { query: "q" } }), "monitor"))).toMatchObject({ decision: "deny" });
+  });
+});

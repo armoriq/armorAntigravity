@@ -36,6 +36,8 @@ export async function backendRequest(
         Authorization: `Bearer ${access.login.apiKey}`,
         "X-API-Key": access.login.apiKey,
         "X-ArmorIQ-Client": access.client,
+        // This build runs Monitor itself, so the backend sends the real policy and the workspace mode.
+        "X-ArmorIQ-Monitor-Aware": "1",
         ...request.headers,
       },
       ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),

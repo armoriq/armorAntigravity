@@ -47,6 +47,8 @@ function stubBackend() {
   const seen: Seen[] = [];
   const health: { now: BackendHealth } = { now: "up" };
   const bundle: { now: unknown } = { now: { orgId: "org-1", agents: [] } };
+  // The workspace's Tools mode conmap sends with the policy; these tests run in Block unless they set it.
+  const mode: { now: "shadow" | "enforce"; notices: boolean } = { now: "enforce", notices: false };
   const policy = {
     schemaVersion: "armor.policy.v1",
     defaults: { decision: "allow" },
@@ -67,7 +69,7 @@ function stubBackend() {
       }
       if (health.now === "down") return new Response("", { status: 503 });
       if (route === "GET /policy/bundles/current") return Response.json(bundle.now, { headers: { ETag: `"${Bun.hash(JSON.stringify(bundle.now))}"` } });
-      if (route === "GET /policies/profiles/active") return Response.json({ version: 1, policy, updatedBy: "dashboard", publishedAt: "2026-10-12T10:00:00.000Z" });
+      if (route === "GET /policies/profiles/active") return Response.json({ version: 1, policy, updatedBy: "dashboard", publishedAt: "2026-10-12T10:00:00.000Z", enforcementMode: mode.now, monitorNotices: mode.notices });
       // The fields the SDK's getIntentToken reads from conmap's /iap/sdk/token.
       if (route === "POST /iap/sdk/token") {
         return Response.json({ success: true, plan_id: "plan-wiring-1", plan_hash: "h", token: { expires_at: Date.now() / 1000 + 3600, signature: "sig" }, jwt_token: "jwt", policy_validation: { validated: false } });
@@ -81,7 +83,7 @@ function stubBackend() {
       return Response.json({ message: `Cannot ${route}`, statusCode: 404 }, { status: 404 });
     },
   });
-  return { url: `http://127.0.0.1:${server.port}`, seen, health, bundle, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}`, seen, health, bundle, mode, stop: () => server.stop(true) };
 }
 
 function isRows(body: unknown): body is { rows: Record<string, unknown>[] } {
@@ -143,9 +145,9 @@ test("captured agy hooks get policy, plan and drift decisions, and every decisio
   saveLoginProfile({ backend: backend.url, product: "armorantigravity", apiKey: "ak_test_wiring", email: "dev@example.com", userId: "user-1", orgId: "org-1" });
 
   daemon = await startDaemon({ env: {}, plugins: armoriqPlugins(), log: quiet });
-  expect(daemon.auth.mode()).toBe("enforce");
   await until(() => backend.seen.some((r) => r.path === "/policies/profiles/active"));
   await Bun.sleep(100);
+  expect(daemon.auth.mode()).toBe("enforce");
 
   const r3 = captured();
   const at = (seq: number): Capture => {
@@ -341,4 +343,62 @@ test("a 401 from the backend means signed out: local-only mode, nothing blocked 
   expect(daemon.auth.state().kind).toBe("local_only");
   expect(daemon.auth.mode()).toBe("monitor");
   expect(readFileSync(daemon.paths.modeFile, "utf8").trim()).toBe("monitor");
+}, 60_000);
+
+test("a Quiet workspace: every captured call runs, nothing reaches the agent, and rows carry what Block would have done", async () => {
+  backend.mode.now = "shadow";
+  backend.bundle.now = v2Bundle("No reads", "      view_file: block\n");
+  daemon = await signedInDaemon();
+  await until(() => backend.seen.some((r) => r.path === "/policy/bundles/current"));
+  await Bun.sleep(100);
+  expect(daemon.auth.mode()).toBe("monitor");
+  const r3 = captured();
+  const at = (seq: number): Capture => {
+    const c = r3.get(seq);
+    if (!c) throw new Error(`no capture ${seq}`);
+    return c;
+  };
+
+  // No plan directive, and the forbidden search, the plan-less write and the v2-blocked read all run.
+  expect(await hook(at(1))).toBeNull();
+  for (const [pre, post] of [[11, 13], [19, 21], [27, 29]] as const) {
+    expect(await hook(at(pre))).toEqual({ decision: "allow" });
+    expect(await hook(at(post))).toBeNull();
+  }
+  await daemon.stop();
+  daemon = null;
+
+  const rows = backend.seen.filter((r) => r.path === "/iap/audit/batch").flatMap((r) => (isRows(r.body) ? r.body.rows : []));
+  expect(rows.map((r) => [r.tool, r.status, r.would_be ?? null, r.would_be_code ?? null])).toEqual(
+    expect.arrayContaining([
+      ["write_to_file", "success", null, null],
+      ["view_file", "success", "block", "policy_forbid"],
+      ["search_web", "success", "block", "policy_forbid"],
+    ]),
+  );
+  expect(rows.find((r) => r.tool === "search_web")?.would_be_reason).toContain("org-no-web-search");
+  expect(backend.seen.some((r) => r.path === "/iap/sdk/enforce" || r.path === "/iap/sdk/token")).toBe(false);
+}, 60_000);
+
+test("switching the workspace to Block applies at the next pull, and ARMORIQ_ORG_MODE=enforce forces it", async () => {
+  backend.mode.now = "shadow";
+  daemon = await signedInDaemon();
+  expect(daemon.auth.mode()).toBe("monitor");
+  const search = captured().get(27)!;
+  expect(await hook(search)).toEqual({ decision: "allow" });
+  await daemon.stop();
+
+  backend.mode.now = "enforce";
+  daemon = await signedInDaemon();
+  expect(daemon.auth.mode()).toBe("enforce");
+  // Kept on disk, so a restart before the next pull stays in Block.
+  expect(readFileSync(path.join(sandbox.home, ".armoriq", "armorantigravity", "org-mode.json"), "utf8")).toContain('"mode":"enforce"');
+  expect(await hook(search)).toEqual({ decision: "deny", reason: expect.stringContaining("[policy_forbid]") });
+  await daemon.stop();
+
+  backend.mode.now = "shadow";
+  daemon = await startDaemon({ env: { ARMORIQ_ORG_MODE: "enforce" }, plugins: armoriqPlugins(), log: quiet });
+  await until(() => backend.seen.filter((r) => r.path === "/policies/profiles/active").length >= 3);
+  await Bun.sleep(100);
+  expect(daemon.auth.mode()).toBe("enforce");
 }, 60_000);

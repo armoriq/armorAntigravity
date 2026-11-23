@@ -25,7 +25,8 @@ afterEach(async () => {
 
 const quiet = { info() {}, warn() {}, error() {} };
 const start = async (plugins: DaemonPlugin[], env: Record<string, string> = {}) => {
-  const d = await startDaemon({ env: { ARMORIQ_BACKEND_URL: STAGING, ...env }, plugins, log: quiet });
+  // Signed-in runs here cover Block; workspace Monitor is covered in armoriq.test.ts.
+  const d = await startDaemon({ env: { ARMORIQ_BACKEND_URL: STAGING, ARMORIQ_ORG_MODE: "enforce", ...env }, plugins, log: quiet });
   running.push(d);
   return d;
 };

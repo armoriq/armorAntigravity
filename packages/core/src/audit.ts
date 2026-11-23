@@ -67,6 +67,13 @@ function optionalFields(input: AuditInput): Partial<AuditRow> {
   if (error) out.error_message = error;
   if (input.durationMs !== null) out.duration_ms = input.durationMs;
   if (input.capability) out.capability = input.capability;
+  // A row for a call that ran with a stop decision comes from Monitor: Block would have stopped it.
+  const d = input.decision;
+  if (d && d.kind !== "allow" && input.status !== "blocked" && input.status !== "held") {
+    out.would_be = d.kind === "hold" ? "hold" : "block";
+    out.would_be_code = d.kind === "hold" ? "approval_required" : d.code;
+    out.would_be_reason = clip(d.reason);
+  }
   return out;
 }
 
