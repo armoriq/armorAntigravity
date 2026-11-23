@@ -132,6 +132,11 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     defaultSource: DEFAULT_POLICY_SOURCE,
     access,
     log,
+    onOrgMode: (mode) => {
+      const before = auth.mode();
+      auth.orgMode.set(mode);
+      if (auth.mode() !== before) log.info("workspace mode changed", { mode: mode.mode, notices: mode.notices });
+    },
   });
   const bundle = createPolicyBundle({ access, log });
   const mcpGate = createMcpGate({ access, log, ownServer: DEFAULT_OWN_MCP_SERVER });
@@ -258,6 +263,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
         guard,
         log,
         onDecision: (record) => onDecision(surface, record),
+        orgMonitor: () => auth.orgMonitor(),
         resolveHold: createHoldResolver({ access, plan: (id) => signedPlan(surface, id), agentId: AGENT_ID, builtinServer: AGENT_ID, log }),
       });
       handlers.set(surface, handler);

@@ -7,6 +7,7 @@ import { hostname } from "node:os";
 import path from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import type { Config } from "./config.ts";
+import { createOrgModeStore, type OrgModeStore } from "./org-mode.ts";
 import type { Log } from "./log.ts";
 import { PRODUCT, type Env } from "./paths.ts";
 
@@ -40,6 +41,9 @@ export interface Auth {
   readonly headers: Readonly<Record<string, string>>;
   state(): AuthState;
   mode(): Mode;
+  readonly orgMode: OrgModeStore;
+  // Signed in and the workspace is in Monitor (Quiet or Show in chat): nothing is blocked, verdicts are recorded.
+  orgMonitor(): boolean;
   // Null while logged out or after relogin_required: audit, usage and trace pumps must stay idle.
   uploadLogin(): Login | null;
   // Call with every backend response a mint, upload or reachability probe gets; it applies the PRD 4a error
@@ -103,11 +107,13 @@ export function readLogin(env: Env, configuredBackend: string | null): Login | n
 export const loginBinding = (login: Login) => createHash("sha256").update(`${login.backend}\n${login.apiKey}`).digest("hex").slice(0, 16);
 
 // Reads credentials at startup and on directory change; state() never touches disk.
-export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: string; pollMs?: number }): Auth {
+export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: string; pollMs?: number; orgMode?: OrgModeStore }): Auth {
   const { env, config, dataDir } = opts;
+  const orgMode = opts.orgMode ?? createOrgModeStore(dataDir, env);
+  const orgMonitor = () => "login" in state && state.kind !== "local_only" && orgMode.monitoring();
   const armoriqDir = path.dirname(getCredentialsPath());
   const client = clientIdentity(config.channel);
-  const headers = clientHeaders(client);
+  const headers = { ...clientHeaders(client), "X-ArmorIQ-Monitor-Aware": "1" };
   const listeners = new Set<(state: AuthState) => void>();
   const warned = new Set<string>();
   const markerPath = (login: Login) => path.join(dataDir, `relogin-required-${loginBinding(login)}`);
@@ -216,7 +222,9 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
     client,
     headers,
     state: () => state,
-    mode: () => (state.kind === "logged_out" || state.kind === "local_only" || config.forceMonitor ? "monitor" : "enforce"),
+    mode: () => (state.kind === "logged_out" || state.kind === "local_only" || config.forceMonitor || orgMonitor() ? "monitor" : "enforce"),
+    orgMode,
+    orgMonitor,
     uploadLogin: () => (state.kind === "active" || state.kind === "refused" ? state.login : null),
 
     reportStatus(status, body, source) {

@@ -19,6 +19,18 @@ curl -fsSL https://armoriq.ai/install_armorantigravity.sh | bash -s -- --uninsta
 
 `~/.armoriq/armorantigravity/bin/armorantigravity status` shows the login, the daemon, the update state and which Antigravity surfaces were found.
 
+## Workspace mode
+
+Signed in, ArmorAntigravity follows the mode your workspace picks under **Tool calls in the chat** on the Monitor page of ArmorIQ Tools. The daemon reads it with the workspace policy at every session start and every five minutes, and keeps the last answer in `~/.armoriq/armorantigravity/org-mode.json`; until it has one, it runs Quiet.
+
+| Mode | A call your policy, the file guard or the MCP gate would stop | What Antigravity shows |
+|---|---|---|
+| Quiet (the default) | Runs, and is listed under Would have blocked on the Monitor page | Nothing from ArmorIQ |
+| Show in chat | Runs, and is listed on the Monitor page | Nothing yet: Antigravity's hooks have no way to show the user a message on a call that runs, so this works like Quiet here |
+| Block | Is blocked, a held call waits for a workspace approval, an unapproved MCP server asks | The block reason |
+
+In Quiet and Show in chat no approval request is filed and an unreachable backend blocks nothing; the audit row of each call records what Block would have done (`would_be`, `would_be_code`, `would_be_reason`). `ARMORIQ_ORG_MODE=enforce` in the daemon's environment makes one machine block whatever the workspace says.
+
 ## Updates
 
 `armoriq-agd` updates itself. Every six hours it asks GitHub for the newest release on its channel:

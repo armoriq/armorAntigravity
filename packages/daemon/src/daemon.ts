@@ -125,6 +125,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   const kickAll = () => pumps.forEach((p) => p.kick());
 
   publishMode(paths, auth.mode(), log);
+  // The hook falls back to this mode file while the daemon is down, so a workspace switch rewrites it too.
+  const stopOrgMode = auth.orgMode.onChange(() => publishMode(paths, auth.mode(), log));
   let lastUploadLogin = auth.uploadLogin();
   const unsubscribe = auth.onChange((state) => {
     publishMode(paths, auth.mode(), log);
@@ -280,6 +282,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
         if (!results) log.error("pumps did not flush within the shutdown budget");
         await sessions.flush();
         unsubscribe();
+        stopOrgMode();
         auth.stop();
         removeQuietly(paths.socket);
         lock.release();

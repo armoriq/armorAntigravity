@@ -13,6 +13,10 @@ export type ActivePolicy = {
   readonly backendVersion: number | null;
 };
 
+// The workspace's Tools mode, sent with the org policy: Quiet is shadow, Show in chat is shadow with
+// notices, Block is enforce.
+export type OrgMode = { readonly mode: "shadow" | "enforce"; readonly notices: boolean };
+
 export type RefreshOutcome =
   | { kind: "skipped"; reason: string }
   | { kind: "applied"; version: number; hash: string }
@@ -38,6 +42,7 @@ export type PolicySourceOptions = {
   readonly fetch?: Fetch;
   readonly pollMs?: number;
   readonly refreshMs?: number;
+  readonly onOrgMode?: (mode: OrgMode) => void;
 };
 
 // Used only when the file exists but never compiled. Falling back to the
@@ -170,6 +175,9 @@ export function createPolicySource(options: PolicySourceOptions): PolicySource {
       return { kind: "failed", reason: res.reason };
     }
     const body = isRecord(res.data) ? res.data : {};
+    if (body.enforcementMode === "shadow" || body.enforcementMode === "enforce") {
+      options.onOrgMode?.({ mode: body.enforcementMode, notices: body.monitorNotices === true });
+    }
     const version = typeof body.version === "number" ? body.version : 0;
     // conmap-auto returns policy:null until an admin confirms one; the local policy then applies.
     if (body.policy === null || body.policy === undefined) {

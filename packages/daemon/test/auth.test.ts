@@ -24,8 +24,9 @@ afterEach(() => {
 const save = (backend: string, product: string, apiKey: string) =>
   saveLoginProfile({ backend, product, apiKey, email: "dev@example.com", userId: "user-1", orgId: "org-1" });
 const dataDir = () => path.join(sandbox.home, ".armoriq", "armorantigravity");
+// These tests cover how sign-in state picks the mode, so the workspace is pinned to Block; Monitor has its own tests.
 const start = (config: Partial<Config> = {}, env: Record<string, string> = {}) =>
-  (auth = createAuth(quiet, { env, config: { ...DEFAULT_CONFIG, backendUrl: STAGING, ...config }, dataDir: dataDir(), pollMs: 50 }));
+  (auth = createAuth(quiet, { env: { ARMORIQ_ORG_MODE: "enforce", ...env }, config: { ...DEFAULT_CONFIG, backendUrl: STAGING, ...config }, dataDir: dataDir(), pollMs: 50 }));
 const nextChange = (a: Auth) => new Promise<AuthState>((resolve) => a.onChange(resolve));
 
 test("backend order is ARMORIQ_BACKEND_URL, then config, then prod", () => {
@@ -62,7 +63,7 @@ test("ARMORIQ_API_KEY overrides the stored key and keeps the profile only when i
 
 test("the client header carries the channel and the package version", () => {
   const stable = start();
-  expect(stable.headers).toEqual({ "X-ArmorIQ-Client": `armorantigravity/${stable.client.version}` });
+  expect(stable.headers).toEqual({ "X-ArmorIQ-Client": `armorantigravity/${stable.client.version}`, "X-ArmorIQ-Monitor-Aware": "1" });
   stable.stop();
   expect(start({ channel: "dev" }).headers["X-ArmorIQ-Client"]).toMatch(/^armorantigravity-dev\/\d+\.\d+\.\d+$/);
 });

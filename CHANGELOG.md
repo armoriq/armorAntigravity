@@ -7,6 +7,9 @@ notes from the matching section, so add the section, with its date, in the relea
 
 ## [Unreleased]
 
+### Added
+- Workspace Monitor. Signed in, the daemon follows the mode set on the Tools Monitor page, read with the workspace policy and kept in `org-mode.json`: Quiet (the default) and Show in chat run every call, including ones the file guard, a policy, a v2 hold or the MCP gate would stop, and record on the audit row what Block would have done (`would_be`, `would_be_code`, `would_be_reason`); Block enforces as before. In Monitor no plan directive is injected, no approval request is filed and a backend outage blocks nothing. `ARMORIQ_ORG_MODE=enforce` forces Block on one machine. Requests send `X-ArmorIQ-Monitor-Aware: 1`, so the backend sends the real policy instead of the Monitor stand-in.
+
 ## [0.2.1] - 2026-11-17
 
 ### Changed

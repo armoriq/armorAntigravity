@@ -83,9 +83,12 @@ export type DecisionHandlerOptions = {
   // Must not throw or block; it runs before the response is returned.
   readonly onDecision?: (record: DecisionRecord) => void;
   readonly resolveHold?: HoldResolver;
+  // Workspace Monitor, signed in: every check runs and is recorded, and the call goes ahead.
+  readonly orgMonitor?: () => boolean;
 };
 
 const NO_OPINION: HookResponse = null;
+const ALLOW: AdapterDecision = { kind: "allow", stepIndex: null, paramMismatch: false };
 // A server and tool no policy can name, to tell a rule about this server from a wildcard.
 const PROBE = { server: "armoriq-unnamed-probe-server", tool: "armoriq_unnamed_probe_tool" };
 
@@ -230,7 +233,7 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
       const builtin = d.kind === "deny" && d.code !== "policy_forbid";
       return { decision: d, attribution: builtin ? BUILTIN(ruleId) : { source: ORIGIN_SOURCE[active.origin], v2: null, ruleId, shadow: [] } };
     };
-    if (decision.kind !== "allow" || call.category !== "mcp" || mode === "monitor") return fromPolicy(decision);
+    if (decision.kind !== "allow" || call.category !== "mcp" || (mode === "monitor" && !options.orgMonitor?.())) return fromPolicy(decision);
 
     const server = call.mcp.server;
     const verdict = options.mcpGate.check(server);
@@ -267,8 +270,10 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
       log.error("decision failed", { tool: call.name, error: String(error) });
       judged = { decision: mode === "enforce" ? internalError(error) : { kind: "allow", stepIndex: null, paramMismatch: false }, attribution: BUILTIN("builtin:internal_error") };
     }
+    const monitoring = options.orgMonitor?.() === true;
     const finish = (decision: AdapterDecision): HookResponse => {
-      const response = toHookResponse(decision);
+      // In Monitor the stop decision is kept for the audit row (would_be) and the call runs.
+      const response = monitoring ? toHookResponse(ALLOW) : toHookResponse(decision);
       try {
         options.onDecision?.({
           conversationId: payload.conversationId,
@@ -276,7 +281,7 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
           at: hook.receivedAt,
           call,
           decision,
-          status: statusOf(decision),
+          status: monitoring ? "allowed" : statusOf(decision),
           response,
           attribution: judged.attribution,
         });
@@ -287,7 +292,8 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     };
     const { decision, attribution } = judged;
     const resolveHold = options.resolveHold;
-    if (decision.kind !== "hold" || attribution.source !== "v2" || !attribution.v2 || !resolveHold) return finish(decision);
+    // A Monitor call has already run by the time anyone could approve it, and an enforce spends approvals.
+    if (monitoring || decision.kind !== "hold" || attribution.source !== "v2" || !attribution.v2 || !resolveHold) return finish(decision);
     const held: HeldCall = {
       conversationId: payload.conversationId,
       stepIdx: payload.stepIdx,

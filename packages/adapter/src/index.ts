@@ -25,6 +25,7 @@ export { backendRequest, type BackendAccess, type BackendResult, type Fetch } fr
 export {
   createPolicySource,
   type ActivePolicy,
+  type OrgMode,
   type PolicyOrigin,
   type PolicySource,
   type PolicySourceOptions,
