@@ -33,6 +33,8 @@ export const SESSION_IDLE_MS = 30 * 60 * 1000;
 const IDLE_SWEEP_MS = 60_000;
 const SHUTDOWN_BUDGET_MS = 10_000;
 const MAX_LINE_BYTES = 4 * 1024 * 1024;
+// Below sun_path on macOS (104) and Linux (108); libuv silently truncates a longer bind path.
+const MAX_BIND_PATH_BYTES = 100;
 
 export interface DaemonOptions {
   readonly env: Env;
@@ -316,10 +318,25 @@ function listen(socketPath: string, onConnection: (socket: Socket) => void): Pro
   return new Promise((resolve, reject) => {
     const server = createServer(onConnection);
     server.once("error", reject);
-    server.listen(socketPath, () => {
-      chmodSync(socketPath, 0o600);
-      resolve(server);
-    });
+    const ready = () => {
+      try {
+        chmodSync(socketPath, 0o600);
+        resolve(server);
+      } catch (error) {
+        server.close();
+        reject(error);
+      }
+    };
+    if (Buffer.byteLength(socketPath) <= MAX_BIND_PATH_BYTES) return void server.listen(socketPath, ready);
+    // A path too long for sun_path is bound from its own directory, the way agd-hook dials it
+    // (dial_from_directory). Node binds a pipe synchronously inside listen(), so the cwd is restored at once.
+    const cwd = process.cwd();
+    process.chdir(path.dirname(socketPath));
+    try {
+      server.listen(path.basename(socketPath), ready);
+    } finally {
+      process.chdir(cwd);
+    }
   });
 }
 

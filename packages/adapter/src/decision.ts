@@ -205,7 +205,10 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     for (const s of shadow) if (s.verdict !== "allow") log.info("shadow v2 policy would not allow this call", { policy: s.policyName, verdict: s.verdict, rule: s.rule });
     const enforced = v2?.enforced;
     if (!enforced) return { decision: local.decision, attribution: { ...local.attribution, shadow } };
-    const attribution: PolicyAttribution = { source: "v2", v2: v2Ref(enforced), ruleId: null, shadow };
+    const attribution: PolicyAttribution =
+      enforced.verdict === "allow" && enforced.rule === "tools.default"
+        ? { source: "default", v2: null, ruleId: enforced.rule, shadow }
+        : { source: "v2", v2: v2Ref(enforced), ruleId: null, shadow };
     const decision = v2Decision(enforced);
     // Ties go to v2 so a block names its policy; two allows keep the local one, which carries the plan step.
     if (RANK[decision.kind] < RANK[local.decision.kind]) return { decision: local.decision, attribution: { ...local.attribution, shadow } };
