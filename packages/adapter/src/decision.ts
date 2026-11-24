@@ -24,7 +24,7 @@ export type AdapterDecision =
   | Decision
   | { kind: "deny"; code: "mcp_server_denied"; reason: string; ruleId: string | null }
   | { kind: "deny"; code: "login_rejected" | "org_mode_unknown" | "policy_bundle_unusable"; reason: string; ruleId: null }
-  | { kind: "ask"; code: "mcp_server_unapproved"; reason: string; server: string };
+  | { kind: "deny"; code: "mcp_server_unapproved"; reason: string; ruleId: null };
 
 export type AuditStatus = "blocked" | "held" | "allowed";
 
@@ -106,8 +106,6 @@ export function toHookResponse(decision: AdapterDecision): HookResponse {
       // ft-forceask), so a hold would run. A hold blocks; for a v2 hold the reason names the approval
       // request, and the retry after approval is allowed by the hold resolver.
       return { decision: "deny", reason: `ArmorIQ blocked this call until it is approved [approval_required]: ${decision.reason}` } satisfies ToolDecision;
-    case "ask":
-      return { decision: "ask", reason: decision.reason } satisfies ToolDecision;
   }
 }
 
@@ -121,7 +119,8 @@ function internalError(error: unknown): Decision {
   return { kind: "deny", code: "internal_error" satisfies DenyCode, reason: `ArmorIQ could not check this call: ${String(error)}`, ruleId: null };
 }
 
-const RANK: Record<AdapterDecision["kind"], number> = { allow: 0, ask: 1, hold: 2, deny: 3 };
+const ALWAYS_ENFORCED: ReadonlySet<string> = new Set(["builtin_protected", "mcp_server_denied", "mcp_server_unapproved", "internal_error"]);
+const RANK: Record<AdapterDecision["kind"], number> = { allow: 0, hold: 1, deny: 2 };
 const BUILTIN = (ruleId: string | null): PolicyAttribution => ({ source: "builtin", v2: null, ruleId, shadow: [] });
 const ORIGIN_SOURCE: Record<PolicyOrigin, PolicySourceKind> = { backend: "v1_org", file: "local", default: "default", fail_closed: "local" };
 
@@ -234,7 +233,7 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
       const builtin = d.kind === "deny" && d.code !== "policy_forbid";
       return { decision: d, attribution: builtin ? BUILTIN(ruleId) : { source: ORIGIN_SOURCE[active.origin], v2: null, ruleId, shadow: [] } };
     };
-    if (decision.kind !== "allow" || call.category !== "mcp" || (mode === "monitor" && !options.orgMonitor?.())) return fromPolicy(decision);
+    if (decision.kind !== "allow" || call.category !== "mcp") return fromPolicy(decision);
 
     const server = call.mcp.server;
     const verdict = options.mcpGate.check(server);
@@ -251,10 +250,10 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     }
     return {
       decision: {
-        kind: "ask",
+        kind: "deny",
         code: "mcp_server_unapproved",
-        server,
-        reason: `ArmorIQ: MCP server "${server}" is not approved. Approve this call, or have an admin register "${server}" in the ArmorIQ console.`,
+        ruleId: null,
+        reason: `MCP server "${server}" is not approved. Have an admin register "${server}" in the ArmorIQ console, or name it in the local policy file.`,
       },
       attribution: BUILTIN("builtin:mcp_server_unapproved"),
     };
@@ -269,11 +268,12 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
       judged = judge(call, payload.conversationId, payload.stepIdx, payload.workspacePaths[0] ?? null, mode, hook.receivedAt);
     } catch (error) {
       log.error("decision failed", { tool: call.name, error: String(error) });
-      judged = { decision: mode === "enforce" ? internalError(error) : { kind: "allow", stepIndex: null, paramMismatch: false }, attribution: BUILTIN("builtin:internal_error") };
+      judged = { decision: internalError(error), attribution: BUILTIN("builtin:internal_error") };
     }
-    const monitoring = options.orgMonitor?.() === true;
+    const orgMonitor = options.orgMonitor?.() === true;
     const finish = (decision: AdapterDecision): HookResponse => {
       // In Monitor the stop decision is kept for the audit row (would_be) and the call runs.
+      const monitoring = orgMonitor && !ALWAYS_ENFORCED.has(decision.kind === "deny" ? decision.code : "");
       const response = monitoring ? toHookResponse(ALLOW) : toHookResponse(decision);
       try {
         options.onDecision?.({
@@ -294,7 +294,7 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     const { decision, attribution } = judged;
     const resolveHold = options.resolveHold;
     // A Monitor call has already run by the time anyone could approve it, and an enforce spends approvals.
-    if (monitoring || decision.kind !== "hold" || attribution.source !== "v2" || !attribution.v2 || !resolveHold) return finish(decision);
+    if (orgMonitor || decision.kind !== "hold" || attribution.source !== "v2" || !attribution.v2 || !resolveHold) return finish(decision);
     const held: HeldCall = {
       conversationId: payload.conversationId,
       stepIdx: payload.stepIdx,

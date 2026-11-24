@@ -175,22 +175,25 @@ describe("backend lists (#28)", () => {
 describe("MCP server gate (#19)", () => {
   const mcpRaw = () => stdinOf("pre-call_mcp_tool-global");
 
-  test("an unknown server asks first in enforce mode", () => {
+  test("an unknown server is denied, not asked, since agy auto-approves an ask", () => {
     const { handle, records } = setup({ policy: rule("other", "permit", "view_file") });
     const res = handle(hook("PreToolUse", mcpRaw()));
-    expect(res).toMatchObject({ decision: "ask" });
-    expect(res && "reason" in res && res.reason).toContain('MCP server "agspike-global" is not approved');
-    expect(records[0]).toMatchObject({ status: "held", decision: { kind: "ask", code: "mcp_server_unapproved", server: "agspike-global" } });
+    expect(res).toEqual({
+      decision: "deny",
+      reason:
+        'ArmorIQ blocked this call [mcp_server_unapproved]: MCP server "agspike-global" is not approved. Have an admin register "agspike-global" in the ArmorIQ console, or name it in the local policy file.',
+    });
+    expect(records[0]).toMatchObject({ status: "blocked", decision: { kind: "deny", code: "mcp_server_unapproved" } });
   });
 
   test("the default allow-all policy does not approve servers", () => {
     const { handle } = setup();
-    expect(handle(hook("PreToolUse", mcpRaw()))).toMatchObject({ decision: "ask" });
+    expect(handle(hook("PreToolUse", mcpRaw()))).toMatchObject({ decision: "deny", reason: expect.stringContaining("[mcp_server_unapproved]") });
   });
 
-  test("monitor mode does not gate", () => {
+  test("signed-out monitor mode gates the same way", () => {
     const { handle } = setup();
-    expect(handle(hook("PreToolUse", mcpRaw(), "monitor"))).toEqual(ALLOW);
+    expect(handle(hook("PreToolUse", mcpRaw(), "monitor"))).toMatchObject({ decision: "deny", reason: expect.stringContaining("[mcp_server_unapproved]") });
   });
 
   test("an approved server passes, a denied one is blocked", () => {
@@ -220,9 +223,9 @@ describe("MCP server gate (#19)", () => {
       log,
     });
     const spoof = withTool({ name: "call_mcp_tool", args: { ServerName: "github_create", ToolName: "issue", Arguments: {} } });
-    expect(handle(hook("PreToolUse", spoof))).toMatchObject({ decision: "ask" });
+    expect(handle(hook("PreToolUse", spoof))).toMatchObject({ decision: "deny", reason: expect.stringContaining("[mcp_server_unapproved]") });
     const real = withTool({ name: "call_mcp_tool", args: { ServerName: "github", ToolName: "create_issue", Arguments: {} } });
-    expect(handle(hook("PreToolUse", real))).toMatchObject({ decision: "ask" });
+    expect(handle(hook("PreToolUse", real))).toMatchObject({ decision: "deny", reason: expect.stringContaining("[mcp_server_unapproved]") });
   });
 
   test("a wildcard permit does not approve every server", () => {
@@ -234,13 +237,12 @@ describe("MCP server gate (#19)", () => {
         { id: "no-curl", effect: "forbid", action: { type: "tool", eq: "curl" } },
       ],
     };
-    expect(setup({ policy }).handle(hook("PreToolUse", mcpRaw()))).toMatchObject({ decision: "ask" });
+    expect(setup({ policy }).handle(hook("PreToolUse", mcpRaw()))).toMatchObject({ decision: "deny", reason: expect.stringContaining("[mcp_server_unapproved]") });
   });
 
   test("the per-tool shape (captured chrome-devtools call) is gated the same way", () => {
     const res = setup().handle(hook("PreToolUse", stdinOf("pre-mcp_chrome_devtools_navigate_page")));
-    expect(res).toMatchObject({ decision: "ask" });
-    expect(res && "reason" in res && res.reason).toContain('MCP server "chrome-devtools"');
+    expect(res).toEqual({ decision: "deny", reason: expect.stringMatching(/\[mcp_server_unapproved\].*MCP server "chrome-devtools"/) });
   });
 
   test("ArmorIQ's own tools are never gated", () => {
@@ -250,7 +252,7 @@ describe("MCP server gate (#19)", () => {
 });
 
 describe("failures", () => {
-  test("a throwing decide denies in enforce and allows in monitor", () => {
+  test("a throwing decide denies in enforce and in monitor", () => {
     const decide: DecideFn = () => {
       throw new Error("session store unavailable");
     };
@@ -258,7 +260,7 @@ describe("failures", () => {
       decision: "deny",
       reason: "ArmorIQ blocked this call [internal_error]: ArmorIQ could not check this call: Error: session store unavailable",
     });
-    expect(setup({ decide }).handle(hook("PreToolUse", runCommand("ls"), "monitor"))).toEqual(ALLOW);
+    expect(setup({ decide }).handle(hook("PreToolUse", runCommand("ls"), "monitor"))).toMatchObject({ decision: "deny", reason: expect.stringContaining("[internal_error]") });
   });
 
   test("a throwing observer does not change the response", () => {
@@ -512,7 +514,7 @@ describe("policy v2", () => {
 });
 
 describe("workspace Monitor", () => {
-  test("a guard hit, a forbid, a v2 hold and an unapproved MCP server all run; each record keeps the stop decision", async () => {
+  test("a forbid and a v2 hold run and keep the stop decision; the guard and the MCP gate still block", async () => {
     const hold = entry("Ask first", "org", "active", doc("ask", ORG, "      run_command: hold\n", "allow", APPROVAL));
     const { policy, records, log } = setup({ policy: rule("no-search", "forbid", "search_web") });
     const handle = createDecisionHandler({
@@ -528,12 +530,16 @@ describe("workspace Monitor", () => {
     });
     const guarded = withTool({ name: "write_to_file", args: { TargetFile: `${home}/.armoriq/credentials.json`, CodeContent: "x" } });
     const search = withTool({ name: "search_web", args: { query: "q" } });
-    for (const raw of [guarded, search, runCommand("ls"), stdinOf("pre-call_mcp_tool-global")]) expect(await handle(hook("PreToolUse", raw, "monitor"))).toEqual(ALLOW);
+    expect(await handle(hook("PreToolUse", guarded, "monitor"))).toMatchObject({ decision: "deny", reason: expect.stringContaining("[builtin_protected]") });
+    for (const raw of [search, runCommand("ls")]) expect(await handle(hook("PreToolUse", raw, "monitor"))).toEqual(ALLOW);
+    expect(await handle(hook("PreToolUse", stdinOf("pre-call_mcp_tool-global"), "monitor"))).toMatchObject({ decision: "deny", reason: expect.stringContaining("[mcp_server_unapproved]") });
+    const throwing = createDecisionHandler({ decide: () => { throw new Error("boom"); }, policy, mcpGate: createMcpGate({ access: () => null, log, ownServer: "armoriq" }), guard: { home, protectedPaths: guardPaths(home) }, log, orgMonitor: () => true });
+    expect(throwing(hook("PreToolUse", runCommand("ls"), "monitor"))).toMatchObject({ decision: "deny", reason: expect.stringContaining("[internal_error]") });
     expect(records.map((r) => [r.call.name, r.status, r.decision.kind])).toEqual([
-      ["write_to_file", "allowed", "deny"],
+      ["write_to_file", "blocked", "deny"],
       ["search_web", "allowed", "deny"],
       ["run_command", "allowed", "hold"],
-      ["call_mcp_tool", "allowed", "ask"],
+      ["call_mcp_tool", "blocked", "deny"],
     ]);
   });
 
