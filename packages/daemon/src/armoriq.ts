@@ -355,12 +355,11 @@ function policyView(compiled: CompiledPolicy): PolicyView {
   };
 }
 
-// Core's Decision has no MCP gate verdicts: an unapproved server is a hold and a denied one a forbid.
 function toCoreDecision(decision: AdapterDecision): Decision {
-  if (decision.kind === "ask") return { kind: "hold", ruleId: null, reason: decision.reason };
   if (decision.kind !== "deny") return decision;
   switch (decision.code) {
     case "mcp_server_denied":
+    case "mcp_server_unapproved":
       return { kind: "deny", code: "policy_forbid", reason: decision.reason, ruleId: decision.ruleId };
     case "login_rejected":
     case "org_mode_unknown":

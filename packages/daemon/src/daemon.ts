@@ -25,7 +25,6 @@ import { fileLog, type Log } from "./log.ts";
 import { resolvePaths, type Env, type Paths } from "./paths.ts";
 import type { DaemonEvent, DaemonPlugin, DecisionHandler, EventObserver, HookContext, McpOutcomeHandler, Pump } from "./plugin.ts";
 import { createSessionStore, type SessionStore } from "./sessions.ts";
-import { stubDecide } from "./stub.ts";
 import { surfaceFromTranscriptPath } from "./surface.ts";
 import { applyStagedUpdate, createUpdater, optedOut, readUpdateStatus, type Updater } from "./update.ts";
 
@@ -110,8 +109,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   } catch (error) {
     return abort(error);
   }
-  if (!decide) log.warn("no decision handler registered; using the allow-all stub until packages/core lands");
-  const handler: DecisionHandler = decide ?? stubDecide;
+  if (!decide) log.error("no decision handler registered; every tool call is denied");
+  const handler: DecisionHandler = decide ?? ((hook) => fallbackResponse(hook.event, "enforce", "internal_error", "no decision handler is registered"));
 
   const emit = (event: DaemonEvent) => {
     for (const observe of observers) {
@@ -213,7 +212,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     const envelope = parseEnvelope(raw);
     if (!envelope.ok) {
       log.warn("rejected request", { reason: envelope.reason, id: envelope.id });
-      const response = envelope.event ? fallbackResponse(envelope.event, mode, "protocol_mismatch", envelope.reason) : null;
+      const response = envelope.event ? fallbackResponse(envelope.event, "enforce", "protocol_mismatch", envelope.reason) : null;
       return { reply: { v: PROTOCOL_VERSION, id: envelope.id, response }, event: null };
     }
     const { id, event, receivedAt } = envelope;
@@ -226,7 +225,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     const payload = parseHookPayload(event, rawPayload);
     if (!payload) {
       log.warn("malformed hook payload", { id, event });
-      return { response: fallbackResponse(event, mode, "malformed_payload", "the hook payload is missing required fields"), event: null };
+      return { response: fallbackResponse(event, "enforce", "malformed_payload", "the hook payload is missing required fields"), event: null };
     }
 
     const now = Date.now();
@@ -251,7 +250,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
       response = await handler(hook);
     } catch (error) {
       log.error("decision handler failed", { id, event, error: String(error) });
-      response = fallbackResponse(event, mode, "internal_error", "guard error");
+      response = fallbackResponse(event, "enforce", "internal_error", "guard error");
     }
 
     if (event === "Stop") {

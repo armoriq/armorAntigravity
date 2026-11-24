@@ -82,9 +82,9 @@ test("an unknown event prints an empty response without contacting the daemon", 
   expect(await hook([], "")).toBeNull();
 });
 
-test("unparseable stdin reaches the daemon, which applies the mode", async () => {
+test("unparseable stdin reaches the daemon, which denies it in every mode", async () => {
   daemon = await startDaemon({ env: {}, plugins: [], log: quiet });
-  expect(await hook(["PreToolUse"], "not json")).toEqual({ decision: "allow" });
+  expect(await hook(["PreToolUse"], "not json")).toEqual({ decision: "deny", reason: "ArmorIQ blocked this call [malformed_payload]: the hook payload is missing required fields" });
 });
 
 test("a cold socket starts the daemon and the call is answered", async () => {

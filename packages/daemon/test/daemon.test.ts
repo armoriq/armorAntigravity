@@ -84,10 +84,11 @@ function recorder() {
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
+const allower: DaemonPlugin = { name: "allower", setup: () => ({ decide: (h) => (h.event === "PreToolUse" ? { decision: "allow" } : null) }) };
 
 test("a hook request gets a decision and the session is keyed by surface", async () => {
   const rec = recorder();
-  const d = await start([rec.plugin]);
+  const d = await start([rec.plugin, allower]);
   expect(await hook("PreToolUse", toolPayload("conv-1"))).toEqual({ decision: "allow" });
   expect(await hook("PreToolUse", toolPayload("conv-1", "antigravity-ide"))).toEqual({ decision: "allow" });
   await settle();
@@ -107,7 +108,7 @@ test("a socket path longer than sun_path is bound in full, from its directory", 
   const socket = path.join(sandbox.home, "d".repeat(120), "agd.sock");
   const cwd = process.cwd();
   const rec = recorder();
-  await start([rec.plugin], { ARMORANTIGRAVITY_SOCKET: socket });
+  await start([rec.plugin, allower], { ARMORANTIGRAVITY_SOCKET: socket });
   expect(process.cwd()).toBe(cwd);
   expect(statSync(socket).mode & 0o777).toBe(0o600);
   expect(await hook("PreToolUse", toolPayload("conv-long"))).toEqual({ decision: "allow" });
@@ -149,11 +150,12 @@ test("a plugin setup failure releases the lock and flushes earlier pumps", async
   await start([]);
 });
 
-test("enforce mode fails closed on a bad payload or a handler error; monitor fails open", async () => {
+test("a bad payload or a handler error fails closed in enforce and in monitor", async () => {
   const thrower: DaemonPlugin = { name: "thrower", setup: () => ({ decide: () => Promise.reject(new Error("boom")) }) };
-  await start([thrower]);
-  expect(await hook("PreToolUse", { conversationId: "x" })).toEqual({ decision: "allow" });
-  expect(await hook("PreToolUse", toolPayload("conv-4"))).toEqual({ decision: "allow" });
+  const d0 = await start([thrower]);
+  expect(readFileSync(d0.paths.modeFile, "utf8")).toBe("monitor\n");
+  expect(await hook("PreToolUse", { conversationId: "x" })).toMatchObject({ decision: "deny", reason: expect.stringContaining("[malformed_payload]") });
+  expect(await hook("PreToolUse", toolPayload("conv-4"))).toEqual({ decision: "deny", reason: "ArmorIQ blocked this call [internal_error]: guard error" });
 
   await running.pop()?.stop();
   login();
@@ -165,6 +167,12 @@ test("enforce mode fails closed on a bad payload or a handler error; monitor fai
   });
   expect(await hook("PreToolUse", toolPayload("conv-4"))).toEqual({ decision: "deny", reason: "ArmorIQ blocked this call [internal_error]: guard error" });
   expect(await hook("PostToolUse", { conversationId: "x" })).toBeNull();
+});
+
+test("a daemon with no decision handler denies tool calls rather than allowing them", async () => {
+  await start([]);
+  expect(await hook("PreToolUse", toolPayload("conv-none"))).toEqual({ decision: "deny", reason: expect.stringContaining("[internal_error]") });
+  expect(await hook("Stop", stopPayload("conv-none"))).toBeNull();
 });
 
 test("a request with another protocol version gets the fallback for its event", async () => {
@@ -179,7 +187,7 @@ test("a request with another protocol version gets the fallback for its event", 
 });
 
 test("one connection can carry several requests and each answer keeps its id", async () => {
-  const d = await start([]);
+  const d = await start([allower]);
   const replies = await new Promise<unknown[]>((resolve, reject) => {
     const s = connect(d.paths.socket);
     let buf = "";
@@ -227,7 +235,7 @@ const frame = (d: RunningDaemon, event: HookEvent, payload: string) => sendRaw(d
 
 test("a frame is answered with the bare response line, and a null response with an empty one", async () => {
   const rec = recorder();
-  const d = await start([rec.plugin]);
+  const d = await start([rec.plugin, allower]);
   expect(await frame(d, "PreToolUse", JSON.stringify(toolPayload("conv-f1")))).toBe(`${HOOK_FRAME_TAG} {"decision":"allow"}`);
   expect(await frame(d, "PostInvocation", JSON.stringify(payload("conv-f1")))).toBe(HOOK_FRAME_TAG);
   await settle();
