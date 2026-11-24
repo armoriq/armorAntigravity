@@ -8,6 +8,7 @@ import {
   createPolicyBundle,
   createPolicySource,
   DEFAULT_OWN_MCP_SERVER,
+  explainPolicy,
   guardPaths,
   mapToolCall,
   toHookResponse,
@@ -17,6 +18,9 @@ import {
   type HookInput,
   type MappedCall,
   type PolicyAttribution,
+  type PolicyEffect,
+  type PolicyExplanation,
+  type PolicySourceKind,
   type SessionPair,
   V2_AGENT,
 } from "@armorantigravity/adapter";
@@ -152,7 +156,12 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     client: auth.client,
     login: () => auth.uploadLogin(),
     mode: () => auth.mode(),
-    policy: () => policyView(policy.current().policy),
+    policy: () =>
+      policyView(policy.current().policy, (tool, args) => {
+        const closed = capabilityOf(mapToolCall({ name: tool, args })) === "read" ? null : standing();
+        if (closed) return { decision: closed, attribution: BUILTIN_ATTRIBUTION };
+        return explainPolicy({ policy, bundle, userEmail: () => auth.uploadLogin()?.email || undefined, mcpGate, guard, log }, { name: tool, args }, Date.now());
+      }),
     mintPolicy: () => undefined,
     // Intent rows come from the plugin's own MCP tools.
     audit: (row) => recorder.audit({ ...row, capability: "mcp" }, { surface: surfaceOf(runtime, row.session_id) }),
@@ -224,18 +233,23 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     const call: MappedCall = mapToolCall(payload.toolCall);
     if (capabilityOf(call) === "read") return null;
     if (auth.failClosed()?.code === "org_mode_unknown") await withinMs(policy.refresh(), ORG_MODE_WAIT_MS);
-    const decision = closedFor(auth.failClosed()) ?? (await unusable(state)) ?? closedFor(auth.failClosed());
+    const decision = standing() ?? (await unreachable(state)) ?? closedFor(auth.failClosed());
     if (!decision) return null;
     const response = toHookResponse(decision);
     onDecision(surface, { conversationId: payload.conversationId, stepIdx: payload.stepIdx, at, call, decision, status: "blocked", response, attribution: BUILTIN_ATTRIBUTION });
     return response;
   };
 
-  const unusable = async (state: AuthState): Promise<AdapterDecision | null> => {
-    if ((state.kind !== "active" && state.kind !== "refused") || auth.mode() === "monitor") return null;
-    if (bundle.agentMissing()) {
-      return { kind: "deny", code: "policy_bundle_unusable", reason: `the ArmorIQ policy bundle does not list the ${V2_AGENT} agent; only read calls run until it does. Run \`${DOCTOR_COMMAND}\` to check.`, ruleId: null };
-    }
+  const enforcingSignedIn = (state: AuthState) => (state.kind === "active" || state.kind === "refused") && auth.mode() === "enforce";
+
+  const standing = (): AdapterDecision | null => {
+    const closed = closedFor(auth.failClosed());
+    if (closed || !enforcingSignedIn(auth.state()) || !bundle.agentMissing()) return closed;
+    return { kind: "deny", code: "policy_bundle_unusable", reason: `the ArmorIQ policy bundle does not list the ${V2_AGENT} agent; only read calls run until it does. Run \`${DOCTOR_COMMAND}\` to check.`, ruleId: null };
+  };
+
+  const unreachable = async (state: AuthState): Promise<AdapterDecision | null> => {
+    if ((state.kind !== "active" && state.kind !== "refused") || auth.mode() !== "enforce") return null;
     const reach = await reachability.check(state.login);
     if (reach.kind !== "unreachable") return null;
     return {
@@ -347,11 +361,20 @@ function toCoreSession(c: Conversation, parentId: SessionID | null): CoreSession
 
 const POLICY_VIEW_SESSION = toSessionId("armoriq-policy-view");
 
-function policyView(compiled: CompiledPolicy): PolicyView {
+const DECIDED_BY: Record<PolicySourceKind, string> = { v2: "workspace policy", v1_org: "org policy", local: "the local policy file", default: "the default", builtin: "a built-in ArmorIQ rule" };
+const EFFECT: Record<AdapterDecision["kind"], PolicyEffect> = { allow: "permit", deny: "forbid", hold: "require_approval" };
+
+function policyView(compiled: CompiledPolicy, explain: (tool: string, args: Readonly<Record<string, unknown>>) => PolicyExplanation): PolicyView {
   return {
     hash: compiled.hash,
     intentRequired: compiled.intentRequired,
     evaluate: (tool, args) => compiled.evaluate({ sessionId: POLICY_VIEW_SESSION, callId: "", tool, args }),
+    explain(tool, args) {
+      const { decision, attribution } = explain(tool, args);
+      const decidedBy = attribution.v2 ? `${DECIDED_BY.v2} "${attribution.v2.policyName}"` : DECIDED_BY[attribution.source];
+      const reason = decision.kind === "allow" ? "" : decision.reason;
+      return { effect: EFFECT[decision.kind], ruleId: attribution.v2?.rule ?? attribution.ruleId, reason, decidedBy };
+    },
   };
 }
 

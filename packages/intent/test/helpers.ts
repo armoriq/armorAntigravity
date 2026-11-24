@@ -10,6 +10,7 @@ export const permitAll: PolicyView = {
   hash: "policy-hash",
   intentRequired: true,
   evaluate: () => ({ effect: "permit", ruleId: null, reason: "" }),
+  explain: () => ({ effect: "permit", ruleId: null, reason: "", decidedBy: "the default" }),
 };
 
 export type MintCall = { contextId: string; goal: string; tools: string[] };

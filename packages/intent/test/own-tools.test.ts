@@ -98,6 +98,7 @@ describe("registration rules", () => {
       hash: "h",
       intentRequired: true,
       evaluate: (tool) => (tool === "run_command" ? { effect: "forbid", ruleId: "no-shell", reason: "shell is off" } : { effect: "permit", ruleId: null, reason: "" }),
+      explain: () => ({ effect: "permit", ruleId: null, reason: "", decidedBy: "the default" }),
     };
     const h = harness({ policy });
     expect(await h.tools.handle(A, "register_intent_plan", plan("g", "write_to_file", "Bash"))).toBe(
@@ -179,7 +180,7 @@ describe("MCP outcome hand-off", () => {
   test("the MCP server gets the hook's outcome for the same arguments, in any key order", async () => {
     const h = harness();
     const text = await h.tools.handle(A, "policy_read", { tool: "run_command" });
-    expect(text).toBe("Policy hash: policy-hash\nIntent plan required: yes\nMode: enforce\nrun_command: permit");
+    expect(text).toBe("Policy hash: policy-hash\nIntent plan required: yes\nMode: enforce\nrun_command: permit, decided by the default");
     expect(await h.tools.outcome("policy_read", { tool: "run_command" }, 10)).toBe(text);
     expect(await h.tools.outcome("policy_read", { tool: "run_command" }, 10)).toBeNull();
   });

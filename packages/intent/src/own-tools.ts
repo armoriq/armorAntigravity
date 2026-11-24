@@ -284,8 +284,8 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     const policy = deps.policy();
     const lines = [`Policy hash: ${policy.hash}`, `Intent plan required: ${policy.intentRequired ? "yes" : "no"}`, `Mode: ${deps.mode()}`];
     if (tool) {
-      const v = policy.evaluate(tool, {});
-      lines.push(`${tool}: ${v.effect}${v.ruleId ? ` (rule ${v.ruleId})` : ""}${v.reason ? `: ${v.reason}` : ""}`);
+      const v = policy.explain(tool, {});
+      lines.push(`${tool}: ${v.effect}, decided by ${v.decidedBy}${v.ruleId ? ` (rule ${v.ruleId})` : ""}${v.reason ? `: ${v.reason}` : ""}`);
     }
     const t = registry.root(conv.key)?.token;
     if (t?.status === "active") {
