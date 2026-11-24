@@ -125,7 +125,7 @@ describe("usage pump", () => {
   test("titles wait while the SDK refuses the title source, and go out once it accepts it", async () => {
     const t = Date.UTC(2026, 9, 11, 17);
     const read = { steps: [step("s1", t)], title: { text: "Fix the flaky login test", at: t }, parentId: null, problems: [] };
-    const held = setup();
+    const held = setup({}, client => ({ ...client, titles: false }));
     await observeConversation({ usage: held.usage, source: sourceOf({ [ROOT]: read }), ref: ref(ROOT), rootOf: (id) => id });
     held.usage.start();
     await until(() => held.backend.batches().length > 0);

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { checkCall, parsePlan, planToolName } from "../src/plan.ts";
 
 describe("parsePlan", () => {
-  test("maps Claude and OpenCode names to Antigravity tools and hashes {goal, steps}", () => {
+  test("maps Claude and OpenCode names to Antigravity tools and hashes the canonical SDK plan", () => {
     const r = parsePlan(
       { goal: "fix the build", steps: [{ action: "Bash" }, { tool: "write_to_file", metadata: { inputs: { TargetFile: "a.ts" } } }] },
       1,
@@ -11,7 +11,7 @@ describe("parsePlan", () => {
     expect(r).toEqual({
       ok: true,
       plan: {
-        hash: "6a62d41e280275b93a2d0079ca81cdf35f47d87c6dc82a36703b5fcc42eb60a7",
+        hash: "2c4782d2755e8e5a829fd0d947bc7b5b30ad89b4cf0406188bf3770ffb11c7e2",
         goal: "fix the build",
         steps: [
           { action: "Bash", tool: "run_command" },

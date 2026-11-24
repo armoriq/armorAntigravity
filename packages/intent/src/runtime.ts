@@ -49,8 +49,9 @@ export interface IntentRuntime {
   ownToolDecision(surface: Surface, payload: PreToolUse): Promise<ToolDecision | null>;
   // The conversation whose plan and token a check uses; a subagent resolves to its root.
   root(ref: ConversationRef): Conversation | null;
-  // PreInvocation response: the plan directive, only in enforce mode and only while no plan is registered.
+  // PreInvocation response: the plan directive while the current root prompt has no registered plan.
   preInvocation(surface: Surface, payload: HookPayload): HookResponse;
+  authChanged(): void;
   mcpOutcome(tool: OwnTool, args: unknown, waitMs: number): Promise<string | null>;
   conversationEnded(ref: ConversationRef): void;
   readonly pump: { readonly name: string; kick(): void; stop(): Promise<void> };
@@ -59,6 +60,8 @@ export interface IntentRuntime {
 export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
   const now = opts.now ?? Date.now;
   const registry = createRegistry(now);
+  const syncAuth = () => registry.syncAuth(opts.login(), opts.mode());
+  syncAuth();
   const backend = opts.backend ?? createSdkBackend({ client: opts.client, mintPolicy: () => opts.mintPolicy() });
   const tools = createOwnTools({
     registry,
@@ -72,7 +75,7 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     ...(opts.onRelogin ? { onRelogin: opts.onRelogin } : {}),
     ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}),
   });
-  const pump = createTokenPump({ registry, backend, login: opts.login, log: opts.log, now, ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}) });
+  const pump = createTokenPump({ registry, backend, login: opts.login, mode: opts.mode, log: opts.log, now, ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}) });
   const linker = createSubagentLinker(registry, now, opts.fileExists);
   const drafts = new Map<ConversationKey, string>();
   const childMessagedAt = new Map<ConversationKey, number>();
@@ -96,6 +99,7 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     pump: { name: "intent-token", kick: pump.kick, stop: pump.stop },
 
     observe(surface, payload) {
+      syncAuth();
       const ref = refOf(surface, payload);
       const key = registry.open(ref).key;
       linker.noteEvent(ref, payload.artifactDirectoryPath);
@@ -106,7 +110,7 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
           // user message, so it must not reset the revision counter.
           const messaged = childMessagedAt.get(key);
           const fromChild = messaged !== undefined && now() - messaged < CHILD_MESSAGE_WINDOW_MS;
-          if ((payload.invocationNum === undefined || payload.invocationNum === 0) && !fromChild) registry.beginTurn(key);
+          if (payload.invocationNum === 0 && !fromChild && !linker.mightBeChild(ref)) registry.beginPrompt(key, payload.initialNumSteps);
           return;
         }
         case "PreToolUse": {
@@ -121,6 +125,7 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
           return;
         }
         case "Stop":
+          registry.endPrompt(key);
           pump.noteStop(key);
           pump.kick();
           return;
@@ -135,21 +140,27 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     },
 
     async ownToolDecision(surface, payload) {
+      syncAuth();
       const call = ownToolCall(payload.toolCall.name, payload.toolCall.args);
       if (!call) return null;
       await tools.handle(refOf(surface, payload), call.tool, call.args, payload.stepIdx);
       return { decision: "allow" };
     },
 
-    root: (ref) => registry.root(conversationKey(ref)),
+    root(ref) {
+      syncAuth();
+      return registry.root(conversationKey(ref));
+    },
+
+    authChanged: syncAuth,
 
     preInvocation(surface, payload) {
+      syncAuth();
       if (opts.mode() !== "enforce") return null;
       const conv = registry.get(conversationKey(refOf(surface, payload)));
       // An unlinked subagent told to register would get a plan of its own and escape the parent's.
       if (!conv || conv.parent !== null || linker.mightBeChild(conv.ref)) return null;
-      const root = registry.root(conv.key);
-      if (root?.plan && root.plan.id !== "") return null;
+      if (conv.countedPlanId !== null) return null;
       const draft = drafts.get(conv.key);
       const text = draft ? `${INTENT_DIRECTIVE}\n\n${planningDraftNote(draft)}` : INTENT_DIRECTIVE;
       // ASSUMPTION(P0): an ephemeralMessage reaches the model for this invocation only; the rules file stays the
@@ -162,7 +173,9 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     conversationEnded(ref) {
       const key = conversationKey(ref);
       pump.revoke(key, "antigravity conversation ended");
+      registry.close(key);
       drafts.delete(key);
+      childMessagedAt.delete(key);
     },
   };
 }

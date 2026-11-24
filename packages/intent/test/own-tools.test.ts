@@ -63,8 +63,9 @@ describe("registration rules", () => {
     expect(await h.tools.handle(A, "register_intent_plan", { ...plan("g", "run_command"), reason: "r3" })).toBe(
       "Plan revision rejected: at most 2 revisions are allowed per user message. Continue with the current plan or ask the user how to proceed.",
     );
-    h.registry.beginTurn(conversationKey(A));
-    expect(await h.tools.handle(A, "register_intent_plan", { ...plan("g", "run_command"), reason: "r3" })).toMatch(/^Intent revised \(revision 4\)/);
+    h.registry.beginPrompt(conversationKey(A), 7);
+    expect(await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toMatch(/^Intent registered:/);
+    expect(await h.tools.handle(A, "register_intent_plan", { ...plan("g", "view_file"), reason: "next prompt revision" })).toMatch(/^Intent revised \(revision 2\)/);
   });
 
   test("a revision re-anchors the old plan and writes a held plan_revision row", async () => {

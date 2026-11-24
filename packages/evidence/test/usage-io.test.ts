@@ -6,11 +6,11 @@ import { login, uploads } from "./support.ts";
 const ROOT = "conv-root-7f3a";
 
 describe("usage client", () => {
-  test("holds titles back while the installed SDK refuses the antigravity title source", async () => {
+  test("enables titles when the installed SDK accepts the antigravity title source", async () => {
     const up = uploads(() => null);
     const client = await createUsageClient(login("http://127.0.0.1:9"), up);
-    // SDK 0.8.17 knows claude, codex and opencode sources only; registration is #43.
-    expect(client.titles).toBe(false);
+    // The installed SDK now knows the Antigravity title source registered in #43.
+    expect(client.titles).toBe(true);
   });
 
   test("a session file that does not parse yields an empty state instead of throwing", () => {

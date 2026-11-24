@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { planHash, toSdkPlan } from "./plan-request.ts";
 import type { Draft, PlanStep } from "./types.ts";
 
 // Claude, OpenCode and agy 1.4 names a model may write in a plan, mapped to the Antigravity tool they mean (PRD 5.3).
@@ -84,8 +84,6 @@ function coercePlanArgs(raw: unknown): unknown {
   return args;
 }
 
-const stepHashShape = (step: PlanStep): unknown => (step.params === undefined ? { action: step.action, tool: step.tool } : step);
-
 export type ParsePlanResult = { readonly ok: true; readonly plan: Draft } | { readonly ok: false; readonly error: string };
 
 export function parsePlan(raw: unknown, revision: number, messageId: string): ParsePlanResult {
@@ -106,9 +104,7 @@ export function parsePlan(raw: unknown, revision: number, messageId: string): Pa
     const tool = planToolName(typeof entry.tool === "string" && entry.tool.trim() ? entry.tool : action);
     steps.push(inputs === undefined ? { action, tool } : { action, tool, params: inputs });
   }
-  const hash = createHash("sha256")
-    .update(JSON.stringify({ goal: args.goal, steps: steps.map(stepHashShape) }))
-    .digest("hex");
+  const hash = planHash(toSdkPlan({ goal: args.goal, steps }));
   return { ok: true, plan: { hash, goal: args.goal, steps, revision, registeredInMessage: messageId } };
 }
 
