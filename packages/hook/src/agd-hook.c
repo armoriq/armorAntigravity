@@ -120,13 +120,6 @@ static int known_event(const char *event) {
   return 0;
 }
 
-static const char *env_value(const char *name) {
-  const char *value = getenv(name);
-  if (!value) return NULL;
-  while (*value == ' ' || *value == '\t') value++;
-  return *value ? value : NULL;
-}
-
 // Leading ~/ only, matching the daemon's own path resolution.
 static int expand_home(const char *path, char *out, size_t size) {
   if (path[0] != '~' || (path[1] != '/' && path[1] != '\0')) return snprintf(out, size, "%s", path) < (int)size;
@@ -134,10 +127,22 @@ static int expand_home(const char *path, char *out, size_t size) {
   return snprintf(out, size, "%s%s", home ? home : "", path + 1) < (int)size;
 }
 
+static const char *dev_override(const char *name) {
+#ifdef AGD_DEV_OVERRIDES
+  const char *value = getenv(name);
+  if (!value) return NULL;
+  while (*value == ' ' || *value == '\t') value++;
+  return *value ? value : NULL;
+#else
+  (void)name;
+  return NULL;
+#endif
+}
+
 static int resolve_socket(char *out, size_t size) {
-  const char *configured = env_value("ARMORANTIGRAVITY_SOCKET");
+  const char *configured = dev_override("ARMORANTIGRAVITY_SOCKET");
   if (configured) return expand_home(configured, out, size);
-  const char *armoriq_home = env_value("ARMORIQ_HOME");
+  const char *armoriq_home = dev_override("ARMORIQ_HOME");
   if (armoriq_home) return snprintf(out, size, "%s/armorantigravity/agd.sock", armoriq_home) < (int)size;
   const char *home = getenv("HOME");
   return snprintf(out, size, "%s/.armoriq/armorantigravity/agd.sock", home ? home : "") < (int)size;
@@ -162,7 +167,7 @@ static int executable_dir(char *out, size_t size) {
 // A second daemon started by a concurrent hook exits on the instance lock, so racing here is safe.
 static void spawn_daemon(void) {
   char path[PATH_MAX];
-  const char *bin = env_value("ARMORANTIGRAVITY_DAEMON");
+  const char *bin = dev_override("ARMORANTIGRAVITY_DAEMON");
   if (!bin) {
     char dir[PATH_MAX];
     if (!executable_dir(dir, sizeof dir) || snprintf(path, sizeof path, "%s/armoriq-agd", dir) >= (int)sizeof path) return;
@@ -178,6 +183,10 @@ static void spawn_daemon(void) {
     dup2(devnull, STDERR_FILENO);
     if (devnull > STDERR_FILENO) close(devnull);
   }
+#ifndef AGD_DEV_OVERRIDES
+  unsetenv("ARMORANTIGRAVITY_SOCKET");
+  unsetenv("ARMORIQ_HOME");
+#endif
   char *const args[] = {(char *)bin, NULL};
   execv(bin, args);
   _exit(127);

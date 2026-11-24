@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun ../../scripts/build-hook.ts --out dist/agd-hook",
+    "build": "bun ../../scripts/build-hook.ts --out dist/agd-hook --dev",
     "bench": "bun bench/latency.ts"
   },
   "devDependencies": {
