@@ -226,6 +226,18 @@ test("a v2 policy blocks through agd-hook with its name, v1 still applies where 
 
   expect(await hook(at(3))).toEqual({ decision: "deny", reason: 'ArmorIQ blocked this call [policy_forbid]: ArmorIQ policy "No shell" blocks this call (rule run_command#0)' });
   expect(await hook(at(27))).toEqual({ decision: "deny", reason: expect.stringContaining("org-no-web-search") });
+
+  let step = 100;
+  const read = (tool: string): Capture => ({ event: "PreToolUse", stdin: { ...at(3).stdin, stepIdx: ++step, toolCall: { name: "call_mcp_tool", args: { ServerName: "armoriq", ToolName: "policy_read", Arguments: { tool } } } } });
+  const explained = async (tool: string) => {
+    expect(await hook(read(tool))).toEqual({ decision: "allow" });
+    const reply = await mcpOutcome(daemon!.paths.socket, "policy_read", { tool });
+    return typeof reply === "object" && reply !== null && "text" in reply ? String(reply.text) : "";
+  };
+  expect(await explained("run_command")).toContain('run_command: forbid, decided by workspace policy "No shell" (rule run_command#0)');
+  expect(await explained("search_web")).toContain("search_web: forbid, decided by org policy (rule org-no-web-search)");
+  expect(await explained("view_file")).toContain("view_file: permit, decided by the default");
+  expect(await explained("mcp_agspike_global_echo")).toContain("mcp_agspike_global_echo: forbid, decided by a built-in ArmorIQ rule (rule builtin:mcp_server_unapproved)");
   await daemon.stop();
   daemon = null;
 
@@ -362,6 +374,9 @@ test("a workspace mode the backend never confirmed blocks non-read calls until i
   expect(read.ms).toBeLessThan(1_000);
   expect(await hook(r3.get(3)!)).toEqual({ decision: "deny", reason: expect.stringMatching(/^ArmorIQ blocked this call \[org_mode_unknown\]/) });
   backend.profile.delayMs = 0;
+  const policyRead = { ...r3.get(3)!.stdin, stepIdx: 200, toolCall: { name: "call_mcp_tool", args: { ServerName: "armoriq", ToolName: "policy_read", Arguments: { tool: "run_command" } } } };
+  expect(await hook({ event: "PreToolUse", stdin: policyRead })).toEqual({ decision: "allow" });
+  expect(await mcpOutcome(daemon.paths.socket, "policy_read", { tool: "run_command" })).toMatchObject({ text: expect.stringContaining("run_command: forbid, decided by a built-in ArmorIQ rule: the ArmorIQ backend has not confirmed") });
   expect(readFileSync(daemon.paths.modeFile, "utf8").trim()).toBe("enforce");
 
   backend.mode.now = "shadow";

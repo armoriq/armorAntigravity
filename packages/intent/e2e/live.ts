@@ -55,7 +55,7 @@ const statements = [
   { id: "no-curl-pipe", effect: "forbid" as const, action: { eq: "run_command" }, principal: { type: "agent", id: "*" } },
   { id: "allow-all", effect: "permit" as const, action: { eq: "*" }, principal: { type: "agent", id: "*" } },
 ];
-const policy: PolicyView = { hash: "e2e-policy", intentRequired: true, evaluate: () => ({ effect: "permit", ruleId: null, reason: "" }) };
+const policy: PolicyView = { hash: "e2e-policy", intentRequired: true, evaluate: () => ({ effect: "permit", ruleId: null, reason: "" }), explain: () => ({ effect: "permit", ruleId: null, reason: "", decidedBy: "the default" }) };
 const audit: AuditRow[] = [];
 const log = { info: console.log, warn: console.warn, error: console.error };
 const registry = createRegistry();

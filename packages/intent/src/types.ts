@@ -88,6 +88,11 @@ export interface PolicyView {
   readonly hash: string;
   readonly intentRequired: boolean;
   evaluate(tool: string, args: Readonly<Record<string, unknown>>): PolicyVerdict;
+  explain(tool: string, args: Readonly<Record<string, unknown>>): ExplainedVerdict;
+}
+
+export interface ExplainedVerdict extends PolicyVerdict {
+  readonly decidedBy: string;
 }
 
 export type AuditStatus = "success" | "failed" | "error" | "blocked" | "held";

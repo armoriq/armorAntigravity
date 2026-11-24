@@ -47,6 +47,8 @@ export { segmentedPolicy } from "./shell-policy.ts";
 export { createMcpGate, parseServerList, type McpGate, type McpGateOptions, type McpServerStatus, type McpVerdict, type SyncOutcome } from "./mcp-gate.ts";
 export {
   createDecisionHandler,
+  explainPolicy,
+  type PolicyExplanation,
   toHookResponse,
   type AdapterDecision,
   type AuditStatus,

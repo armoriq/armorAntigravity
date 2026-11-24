@@ -181,41 +181,101 @@ export function v2CallOf(call: MappedCall, home: string, at: number, userEmail: 
   };
 }
 
+type Judged = { decision: AdapterDecision; attribution: PolicyAttribution };
+
+export type PolicyExplanation = Judged;
+
+export type ExplainOptions = Pick<DecisionHandlerOptions, "policy" | "bundle" | "userEmail" | "mcpGate" | "guard" | "log" | "map">;
+
+const EXPLAIN_SESSION: SessionID = explainSession("armoriq-policy-explain");
+
+function explainSession(id: string): SessionID {
+  if (!isSessionId(id)) throw new Error("empty session id");
+  return id;
+}
+
+function guardDecision(call: MappedCall, guard: DecisionHandlerOptions["guard"], workspace: string | null): Judged | null {
+  const hit = checkGuard(call, { ...guard, workspace });
+  return hit ? { decision: { kind: "deny", code: "builtin_protected", reason: hit.reason, ruleId: "builtin:guard_files" }, attribution: BUILTIN("builtin:guard_files") } : null;
+}
+
+function combine(local: Judged, v2: V2Outcome | null, log: Log): Judged {
+  const shadow = (v2?.shadow ?? []).flatMap((s) => {
+    const ref = v2Ref(s);
+    return ref ? [{ ...ref, verdict: s.verdict }] : [];
+  });
+  for (const s of shadow) if (s.verdict !== "allow") log.info("shadow v2 policy would not allow this call", { policy: s.policyName, verdict: s.verdict, rule: s.rule });
+  const enforced = v2?.enforced;
+  if (!enforced) return { decision: local.decision, attribution: { ...local.attribution, shadow } };
+  const attribution: PolicyAttribution =
+    enforced.verdict === "allow" && enforced.rule === "tools.default"
+      ? { source: "default", v2: null, ruleId: enforced.rule, shadow }
+      : { source: "v2", v2: v2Ref(enforced), ruleId: null, shadow };
+  const decision = v2Decision(enforced);
+  // Ties go to v2 so a block names its policy; two allows keep the local one, which carries the plan step.
+  if (RANK[decision.kind] < RANK[local.decision.kind]) return { decision: local.decision, attribution: { ...local.attribution, shadow } };
+  return { decision: decision.kind === "allow" ? local.decision : decision, attribution };
+}
+
+function gateMcp(call: Extract<MappedCall, { category: "mcp" }>, core: CoreToolCall, policy: CompiledPolicy, options: Pick<DecisionHandlerOptions, "mcpGate" | "map">): Judged | null {
+  const server = call.mcp.server;
+  const verdict = options.mcpGate.check(server);
+  if (verdict.kind === "approved") return null;
+  if (verdict.kind === "denied") {
+    return { decision: { kind: "deny", code: "mcp_server_denied", reason: `MCP server "${server}" is denied on this device`, ruleId: null }, attribution: BUILTIN("builtin:mcp_server_denied") };
+  }
+  // A policy statement that names this server or tool approves it. A wildcard
+  // permit, the built-in allow-all included, also matches the probe and does not.
+  const named = policy.evaluate(core);
+  if (named.effect === "permit" && named.ruleId !== null && !foldsAmbiguously(server, options.map?.knownMcpServers)) {
+    const probe = policy.evaluate({ ...core, tool: mcpToolName(PROBE) });
+    if (probe.ruleId !== named.ruleId) return null;
+  }
+  return {
+    decision: {
+      kind: "deny",
+      code: "mcp_server_unapproved",
+      ruleId: null,
+      reason: `MCP server "${server}" is not approved. Have an admin register "${server}" in the ArmorIQ console, or name it in the local policy file.`,
+    },
+    attribution: BUILTIN("builtin:mcp_server_unapproved"),
+  };
+}
+
+export function explainPolicy(options: ExplainOptions, toolCall: { readonly name: string; readonly args: unknown }, at: number): PolicyExplanation {
+  const call = mapToolCall(toolCall, options.map);
+  const guarded = guardDecision(call, options.guard, null);
+  if (guarded) return guarded;
+  const active = options.policy.current();
+  const policy = segmentedPolicy(active.policy, { isShell: (c) => c.tool === "run_command", home: options.guard.home });
+  const core: CoreToolCall = { sessionId: EXPLAIN_SESSION, callId: "", tool: call.tool, args: call.args };
+  const verdict = policy.evaluate(core);
+  const decision: AdapterDecision =
+    verdict.effect === "forbid"
+      ? { kind: "deny", code: "policy_forbid", reason: verdict.reason, ruleId: verdict.ruleId }
+      : verdict.effect === "require_approval"
+        ? { kind: "hold", ruleId: verdict.ruleId, reason: verdict.reason }
+        : ALLOW;
+  const gated = decision.kind === "allow" && call.category === "mcp" ? gateMcp(call, core, policy, options) : null;
+  const local: Judged = gated ?? { decision, attribution: { source: ORIGIN_SOURCE[active.origin], v2: null, ruleId: verdict.ruleId, shadow: [] } };
+  return combine(local, decideV2(options.bundle?.current() ?? null, v2CallOf(call, options.guard.home, at, options.userEmail?.())), options.log);
+}
+
 export function createDecisionHandler(options: DecisionHandlerOptions & { resolveHold: HoldResolver }): (hook: HookInput) => HookResponse | Promise<HookResponse>;
 export function createDecisionHandler(options: DecisionHandlerOptions): (hook: HookInput) => HookResponse;
 export function createDecisionHandler(options: DecisionHandlerOptions): (hook: HookInput) => HookResponse | Promise<HookResponse> {
   const { log } = options;
 
-  type Judged = { decision: AdapterDecision; attribution: PolicyAttribution };
-
   const judge = (call: MappedCall, conversationId: string, stepIdx: number, workspace: string | null, mode: Mode, now: number): Judged => {
     if (!isSessionId(conversationId)) throw new Error("conversationId is empty");
-    const guard = checkGuard(call, { ...options.guard, workspace });
-    if (guard) return { decision: { kind: "deny", code: "builtin_protected", reason: guard.reason, ruleId: "builtin:guard_files" }, attribution: BUILTIN("builtin:guard_files") };
+    const guarded = guardDecision(call, options.guard, workspace);
+    if (guarded) return guarded;
 
     const local = judgeLocal(call, conversationId, stepIdx, mode, now);
     // Monitor still enforces v1 policy (it only skips intent checks), so v2 applies in both modes;
     // signed out, the bundle is empty.
     const v2 = decideV2(options.bundle?.current() ?? null, v2CallOf(call, options.guard.home, now, options.userEmail?.(), workspace));
-    return combine(local, v2);
-  };
-
-  const combine = (local: Judged, v2: V2Outcome | null): Judged => {
-    const shadow = (v2?.shadow ?? []).flatMap((s) => {
-      const ref = v2Ref(s);
-      return ref ? [{ ...ref, verdict: s.verdict }] : [];
-    });
-    for (const s of shadow) if (s.verdict !== "allow") log.info("shadow v2 policy would not allow this call", { policy: s.policyName, verdict: s.verdict, rule: s.rule });
-    const enforced = v2?.enforced;
-    if (!enforced) return { decision: local.decision, attribution: { ...local.attribution, shadow } };
-    const attribution: PolicyAttribution =
-      enforced.verdict === "allow" && enforced.rule === "tools.default"
-        ? { source: "default", v2: null, ruleId: enforced.rule, shadow }
-        : { source: "v2", v2: v2Ref(enforced), ruleId: null, shadow };
-    const decision = v2Decision(enforced);
-    // Ties go to v2 so a block names its policy; two allows keep the local one, which carries the plan step.
-    if (RANK[decision.kind] < RANK[local.decision.kind]) return { decision: local.decision, attribution: { ...local.attribution, shadow } };
-    return { decision: decision.kind === "allow" ? local.decision : decision, attribution };
+    return combine(local, v2, log);
   };
 
   const judgeLocal = (call: MappedCall, conversationId: SessionID, stepIdx: number, mode: Mode, now: number): Judged => {
@@ -235,28 +295,7 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     };
     if (decision.kind !== "allow" || call.category !== "mcp") return fromPolicy(decision);
 
-    const server = call.mcp.server;
-    const verdict = options.mcpGate.check(server);
-    if (verdict.kind === "approved") return fromPolicy(decision);
-    if (verdict.kind === "denied") {
-      return { decision: { kind: "deny", code: "mcp_server_denied", reason: `MCP server "${server}" is denied on this device`, ruleId: null }, attribution: BUILTIN("builtin:mcp_server_denied") };
-    }
-    // A policy statement that names this server or tool approves it. A wildcard
-    // permit, the built-in allow-all included, also matches the probe and does not.
-    const named = policy.evaluate(core);
-    if (named.effect === "permit" && named.ruleId !== null && !foldsAmbiguously(server, options.map?.knownMcpServers)) {
-      const probe = policy.evaluate({ ...core, tool: mcpToolName(PROBE) });
-      if (probe.ruleId !== named.ruleId) return fromPolicy(decision);
-    }
-    return {
-      decision: {
-        kind: "deny",
-        code: "mcp_server_unapproved",
-        ruleId: null,
-        reason: `MCP server "${server}" is not approved. Have an admin register "${server}" in the ArmorIQ console, or name it in the local policy file.`,
-      },
-      attribution: BUILTIN("builtin:mcp_server_unapproved"),
-    };
+    return gateMcp(call, core, policy, options) ?? fromPolicy(decision);
   };
 
   return (hook) => {
