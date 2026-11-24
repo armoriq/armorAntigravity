@@ -23,6 +23,7 @@ export type DecideFn = (input: { call: CoreToolCall; policy: CompiledPolicy; mod
 export type AdapterDecision =
   | Decision
   | { kind: "deny"; code: "mcp_server_denied"; reason: string; ruleId: string | null }
+  | { kind: "deny"; code: "login_rejected" | "org_mode_unknown" | "policy_bundle_unusable"; reason: string; ruleId: null }
   | { kind: "ask"; code: "mcp_server_unapproved"; reason: string; server: string };
 
 export type AuditStatus = "blocked" | "held" | "allowed";

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BackendAccess } from "../src/backend-http.ts";
 import type { CoreToolCall, SessionID } from "../src/core-contract.ts";
-import { createPolicySource, type PolicySource } from "../src/policy-source.ts";
+import { createPolicySource, type OrgMode, type PolicySource } from "../src/policy-source.ts";
 import { stubBackend } from "./support/backend.ts";
 import { DEFAULT_POLICY_SOURCE } from "@armorantigravity/core";
 import { compileAntigravityPolicy } from "../src/product.ts";
@@ -30,7 +30,7 @@ afterEach(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
-function source(opts: { access?: () => BackendAccess | null; refreshMs?: number; file?: unknown } = {}): { src: PolicySource; path: string; log: ReturnType<typeof memoryLog> } {
+function source(opts: { access?: () => BackendAccess | null; refreshMs?: number; file?: unknown; onOrgMode?: (mode: OrgMode) => void } = {}): { src: PolicySource; path: string; log: ReturnType<typeof memoryLog> } {
   dir = mkdtempSync(join(tmpdir(), "agd-policy-"));
   const path = join(dir, "policy.json");
   if (opts.file !== undefined) writeFileSync(path, typeof opts.file === "string" ? opts.file : JSON.stringify(opts.file));
@@ -43,6 +43,7 @@ function source(opts: { access?: () => BackendAccess | null; refreshMs?: number;
     log,
     pollMs: 10,
     refreshMs: opts.refreshMs ?? 60_000,
+    ...(opts.onOrgMode ? { onOrgMode: opts.onOrgMode } : {}),
   });
   cleanups.push(() => src.stop());
   return { src, path, log };
@@ -109,6 +110,18 @@ describe("org policy from GET /policies/profiles/active", () => {
     expect(req?.headers.get("x-api-key")).toBe("ak_test_0123456789");
     expect(req?.headers.get("authorization")).toBe("Bearer ak_test_0123456789");
     expect(req?.headers.get("x-armoriq-client")).toBe("armorantigravity/0.1.0");
+  });
+
+  test("an answer without a Tools mode confirms Block, and one with a mode confirms that mode", async () => {
+    let mode: string | undefined;
+    const backend = stubBackend({ "GET /policies/profiles/active": () => (mode ? Response.json({ version: 0, policy: null, enforcementMode: mode }) : active(0, null)) });
+    cleanups.push(backend.stop);
+    const seen: OrgMode[] = [];
+    const { src } = source({ access: () => ({ login: backend.login, client: "c" }), onOrgMode: (m) => seen.push(m) });
+    await src.refresh();
+    mode = "shadow";
+    await src.refresh();
+    expect(seen).toEqual([{ mode: "enforce", notices: false }, { mode: "shadow", notices: false }]);
   });
 
   test("an org with no confirmed policy (policy:null) keeps the local policy", async () => {

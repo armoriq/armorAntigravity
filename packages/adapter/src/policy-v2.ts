@@ -37,6 +37,7 @@ export type V2BundleOutcome =
 export interface PolicyBundle {
   // Null until a bundle arrives, and while logged out: v1 and the local file decide alone.
   current(): V2Agent | null;
+  agentMissing(): boolean;
   refresh(): Promise<V2BundleOutcome>;
   stop(): void;
 }
@@ -153,6 +154,7 @@ export function createPolicyBundle(options: PolicyBundleOptions): PolicyBundle {
       const login = options.access()?.login.apiKey;
       return cached && cached.apiKey === login ? cached.agent : null;
     },
+    agentMissing: () => cached !== null && cached.apiKey === options.access()?.login.apiKey && cached.agent === null,
     refresh,
     stop() {
       stopped = true;

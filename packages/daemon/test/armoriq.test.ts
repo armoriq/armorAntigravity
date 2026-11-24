@@ -46,7 +46,8 @@ type BackendHealth = "up" | "down" | "unauthorized";
 function stubBackend() {
   const seen: Seen[] = [];
   const health: { now: BackendHealth } = { now: "up" };
-  const bundle: { now: unknown } = { now: { orgId: "org-1", agents: [] } };
+  const bundle: { now: unknown } = { now: { orgId: "org-1", agents: [{ agentId: "armorantigravity", name: "armorantigravity", registeredName: null, registered: false, inactive: false, policy: null, policies: [], tools: [], members: [] }] } };
+  const profile = { failing: false, delayMs: 0 };
   // The workspace's Tools mode conmap sends with the policy; these tests run in Block unless they set it.
   const mode: { now: "shadow" | "enforce"; notices: boolean } = { now: "enforce", notices: false };
   const policy = {
@@ -69,6 +70,10 @@ function stubBackend() {
       }
       if (health.now === "down") return new Response("", { status: 503 });
       if (route === "GET /policy/bundles/current") return Response.json(bundle.now, { headers: { ETag: `"${Bun.hash(JSON.stringify(bundle.now))}"` } });
+      if (route === "GET /policies/profiles/active" && profile.failing) {
+        await Bun.sleep(profile.delayMs);
+        return new Response("", { status: 500 });
+      }
       if (route === "GET /policies/profiles/active") return Response.json({ version: 1, policy, updatedBy: "dashboard", publishedAt: "2026-10-12T10:00:00.000Z", enforcementMode: mode.now, monitorNotices: mode.notices });
       // The fields the SDK's getIntentToken reads from conmap's /iap/sdk/token.
       if (route === "POST /iap/sdk/token") {
@@ -83,7 +88,7 @@ function stubBackend() {
       return Response.json({ message: `Cannot ${route}`, statusCode: 404 }, { status: 404 });
     },
   });
-  return { url: `http://127.0.0.1:${server.port}`, seen, health, bundle, mode, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}`, seen, health, bundle, mode, profile, stop: () => server.stop(true) };
 }
 
 function isRows(body: unknown): body is { rows: Record<string, unknown>[] } {
@@ -334,15 +339,52 @@ function uploaded(): Record<string, unknown>[] {
   return backend.seen.filter((r) => r.path === "/iap/audit/batch" && r.accepted).flatMap((r) => (isRows(r.body) ? r.body.rows : []));
 }
 
-test("a 401 from the backend means signed out: local-only mode, nothing blocked as unreachable", async () => {
+test("a 401 from the backend blocks every non-read call and asks for a new login", async () => {
   daemon = await signedInDaemon();
   backend.health.now = "unauthorized";
-  const write = captured().get(11);
-  if (!write) throw new Error("no capture 11");
-  expect(await hook(write)).toEqual({ decision: "allow" });
+  const r3 = captured();
+  const write = r3.get(11)!;
+  expect(await hook(write)).toEqual({ decision: "deny", reason: expect.stringMatching(/^ArmorIQ blocked this call \[login_rejected\]: .*login/) });
   expect(daemon.auth.state().kind).toBe("local_only");
+  expect(await hook(r3.get(19)!)).toEqual({ decision: "allow" });
+  expect(await hook(r3.get(3)!)).toEqual({ decision: "deny", reason: expect.stringContaining("[login_rejected]") });
+  expect(readFileSync(daemon.paths.modeFile, "utf8").trim()).toBe("enforce");
+}, 60_000);
+
+test("a workspace mode the backend never confirmed blocks non-read calls until it answers", async () => {
+  backend.profile.failing = true;
+  daemon = await signedInDaemon();
+  expect(daemon.auth.mode()).toBe("enforce");
+  const r3 = captured();
+  backend.profile.delayMs = 2_000;
+  const read = await timed(hook(r3.get(19)!));
+  expect(read.value).toEqual({ decision: "allow" });
+  expect(read.ms).toBeLessThan(1_000);
+  expect(await hook(r3.get(3)!)).toEqual({ decision: "deny", reason: expect.stringMatching(/^ArmorIQ blocked this call \[org_mode_unknown\]/) });
+  backend.profile.delayMs = 0;
+  expect(readFileSync(daemon.paths.modeFile, "utf8").trim()).toBe("enforce");
+
+  backend.mode.now = "shadow";
+  backend.profile.failing = false;
+  expect(await hook(r3.get(3)!)).toEqual({ decision: "allow" });
   expect(daemon.auth.mode()).toBe("monitor");
-  expect(readFileSync(daemon.paths.modeFile, "utf8").trim()).toBe("monitor");
+}, 60_000);
+
+test("a bundle that does not list this agent blocks non-read calls in Block, and only there", async () => {
+  backend.bundle.now = { orgId: "org-1", agents: [] };
+  daemon = await signedInDaemon();
+  await until(() => backend.seen.some((r) => r.path === "/policy/bundles/current"));
+  await Bun.sleep(100);
+  const r3 = captured();
+  expect(await hook(r3.get(19)!)).toEqual({ decision: "allow" });
+  expect(await hook(r3.get(3)!)).toEqual({ decision: "deny", reason: expect.stringMatching(/^ArmorIQ blocked this call \[policy_bundle_unusable\]/) });
+  await daemon.stop();
+
+  backend.mode.now = "shadow";
+  daemon = await signedInDaemon();
+  await until(() => backend.seen.filter((r) => r.path === "/policy/bundles/current").length >= 2);
+  await Bun.sleep(100);
+  expect(await hook(r3.get(3)!)).toEqual({ decision: "allow" });
 }, 60_000);
 
 test("a Quiet workspace: every captured call runs, nothing reaches the agent, and rows carry what Block would have done", async () => {
