@@ -18,6 +18,14 @@ export const INTENT_DIRECTIVE = [
   "Subagents inherit the plan of the conversation that started them and cannot register their own.",
 ].join("\n");
 
+// Installed as ~/.gemini/config/rules/armoriq.md. The installer recognises its own file by the opening
+// words, so both texts start with them. Outside enforce no plan is needed, so the rule stops asking for one.
+const MONITOR_RULE = "ArmorIQ intent enforcement is not blocking tool calls right now, so no intent plan is needed. Do not call register_intent_plan unless the user asks you to.";
+
+export function rulesFileText(mode: "enforce" | "monitor"): string {
+  return `---\ntrigger: always_on\n---\n\n${mode === "enforce" ? INTENT_DIRECTIVE : MONITOR_RULE}\n`;
+}
+
 export function planningDraftNote(path: string): string {
   return `Planning mode wrote ${path}. Before carrying it out, call register_intent_plan with the tools that plan uses as steps.`;
 }

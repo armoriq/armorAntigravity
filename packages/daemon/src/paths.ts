@@ -18,6 +18,8 @@ export interface Paths {
   readonly configFile: string;
   readonly sessionsDir: string;
   readonly logFile: string;
+  // The agy rule the installer writes; the daemon keeps it in step with the mode.
+  readonly rulesFile: string;
 }
 
 export function resolvePaths(env: Env): Paths {
@@ -35,5 +37,6 @@ export function resolvePaths(env: Env): Paths {
     configFile: path.join(dataDir, "config.json"),
     sessionsDir: path.join(dataDir, "sessions"),
     logFile: path.join(dataDir, "logs", "agd.log"),
+    rulesFile: path.join(homedir(), ".gemini", "config", "rules", "armoriq.md"),
   };
 }

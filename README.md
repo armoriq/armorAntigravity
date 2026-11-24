@@ -21,7 +21,7 @@ curl -fsSL https://armoriq.ai/install_armorantigravity.sh | bash -s -- --uninsta
 
 ## Workspace mode
 
-Signed in, ArmorAntigravity follows the mode your workspace picks under **Tool calls in the chat** on the Monitor page of ArmorIQ Tools. The daemon reads it with the workspace policy at every session start and every five minutes, and keeps the last answer in `~/.armoriq/armorantigravity/org-mode.json`; until it has one, it runs Quiet.
+Signed in, ArmorAntigravity follows the mode your workspace picks under **Tool calls in the chat** on the Monitor page of ArmorIQ Tools. The daemon reads it with the workspace policy at every session start and every five minutes, and keeps the last answer in `~/.armoriq/armorantigravity/org-mode.json`; until it has one, it runs Quiet. The installed agy rule, `~/.gemini/config/rules/armoriq.md`, follows the mode too: it asks the model for an intent plan only in Block.
 
 | Mode | A call your policy, the file guard or the MCP gate would stop | What Antigravity shows |
 |---|---|---|
