@@ -31,6 +31,11 @@ Signed in, ArmorAntigravity follows the mode your workspace picks under **Tool c
 
 In Quiet and Show in chat no approval request is filed and an unreachable backend blocks nothing; the audit row of each call records what Block would have done (`would_be`, `would_be_code`, `would_be_reason`). `ARMORIQ_ORG_MODE=enforce` in the daemon's environment makes one machine block whatever the workspace says.
 
+The daemon runs as a login service, so a shell `export` does not reach it. Set the variable on the service, then restart it:
+
+- macOS: in `~/Library/LaunchAgents/ai.armoriq.armorantigravity.agd.plist`, add `<key>ARMORIQ_ORG_MODE</key><string>enforce</string>` under `EnvironmentVariables`, then run `launchctl bootout gui/$(id -u)/ai.armoriq.armorantigravity.agd; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.armoriq.armorantigravity.agd.plist`. Running the installer again rewrites this file, so add the key again after it.
+- Linux: run `systemctl --user edit armoriq-agd`, add `[Service]` and `Environment=ARMORIQ_ORG_MODE=enforce`, then `systemctl --user restart armoriq-agd`. The drop-in survives a new install.
+
 ## Updates
 
 `armoriq-agd` updates itself. Every six hours it asks GitHub for the newest release on its channel:

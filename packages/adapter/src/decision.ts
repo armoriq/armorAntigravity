@@ -51,6 +51,8 @@ export type DecisionRecord = {
   readonly status: AuditStatus;
   readonly response: HookResponse;
   readonly attribution: PolicyAttribution;
+  // Workspace Monitor answered allow for this call whatever the decision says.
+  readonly orgMonitor: boolean;
 };
 
 // A call a v2 policy holds for approval, as the hold resolver sees it.
@@ -284,6 +286,7 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
           status: monitoring ? "allowed" : statusOf(decision),
           response,
           attribution: judged.attribution,
+          orgMonitor: monitoring,
         });
       } catch (error) {
         log.error("decision observer failed", { error: String(error) });
