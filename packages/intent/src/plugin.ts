@@ -5,6 +5,7 @@ import type { IntentRuntime } from "./runtime.ts";
 // HookContext, DaemonEvent and Pump are assignable to these, so the daemon needs no import from here.
 export interface IntentHook {
   readonly payload: HookPayload;
+  readonly receivedAt?: number;
   readonly session: { readonly surface: Surface };
 }
 
@@ -27,7 +28,7 @@ export function withIntent<H extends IntentHook>(
   return async (hook) => {
     const { payload } = hook;
     const surface = hook.session.surface;
-    runtime.observe(surface, payload);
+    runtime.observe(surface, payload, hook.receivedAt);
     if (payload.event === "PreToolUse") {
       const own = await runtime.ownToolDecision(surface, payload);
       if (own) return own;

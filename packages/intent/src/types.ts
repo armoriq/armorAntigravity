@@ -73,6 +73,18 @@ export interface PlanRequestHealth {
   planRequestSucceeded(login: Login, key: string): Promise<void>;
 }
 
+// The run stream lives in evidence. Intent only records facts for the prompt captured by each hook.
+export interface RunRecorder {
+  readonly enabled?: boolean | undefined;
+  begin(runId: string, sessionId: string, at: number, enforcing: boolean): void;
+  end(runId: string | null, reason: "stop" | "next_prompt" | "recovered", at: number): void;
+  attempt(runId: string | null, callId: string, tool: string, enforcing: boolean): unknown;
+  registration(runId: string | null): () => void;
+  request(runId: string | null, key: string, outcome: "pending" | "failed" | "confirmed", planId?: string, unreachable?: boolean): void;
+  reject(runId: string | null): void;
+  kick(): Promise<void>;
+}
+
 export interface DelegateRequest {
   readonly delegatePublicKey: string;
   readonly subtreePath: string;

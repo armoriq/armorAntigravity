@@ -131,8 +131,8 @@ export function createTokenPump(deps: {
       const result = await backend.mint(auth, unminted, c.ref.conversationId, descriptor, {
         cancelled,
         now,
-        onFailure: (reason, notBefore) => deps.health?.planRequestFailed(auth, descriptor.key, reason, notBefore),
-        onSuccess: async () => { await deps.health?.planRequestSucceeded(auth, descriptor.key); },
+        onFailure: async (reason, notBefore) => { try { await deps.health?.planRequestFailed(auth, descriptor.key, reason, notBefore); } catch { log.error("plan failure reporting failed"); } },
+        onSuccess: async () => { try { await deps.health?.planRequestSucceeded(auth, descriptor.key); } catch { log.error("plan success reporting failed"); } },
       });
       registry.syncAuth(login(), deps.mode?.() ?? "enforce");
       if (!result.ok) {

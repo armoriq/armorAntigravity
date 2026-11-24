@@ -1,6 +1,6 @@
 import { NO_AUTO_UPDATE_ENV, optedOut, readUpdateStatus } from "@armorantigravity/daemon";
 import pkg from "@armorantigravity/daemon/package.json" with { type: "json" };
-import { auditStatus, healthStatus } from "@armorantigravity/daemon";
+import { auditStatus, healthStatus, runsStatus } from "@armorantigravity/daemon";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -187,6 +187,8 @@ async function cmdStatus(): Promise<number> {
   info(`audit: ${audit.pending} pending, ${audit.undeliverable} undeliverable, ${audit.deadLetters} dead letters, ${audit.captureFailures} capture failures, ${audit.legacyPending ?? 0} written by an older version without a login binding`);
   const health = await healthStatus(process.env);
   info(`health: ${health.pending} pending, ${health.undeliverable} undeliverable, ${health.deadLetters} dead letters${health.paused ? ", paused" : ""}${health.held.length ? `, held: ${health.held.join(", ")}` : ""}`);
+  const runs = await runsStatus(process.env);
+  info(`runs: ${runs.pending} pending, ${runs.undeliverable} undeliverable, ${runs.deadLetters} dead letters${runs.paused ? ", paused" : ""}${runs.held.length ? `, held: ${runs.held.join(", ")}` : ""}`);
   reportSurfaces();
   return 0;
 }

@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { logLegacyBackend, REQUEST_DEADLINE_MS } from "./backend.ts";
 import { intentValiditySeconds, planRequest, requestBody } from "./plan-request.ts";
 import { isPlainObject, mcpPart, parsePlan } from "./plan.ts";
+import { safeRunRecorder } from "./reporting.ts";
 import type { Conversation, Generation, PlanKind, PendingRequest, Registry } from "./registry.ts";
-import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PlanRequestHealth, type PolicyView, type Token } from "./types.ts";
+import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PlanRequestHealth, type PolicyView, type RunRecorder, type Token } from "./types.ts";
 
 export const OWN_TOOLS = ["register_intent_plan", "trust_reanchor", "trust_revoke", "trust_delegate", "policy_read"] as const;
 export type OwnTool = (typeof OWN_TOOLS)[number];
@@ -95,6 +96,7 @@ export interface OwnToolDeps {
   readonly now?: () => number;
   readonly validitySeconds?: number;
   readonly health?: PlanRequestHealth;
+  readonly runs?: RunRecorder;
   mintPolicy?(): Record<string, unknown> | undefined;
 }
 
@@ -154,30 +156,34 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       return notRegistered("This is a subagent conversation. It inherits the plan registered by its parent and cannot register its own. Continue within the parent plan");
     }
     if (registry.busy(conv.key)) return notRegistered("A plan registration is already in progress for this conversation. Wait for it to finish");
+    const runId = conv.promptId;
+    const rejected = (reason: string) => { safeRunRecorder(deps.runs, log)?.reject(runId); return notRegistered(reason); };
     const previous = conv.plan;
     // A plan recorded while logged out was never minted, so replacing it is a first registration.
     const revising = previous?.id && conv.countedPlanId ? previous : null;
 
     const parsed = parsePlan(raw, previous ? previous.revision + 1 : 1, conv.promptId ?? `turn-${conv.turn}`);
-    if (!parsed.ok) return notRegistered(parsed.error);
+    if (!parsed.ok) return rejected(parsed.error);
     const forbidden = forbiddenStep(parsed.plan);
-    if (forbidden) return notRegistered(forbidden);
+    if (forbidden) return rejected(forbidden);
 
     const login = deps.login();
     if (!login || deps.mode() === "monitor") {
       registry.setPlan(conv.key, { ...parsed.plan, id: "" }, null);
       return `Plan recorded locally, not registered (${login ? "monitor_mode" : "logged_out"}).`;
     }
-    if (forceRevision && !revising) return notRegistered("no registered plan in the current prompt to reanchor");
+    if (forceRevision && !revising) return rejected("no registered plan in the current prompt to reanchor");
     if (!conv.promptId) return notRegistered("no current user prompt");
     if (!forceRevision && revising && conv.planHash === parsed.plan.hash && conv.token?.status === "active" && conv.token.jwt && conv.token.expiresAt > now()) {
       return describeRegistered(revising, conv.token, conv.kind === "revision" ? "revision" : "new", conv.countedPlanId!);
     }
-    if (revising && !reason.trim()) return notRegistered('a plan is already registered. Pass a "reason" explaining why the plan changed');
-    if (revising && conv.revisionsThisTurn >= MAX_REVISIONS_PER_TURN) return notRegistered(`at most ${MAX_REVISIONS_PER_TURN} revisions are allowed per user message`);
+    if (revising && !reason.trim()) return rejected('a plan is already registered. Pass a "reason" explaining why the plan changed');
+    if (revising && conv.revisionsThisTurn >= MAX_REVISIONS_PER_TURN) return rejected(`at most ${MAX_REVISIONS_PER_TURN} revisions are allowed per user message`);
     const release = registry.acquire(conv.key);
     if (!release) return notRegistered("A plan registration is already in progress for this conversation. Wait for it to finish");
     const generation = registry.generation(conv.key)!;
+    const runs = safeRunRecorder(deps.runs, log);
+    const settle = runs?.registration(runId);
     try {
       const kind = revising ? "revision" : "new";
       const request = planRequest({ kind, promptId: conv.promptId, parentPlanId: conv.countedPlanId, planHash: parsed.plan.hash, epoch: conv.retirementEpoch }, requestBody(login, parsed.plan, conv.ref.conversationId, validity, deps.mintPolicy?.()));
@@ -185,14 +191,20 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       if (pending && pending.key !== request.key && pending.headers["X-ArmorIQ-Plan-Kind"] !== "refresh") return notConfirmed("a different request is awaiting confirmation; retry that plan first");
       const saved = pending?.key === request.key ? pending : request;
       const descriptor = saved.deadlineAt === undefined ? { ...saved, deadlineAt: now() + REQUEST_DEADLINE_MS } : saved;
+      runs?.request(runId, descriptor.key, "pending");
       try {
-        if (!registry.setPendingRequest(conv.key, descriptor, generation)) return notRegistered("the prompt or authentication changed");
+        if (!registry.setPendingRequest(conv.key, descriptor, generation)) {
+          runs?.request(runId, descriptor.key, "failed");
+          return notRegistered("the prompt or authentication changed");
+        }
       } catch {
+        runs?.request(runId, descriptor.key, "failed");
         return notRegistered("could not persist the plan request");
       }
-      return await mint(login, conv, parsed.plan, revising, reason, generation, descriptor, kind);
+      return await mint(login, conv, parsed.plan, revising, reason, generation, descriptor, kind, runId);
     } finally {
       release();
+      settle?.();
     }
   }
 
@@ -207,18 +219,30 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     return null;
   }
 
-  async function mint(login: Login, conv: Conversation, draft: Draft, revising: Plan | null, reason: string, generation: Generation, request: PendingRequest, kind: PlanKind): Promise<string> {
+  async function mint(login: Login, conv: Conversation, draft: Draft, revising: Plan | null, reason: string, generation: Generation, request: PendingRequest, kind: PlanKind, runId: string | null): Promise<string> {
     const previousTokenPlanId = conv.tokenPlanId ?? revising?.id;
     const cancelled = () => {
       registry.syncAuth(deps.login(), deps.mode());
       return !registry.isCurrent(conv.key, generation);
     };
-    const minted = await backend.mint(login, draft, conv.ref.conversationId, request, {
-      cancelled,
-      now,
-      onFailure: (reason, notBefore) => deps.health?.planRequestFailed(login, request.key, reason, notBefore),
-      onSuccess: async () => { await deps.health?.planRequestSucceeded(login, request.key); },
-    });
+    let unreachable = false;
+    let minted: Awaited<ReturnType<IntentBackend["mint"]>>;
+    try {
+      minted = await backend.mint(login, draft, conv.ref.conversationId, request, {
+        cancelled,
+        now,
+        onFailure: (reason, notBefore) => {
+          unreachable ||= reason === "network" || reason === "timeout";
+          return Promise.resolve().then(() => deps.health?.planRequestFailed(login, request.key, reason, notBefore)).catch(() => { log.error("plan failure reporting failed"); });
+        },
+        onSuccess: async () => { try { await deps.health?.planRequestSucceeded(login, request.key); } catch { log.error("plan success reporting failed"); } },
+      });
+    } catch (error) {
+      safeRunRecorder(deps.runs, log)?.request(runId, request.key, "failed", undefined, unreachable);
+      throw error;
+    }
+    const confirmed = minted.ok && minted.value.token.status === "active" && !!minted.value.planId && !!minted.value.token.jwt && minted.value.token.expiresAt > now();
+    safeRunRecorder(deps.runs, log)?.request(runId, request.key, confirmed ? "confirmed" : "failed", minted.ok ? minted.value.planId : undefined, unreachable);
     registry.syncAuth(deps.login(), deps.mode());
     if (!registry.isCurrent(conv.key, generation)) return notRegistered("the prompt or authentication changed while registration was in progress");
     if (!minted.ok) {

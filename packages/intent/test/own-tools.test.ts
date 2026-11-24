@@ -15,6 +15,19 @@ const B: ConversationRef = { surface: "cli", conversationId: "conv-b" };
 
 const plan = (goal: string, ...actions: string[]) => ({ goal, steps: actions.map((action) => ({ action })) });
 
+test("run recorder failures leave successful registration and local rejection replies unchanged", async () => {
+  const registry = createRegistry();
+  registry.open(A);
+  registry.beginPrompt(conversationKey(A), 0);
+  const fail = () => { throw new Error("runs storage unavailable"); };
+  const tools = createOwnTools({ registry, backend: recordingBackend().backend, login: () => LOGIN, mode: () => "enforce", policy: () => permitAll, audit() {}, log: silentLog,
+    runs: { begin: fail, end: fail, attempt: fail, registration: fail, request: fail, reject: fail, kick: fail },
+  });
+  expect(await tools.handle(A, "register_intent_plan", plan("work", "run_command"))).toMatch(/^Intent registered/);
+  expect(registry.busy(conversationKey(A))).toBe(false);
+  expect(await tools.handle(A, "register_intent_plan", { goal: "bad", steps: [] })).toMatch(/^Plan not registered:/);
+});
+
 test("a successful mint reports the exact credential as revalidated", async () => {
   const registry = createRegistry();
   registry.open(A);

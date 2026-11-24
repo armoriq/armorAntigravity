@@ -3,12 +3,13 @@ import { basename, dirname } from "node:path";
 import { createSdkBackend, type ClientIdentity } from "./backend.ts";
 import { INTENT_DIRECTIVE, planningDraftNote } from "./directive.ts";
 import { createOwnTools, ownToolCall, type OwnTool } from "./own-tools.ts";
-import { isPlainObject } from "./plan.ts";
+import { isPlainObject, planToolName } from "./plan.ts";
 import { createTokenPump } from "./pump.ts";
+import { safeRunRecorder } from "./reporting.ts";
 import { intentValiditySeconds } from "./plan-request.ts";
 import { createRegistry, type Conversation, type Registry } from "./registry.ts";
 import { createSubagentLinker } from "./subagents.ts";
-import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type IntentBackend, type Log, type Login, type Mode, type PlanRequestHealth, type PolicyView } from "./types.ts";
+import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type IntentBackend, type Log, type Login, type Mode, type PlanRequestHealth, type PolicyView, type RunRecorder } from "./types.ts";
 
 type PreToolUse = Extract<HookPayload, { event: "PreToolUse" }>;
 
@@ -42,12 +43,14 @@ export interface IntentRuntimeOptions {
   readonly fileExists?: (path: string) => boolean;
   readonly stateFile?: string;
   readonly health?: PlanRequestHealth;
+  readonly runs?: RunRecorder;
+  readonly runToolName?: (call: PreToolUse["toolCall"]) => string;
 }
 
 export interface IntentRuntime {
   readonly registry: Registry;
   // Call on every hook event before deciding: opens the conversation, links subagents, tracks turns.
-  observe(surface: Surface, payload: HookPayload): void;
+  observe(surface: Surface, payload: HookPayload, receivedAt?: number): void;
   // Plan tools persist the request and start registration without waiting for the network. The MCP server
   // waits for the outcome. Other own tools finish before allowing the call. Null for every other tool.
   ownToolDecision(surface: Surface, payload: PreToolUse): Promise<ToolDecision | null>;
@@ -63,12 +66,13 @@ export interface IntentRuntime {
 }
 
 export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
+  const runs = safeRunRecorder(opts.runs, opts.log);
   const now = opts.now ?? Date.now;
   const validitySeconds = intentValiditySeconds(process.env);
   const registry = createRegistry(now, opts.stateFile, opts.log);
   const syncAuth = () => registry.syncAuth(opts.login(), opts.mode());
   syncAuth();
-  const backend = opts.backend ?? createSdkBackend({ client: opts.client });
+  const backend = opts.backend ?? createSdkBackend({ client: opts.client, log: opts.log });
   const tools = createOwnTools({
     registry,
     backend,
@@ -81,6 +85,7 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     validitySeconds,
     mintPolicy: opts.mintPolicy,
     ...(opts.health ? { health: opts.health } : {}),
+    ...(opts.runs ? { runs: opts.runs } : {}),
     ...(opts.onRelogin ? { onRelogin: opts.onRelogin } : {}),
     ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}),
     ...(opts.onAuthenticated ? { onAuthenticated: opts.onAuthenticated } : {}),
@@ -106,9 +111,17 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
 
   return {
     registry,
-    pump: { name: "intent-token", kick: pump.kick, stop: pump.stop },
+    pump: { name: "intent-token", kick: pump.kick, stop: async () => {
+      const stopping = pump.stop();
+      if (runs && runs.enabled !== false) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try { await Promise.race([tools.settled(), new Promise<void>(resolve => { timer = setTimeout(resolve, 2000); })]); }
+        finally { clearTimeout(timer); }
+      }
+      await stopping;
+    } },
 
-    observe(surface, payload) {
+    observe(surface, payload, receivedAt = now()) {
       syncAuth();
       const ref = refOf(surface, payload);
       const key = registry.open(ref).key;
@@ -120,11 +133,25 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
           // user message, so it must not reset the revision counter.
           const messaged = childMessagedAt.get(key);
           const fromChild = messaged !== undefined && now() - messaged < CHILD_MESSAGE_WINDOW_MS;
-          if (payload.invocationNum === 0 && !fromChild) registry.beginPrompt(key, payload.initialNumSteps);
+          if (payload.invocationNum === 0 && !fromChild) {
+            const previous = registry.get(key)?.promptId ?? null;
+            registry.beginPrompt(key, payload.initialNumSteps);
+            const current = registry.get(key);
+            if (current?.parent === null && current.promptId && current.promptId !== previous) {
+              runs?.end(previous, "next_prompt", now());
+              runs?.begin(current.promptId, current.ref.conversationId, current.promptOpenSince ?? now(), opts.mode() === "enforce" && opts.policy().intentRequired);
+              void runs?.kick();
+            }
+          }
           return;
         }
         case "PreToolUse": {
           const { name, args } = payload.toolCall;
+          const conv = registry.get(key);
+          if (conv?.parent === null && !linker.mightBeChild(ref)) {
+            const canonical = opts.runToolName?.(payload.toolCall) ?? ownToolCall(name, args)?.tool ?? planToolName(name);
+            runs?.attempt(conv.promptId, String(payload.stepIdx), canonical, opts.mode() === "enforce" && opts.policy().intentRequired);
+          }
           if (name === "invoke_subagent") linker.noteSpawn(ref, now());
           if (name === "send_message" && isPlainObject(args) && typeof args.Recipient === "string") {
             linker.noteMessage(ref, args.Recipient);
@@ -135,6 +162,11 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
           return;
         }
         case "Stop":
+          if (registry.get(key)?.parent === null) {
+            const current = registry.get(key)!;
+            if (current.promptOpenSince === null || receivedAt >= current.promptOpenSince) runs?.end(current.promptId, "stop", receivedAt);
+            void runs?.kick();
+          }
           registry.endPrompt(key);
           pump.noteStop(key);
           pump.kick();
