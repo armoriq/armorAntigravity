@@ -152,7 +152,7 @@ export function createSdkBackend(options: SdkBackendOptions): IntentBackend {
           const backendChecked = validation.validated !== false;
           const expiresAtSec = Number((token.rawToken?.token as { expires_at?: unknown } | undefined)?.expires_at);
           if (!token.planId) throw new Error("token response has no plan_id");
-          if (!Number.isFinite(expiresAtSec) || expiresAtSec * 1000 <= Date.now()) throw new Error("token response has no usable expiry");
+          if (!Number.isFinite(expiresAtSec) || expiresAtSec * 1000 <= (retry?.now ?? Date.now)()) throw new Error("token response has no usable expiry");
           if (!token.jwtToken && !token.signature) throw new Error("token response has no usable token");
           if (token.kind !== undefined && token.kind !== request.headers["X-ArmorIQ-Plan-Kind"]) throw new Error("token response has a different plan kind");
           keep(token.planId, token);

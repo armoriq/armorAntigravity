@@ -30,12 +30,14 @@ interface KeyInput {
   readonly planHash?: string;
   readonly countedPlanId?: string;
   readonly tokenExpiresAt?: string;
+  readonly epoch?: number;
 }
 
 export function requestKey(input: KeyInput): string {
   const parts = input.kind === "refresh"
     ? ["refresh", input.countedPlanId, input.tokenExpiresAt]
     : [input.kind, input.promptId, input.parentPlanId ?? "", input.planHash];
+  if (input.kind !== "refresh" && (input.epoch ?? 0) > 0) parts.push(`epoch:${input.epoch}`);
   if (parts.some(p => typeof p !== "string")) throw new Error("missing plan request identity");
   return `pcc1:${sha256(parts.join("\n"))}`;
 }

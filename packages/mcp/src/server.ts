@@ -10,7 +10,7 @@ export type AskDaemon = (tool: string, args: Record<string, unknown>) => Promise
 export const NO_OUTCOME =
   "ArmorIQ has no record of this call. The ArmorIQ hooks may not be installed for this Antigravity surface, or the ArmorIQ daemon is not running. Nothing was registered or changed, and side-effecting calls stay blocked until a plan is registered.";
 const UNCONFIRMED_REGISTRATION =
-  "Plan registration not confirmed: the daemon did not confirm the registration. It will be retried with the same request id.";
+  "Plan registration not confirmed: the daemon did not confirm the registration. Retry the same plan to obtain confirmation.";
 
 const planArg = z.union([z.record(z.string(), z.unknown()), z.string()]);
 const stepsArg = z.union([z.array(z.unknown()), z.string()]);

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { conversationKey, type ConversationKey, type ConversationRef, type Draft, type Login, type Mode, type Plan, type Token } from "./types.ts";
+import { conversationKey, type ConversationKey, type ConversationRef, type Draft, type Log, type Login, type Mode, type Plan, type Token } from "./types.ts";
 
 export type PlanKind = "new" | "revision" | "refresh";
 
@@ -15,6 +15,7 @@ export interface Generation {
   readonly conversation: Conversation;
   readonly promptGeneration: number;
   readonly authGeneration: number;
+  readonly retirementEpoch: number;
 }
 
 export interface Conversation {
@@ -28,6 +29,7 @@ export interface Conversation {
   readonly revisionsThisTurn: number;
   readonly promptId: string | null;
   readonly promptGeneration: number;
+  readonly retirementEpoch: number;
   readonly promptOpenSince: number | null;
   readonly lastActivityAt: number;
   readonly countedPlanId: string | null;
@@ -66,7 +68,7 @@ export interface Registry {
   all(): Iterable<Conversation>;
 }
 
-export function createRegistry(now: () => number = Date.now, stateFile?: string): Registry {
+export function createRegistry(now: () => number = Date.now, stateFile?: string, log: Pick<Log, "warn"> = console): Registry {
   const conversations = new Map<ConversationKey, Mutable<Conversation>>();
   const promptIdentities = new Map<ConversationKey, Set<number>>();
   const operations = new Map<ConversationKey, symbol>();
@@ -80,12 +82,20 @@ export function createRegistry(now: () => number = Date.now, stateFile?: string)
       for (const entry of saved.conversations) {
         const c = entry.conversation as Mutable<Conversation>;
         if (!c.ref || c.key !== conversationKey(c.ref) || !Number.isInteger(c.promptGeneration) || !Number.isInteger(c.authGeneration)) throw new Error("invalid conversation state");
+        c.retirementEpoch ??= 0;
         if (c.token?.status === "active") c.token = { ...c.token, deniedTools: new Set(c.token.deniedTools), heldTools: new Set(c.token.heldTools) };
         conversations.set(c.key, c);
         promptIdentities.set(c.key, new Set(entry.identities));
       }
     } catch (error) {
-      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+        const backup = `${stateFile}.invalid.${randomUUID()}`;
+        renameSync(stateFile, backup);
+        conversations.clear();
+        promptIdentities.clear();
+        authIdentity = undefined;
+        log.warn("intent state could not be loaded; the original file was preserved", { backup });
+      }
     }
   }
 
@@ -127,6 +137,7 @@ export function createRegistry(now: () => number = Date.now, stateFile?: string)
       revisionsThisTurn: 0,
       promptId: null,
       promptGeneration: 0,
+      retirementEpoch: 0,
       promptOpenSince: null,
       lastActivityAt: now(),
       countedPlanId: null,
@@ -158,6 +169,7 @@ export function createRegistry(now: () => number = Date.now, stateFile?: string)
   };
 
   const retire = (c: Mutable<Conversation>) => {
+    if (c.promptId !== null) c.retirementEpoch += 1;
     c.plan = null;
     c.token = null;
     c.stepCursor = 0;
@@ -172,7 +184,7 @@ export function createRegistry(now: () => number = Date.now, stateFile?: string)
 
   const isCurrent = (key: ConversationKey, generation: Generation) => {
     const c = conversations.get(key);
-    return c === generation.conversation && c.promptGeneration === generation.promptGeneration && c.authGeneration === generation.authGeneration;
+    return c === generation.conversation && c.promptGeneration === generation.promptGeneration && c.authGeneration === generation.authGeneration && c.retirementEpoch === generation.retirementEpoch;
   };
 
   return {
@@ -186,6 +198,10 @@ export function createRegistry(now: () => number = Date.now, stateFile?: string)
       const parent = open(parentRef);
       // A conversation that already registered its own plan is a root, and a link must never form a cycle.
       if (child.key === parent.key || child.plan !== null || resolve(parent.key)?.key === child.key) return false;
+      retire(child);
+      child.promptId = null;
+      child.promptOpenSince = null;
+      child.promptGeneration += 1;
       child.parent = parent.key;
       persist();
       return true;
@@ -199,12 +215,12 @@ export function createRegistry(now: () => number = Date.now, stateFile?: string)
         promptIdentities.set(key, identities);
         retire(c);
         c.promptId = randomUUID();
+        c.retirementEpoch = 0;
         c.promptGeneration += 1;
         c.promptOpenSince = now();
         c.lastActivityAt = now();
         c.turn += 1;
         c.revisionsThisTurn = 0;
-        touch(c);
       }),
 
     endPrompt: (key) =>
@@ -226,7 +242,7 @@ export function createRegistry(now: () => number = Date.now, stateFile?: string)
 
     generation(key) {
       const c = conversations.get(key);
-      return c ? { conversation: c, promptGeneration: c.promptGeneration, authGeneration: c.authGeneration } : null;
+      return c ? { conversation: c, promptGeneration: c.promptGeneration, authGeneration: c.authGeneration, retirementEpoch: c.retirementEpoch } : null;
     },
 
     isCurrent,
@@ -291,7 +307,6 @@ export function createRegistry(now: () => number = Date.now, stateFile?: string)
     close: (key) => {
       conversations.delete(key);
       promptIdentities.delete(key);
-      for (const c of conversations.values()) if (c.parent === key) c.parent = null;
       persist();
     },
 

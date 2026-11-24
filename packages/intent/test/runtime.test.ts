@@ -179,6 +179,26 @@ for (const tool of ["register_intent_plan", "trust_reanchor"] as const) {
 }
 
 describe("prompt lifecycle", () => {
+  test("a second root inside the subagent spawn window gets its own prompt and can register", async () => {
+    const { rt, rec } = runtime({ fileExists: () => false });
+    try {
+      rt.observe("cli", prompt(0));
+      await rt.ownToolDecision("cli", parentPlanCall);
+      rt.observe("cli", { ...parentPlanCall, toolCall: { name: "invoke_subagent", args: {} } });
+      const sibling = { ...ROOT, conversationId: "unrelated-root" };
+      rt.observe("cli", { ...prompt(0), conversationId: sibling.conversationId });
+      const siblingPrompt = rt.root(sibling)?.promptId;
+      expect(siblingPrompt).toBeString();
+      expect(siblingPrompt).not.toBe(rt.root(ROOT)?.promptId);
+      await rt.ownToolDecision("cli", { ...parentPlanCall, conversationId: sibling.conversationId });
+      expect(await rt.mcpOutcome("register_intent_plan", parentPlanCall.toolCall.args, 0)).toStartWith("Intent registered:");
+      expect(rec.mints.map(m => m.contextId)).toEqual([PARENT, sibling.conversationId]);
+      expect(rt.root(sibling)?.countedPlanId).toBe("plan-2");
+    } finally {
+      await rt.pump.stop();
+    }
+  });
+
   test("the shared identity contract names the root conversation and prompt hooks", () => {
     expect(contract.identity.find((entry) => entry.plugin === "ArmorAntigravity")).toMatchObject({
       contextIdSource: "root conversationId",
