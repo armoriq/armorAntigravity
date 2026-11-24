@@ -3,7 +3,7 @@ import type { Uploads } from "../context.ts";
 
 export type CallResult<T> =
   | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly retryable: boolean; readonly retryAfterMs?: number; readonly reason: string; readonly status?: number };
+  | { readonly ok: false; readonly retryable: boolean; readonly retryAfterMs?: number; readonly reason: string; readonly status?: number; readonly relogin?: boolean; readonly unauthorized?: boolean; readonly unreachable?: boolean; readonly legacyRefusal?: boolean };
 
 export function authHeaders(login: Login, uploads: Uploads): Record<string, string> {
   return {

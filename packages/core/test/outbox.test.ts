@@ -1,16 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { createOutbox, MAX_ATTEMPTS, ROTATE_BYTES, type SendResult } from "../src/outbox.ts";
+import { createOutbox as realOutbox, MAX_ATTEMPTS, ROTATE_BYTES, type SendResult } from "../src/outbox.ts";
+import type { Log } from "../src/types.ts";
 import { memoryLog, scratch } from "./helpers/stub.ts";
 
 type Item = { id: string; pad?: string };
+const binding = { backend: "https://outbox.invalid", keyId: "test-key" };
+const createOutbox = <T>(dir: string, name: string, log: Log, beforeCommit?: (point: string) => void) => realOutbox<T>(dir, name, log, {
+  login: () => binding,
+  timing: { baseMs: 0, maxMs: 0, lockTtlMs: 60_000 },
+  sizeLimits: { maxRowBytes: 2 * 1024 * 1024, maxBatchBytes: 20 * 1024 * 1024, maxBatchRows: 200, truncationMarker: { truncated: true } },
+  ...(beforeCommit ? { beforeCommit } : {}),
+});
 const ok = (rejected: Extract<SendResult<Item>, { ok: true }>["rejected"] = []) => ({ ok: true as const, rejected });
 const CHILD = join(import.meta.dir, "./helpers/outbox-child.ts");
 
 function liveFiles(dir: string): string[] {
   const root = join(dir, "outbox", "audit");
-  return existsSync(root) ? readdirSync(root).filter((n) => n.endsWith(".jsonl")) : [];
+  return existsSync(root) ? readdirSync(root).filter((n) => /^\d+-[0-9a-f]+\.jsonl$/.test(n)) : [];
 }
 
 function spawnChild(dir: string, prefix: string, count: number, backend: string, mode = "") {
@@ -38,20 +46,21 @@ describe("outbox", () => {
     expect(sent).toEqual(["a"]);
   });
 
-  test("lines whose append failed are still written by the next flush", async () => {
+  test("a failed synchronous append reaches the caller and a retried capture succeeds", async () => {
     const dir = scratch();
-    const outbox = createOutbox<Item>(dir, "audit", memoryLog().log);
+    let fail = false;
+    const outbox = createOutbox<Item>(dir, "audit", memoryLog().log, point => { if (point === "append" && fail) throw new Error("injected append failure"); });
     outbox.enqueue({ id: "a" });
-    await Bun.sleep(150);
     const [name] = liveFiles(dir);
     const file = join(dir, "outbox", "audit", name!);
-    chmodSync(file, 0o400);
+    fail = true;
+    expect(() => outbox.enqueue({ id: "b" })).toThrow("injected append failure");
+    expect(outbox.status().captureFailures).toBe(1);
+    fail = false;
     outbox.enqueue({ id: "b" });
-    await Bun.sleep(150);
-    chmodSync(file, 0o600);
     outbox.enqueue({ id: "c" });
     await outbox.persist();
-    const ids = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l).v.id);
+    const ids = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter(l => l.t === "a").map(l => l.entry.row.id);
     expect(ids).toEqual(["a", "b", "c"]);
   });
 
@@ -101,11 +110,12 @@ describe("outbox", () => {
     expect(text).toContain('"id":"b"');
   });
 
-  test("enqueue does not touch the disk until the coalescing window passes", async () => {
+  test("enqueue has written the row before returning, before the sync window", async () => {
     const dir = scratch();
     const outbox = createOutbox<Item>(dir, "audit", memoryLog().log);
     outbox.enqueue({ id: "a" });
-    expect(liveFiles(dir)).toEqual([]);
+    expect(liveFiles(dir)).toHaveLength(1);
+    expect(readFileSync(join(dir, "outbox", "audit", liveFiles(dir)[0]!), "utf8")).toContain('"row":{"id":"a"}');
     await Bun.sleep(250);
     expect(liveFiles(dir)).toHaveLength(1);
   });
@@ -121,7 +131,7 @@ describe("outbox", () => {
     await Bun.sleep(150);
     const file = join(dir, "outbox", "audit", liveFiles(dir)[0]!);
     expect(statSync(file).size).toBeLessThan(ROTATE_BYTES);
-    const ids = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l).v.id);
+    const ids = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter(l => l.t === "a").map(l => l.entry.row.id);
     expect(ids).toEqual(["big-8", "big-9", "big-10"]);
   });
 
@@ -135,10 +145,10 @@ describe("outbox", () => {
     const sent: string[] = [];
     await outbox.drain(async (batch) => (sent.push(...batch.map((i) => i.id)), ok()), 10);
     expect(sent).toEqual(["dead-0", "dead-1", "dead-2", "dead-3"]);
-    expect(liveFiles(dir).some((f) => f.startsWith(`${writer.pid}-`))).toBe(false);
+    expect(outbox.readPending()).toEqual([]);
   });
 
-  test("a second outbox in the same process leaves a live outbox's rows alone", async () => {
+  test("another handle can drain a live queue without sending an acknowledged row twice", async () => {
     const dir = scratch();
     const first = createOutbox<Item>(dir, "audit", memoryLog().log);
     first.enqueue({ id: "r1" });
@@ -147,7 +157,7 @@ describe("outbox", () => {
     const sent: string[] = [];
     await second.drain(async (batch) => (sent.push(...batch.map((i) => `second:${i.id}`)), ok()), 10);
     await first.drain(async (batch) => (sent.push(...batch.map((i) => `first:${i.id}`)), ok()), 10);
-    expect(sent).toEqual(["first:r1"]);
+    expect(sent).toEqual(["second:r1"]);
   });
 
   test("a retired outbox's unsent rows are adopted once its in-flight drain settles", async () => {
@@ -167,6 +177,7 @@ describe("outbox", () => {
     await Bun.sleep(50);
     release();
     await Promise.all([inFlight, persisted, drained]);
+    await second.drain(async (batch) => (sent.push(...batch.map((i) => `second:${i.id}`)), ok()), 10);
     expect(sent).toEqual(["first:sent", "second:left"]);
   });
 

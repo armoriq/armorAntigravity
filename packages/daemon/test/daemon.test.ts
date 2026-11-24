@@ -9,6 +9,8 @@ import { AlreadyRunning, startDaemon, type RunningDaemon } from "../src/daemon.t
 import type { DaemonEvent, DaemonPlugin } from "../src/plugin.ts";
 import { RESTART_EXIT_CODE } from "../src/update.ts";
 import { sandboxHome } from "./sandbox.ts";
+import { clientRowId } from "@armorantigravity/core";
+import { auditStatus, queueLogin } from "../src/capture.ts";
 
 const STAGING = "https://staging-api.armoriq.ai";
 let sandbox: ReturnType<typeof sandboxHome>;
@@ -84,6 +86,11 @@ function recorder() {
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
+
+function fallbackRows(d: RunningDaemon) {
+  const dir = path.join(d.paths.dataDir, "outbox", "audit");
+  return readdirSync(dir).filter(file => /^\d+-[0-9a-f]+\.jsonl$/.test(file)).flatMap(file => readFileSync(path.join(dir, file), "utf8").trim().split("\n").map(line => JSON.parse(line))).filter(line => line.t === "a").map(line => line.entry.row);
+}
 
 test("a hook request gets a decision and the session is keyed by surface", async () => {
   const rec = recorder();
@@ -178,6 +185,11 @@ test("enforce mode fails closed on a bad payload or a handler error; monitor fai
   });
   expect(await hook("PreToolUse", toolPayload("conv-4"))).toEqual({ decision: "deny", reason: "ArmorIQ blocked this call [internal_error]: guard error" });
   expect(await hook("PostToolUse", { conversationId: "x" })).toBeNull();
+  expect(fallbackRows(d)).toEqual(expect.arrayContaining([
+    { client_row_id: expect.any(String), session_id: "x", tool: "unknown", action: "unknown", input: {}, executed_at: expect.any(String), decision_code: "internal_error", status: "blocked" },
+    { client_row_id: clientRowId("conv-4", "0", "decision"), session_id: "conv-4", tool: "unknown", action: "unknown", input: {}, executed_at: expect.any(String), decision_code: "internal_error", status: "blocked" },
+  ]));
+  expect(fallbackRows(d)).toHaveLength(2);
 });
 
 test("a request with another protocol version gets the fallback for its event", async () => {
@@ -189,6 +201,18 @@ test("a request with another protocol version gets the fallback for its event", 
     id: "r1",
     response: { decision: "deny", reason: "ArmorIQ blocked this call [protocol_mismatch]: unsupported protocol version, expected 1" },
   });
+  expect(fallbackRows(d)).toEqual([{ client_row_id: clientRowId("c", "0", "decision"), session_id: "c", tool: "unknown", action: "unknown", input: {}, executed_at: new Date(0).toISOString(), decision_code: "internal_error", status: "blocked" }]);
+});
+
+test("a fallback keeps the hook login binding when the daemon now has a different key", async () => {
+  login();
+  const d = await start([], { ARMORIQ_API_KEY: "ak_test_other_login" });
+  const binding = queueLogin({ backend: STAGING, apiKey: "ak_test", userId: "user-1", orgId: "org-1", email: "", deviceId: "test", deviceName: "test" });
+  const rowId = clientRowId("c", "0", "decision");
+  const reply = await send(d.paths.socket, JSON.stringify({ v: 2, id: crypto.randomUUID(), receivedAt: 1_000, event: "PreToolUse", payload: toolPayload("c"), audit: { rowId, sessionId: "c", binding } }));
+  expect(reply).toMatchObject({ response: { decision: "deny" } });
+  expect(fallbackRows(d)).toEqual([{ client_row_id: rowId, session_id: "c", tool: "unknown", action: "unknown", input: {}, executed_at: new Date(1_000).toISOString(), decision_code: "internal_error", status: "blocked" }]);
+  expect(await auditStatus({ ARMORIQ_BACKEND_URL: STAGING, ARMORIQ_API_KEY: "ak_test_other_login" })).toMatchObject({ pending: 1, undeliverable: 1 });
 });
 
 test("one connection can carry several requests and each answer keeps its id", async () => {

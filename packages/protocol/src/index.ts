@@ -81,7 +81,10 @@ export interface DaemonRequest {
   readonly receivedAt: number;
   readonly event: HookEvent;
   readonly payload: unknown;
+  readonly audit?: AuditIdentity & { readonly binding: { readonly backend: string; readonly keyId: string } | null };
 }
+
+export type AuditIdentity = { readonly rowId: string; readonly sessionId?: string };
 
 export interface DaemonResponse {
   readonly v: typeof PROTOCOL_VERSION;

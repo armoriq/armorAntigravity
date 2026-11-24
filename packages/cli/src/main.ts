@@ -1,5 +1,6 @@
 import { NO_AUTO_UPDATE_ENV, optedOut, readUpdateStatus } from "@armorantigravity/daemon";
 import pkg from "@armorantigravity/daemon/package.json" with { type: "json" };
+import { auditStatus } from "@armorantigravity/daemon";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -182,6 +183,8 @@ async function cmdStatus(): Promise<number> {
   info(`login: ${backend && hasLogin(backend) ? `yes (${PRODUCT_AT(backend)})` : "no"}`);
   info(`daemon: ${(await waitForSocket(l.socket, 0)) ? `listening on ${l.socket}` : "not running"}`);
   info(`updates: ${updateLine(l.dataDir)}`);
+  const audit = await auditStatus(process.env);
+  info(`audit: ${audit.pending} pending, ${audit.undeliverable} undeliverable, ${audit.deadLetters} dead letters, ${audit.captureFailures} capture failures`);
   reportSurfaces();
   return 0;
 }

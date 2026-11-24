@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
 import { armoriqPlugins } from "../src/armoriq.ts";
+import { clientRowId } from "@armorantigravity/core";
 import { startDaemon, type RunningDaemon } from "../src/daemon.ts";
 import { compileHook, hostTarget } from "../../../scripts/build-hook.ts";
 import { sandboxHome } from "./sandbox.ts";
@@ -175,7 +176,7 @@ test("captured agy hooks get policy, plan and drift decisions, and every decisio
   expect(await hook(at(9))).toBeNull();
   expect(await hook(runCommand)).toEqual({ decision: "allow" });
   expect(await hook(at(5))).toBeNull();
-  expect(await hook(writeFile)).toEqual({ decision: "deny", reason: expect.stringContaining("[intent_drift]") });
+  expect(await hook({ ...writeFile, stdin: { ...writeFile.stdin, stepIdx: 100 } })).toEqual({ decision: "deny", reason: expect.stringContaining("[intent_drift]") });
   expect(await hook(at(7))).toBeNull();
   expect(await hook(at(53))).toBeNull();
 
@@ -194,6 +195,12 @@ test("captured agy hooks get policy, plan and drift decisions, and every decisio
     ]),
   );
   for (const row of rows) expect(row).toMatchObject({ session_id: runCommand.stdin.conversationId, agent_id: "antigravity", client_id: "armorantigravity", user_id: "user-1" });
+  for (const row of rows.filter(r => r.status === "blocked")) {
+    expect(row.decision_code).toBe({ policy_forbid: "policy_deny", intent_plan_missing: "missing_plan", intent_drift: "out_of_scope" }[String(row.error_message).split(":")[0]!]);
+    expect(row.client_row_id).toMatch(/^[0-9a-f-]{36}$/);
+  }
+  const drift = rows.find(r => r.decision_code === "out_of_scope");
+  expect(drift).toMatchObject({ context_plan_id: "plan-wiring-1", prompt_id: expect.any(String), client_row_id: clientRowId(String(runCommand.stdin.conversationId), "100", "decision") });
   expect(backend.seen.some((r) => r.path === "/v1/traces")).toBe(true);
 }, 60_000);
 
