@@ -1,9 +1,156 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHealthPump } from "../src/pumps/health.ts";
-import { createAuditPump } from "../src/pumps/audit.ts";
+import { auditLogin, createAuditPump } from "../src/pumps/audit.ts";
 import { parseClientEventsReply, postClientEvents } from "../src/io/backend-client-events.ts";
-import { createEvidence, evidencePlugin } from "../src/plugin.ts";
+import { createEvidence, evidencePlugin, type EvidenceRecorder } from "../src/plugin.ts";
 import { login, quietLog, tempDir, uploads } from "./support.ts";
+import { readdirSync, existsSync } from "node:fs";
+import { createRunsPump } from "../src/pumps/runs.ts";
+import { parseRunsReply } from "../src/io/backend-runs.ts";
+import contract from "./fixtures/client-events-v1.json";
+import { CLIENT_EVENTS } from "@armorantigravity/core";
+
+test("health wire constants follow the current published contract", () => {
+  expect(contract.queues).toEqual([...CLIENT_EVENTS.queues]);
+  for (const type of Object.keys(CLIENT_EVENTS.reasons) as (keyof typeof CLIENT_EVENTS.reasons)[]) expect(contract.reasonCodes[type]).toEqual([...CLIENT_EVENTS.reasons[type]]);
+  expect(Object.keys(contract.outcomes).sort()).toEqual([...CLIENT_EVENTS.outcomes].sort());
+});
+
+test("idle health restarts create no journals and successful requests skip unrelated journals", async () => {
+  const s = setup();
+  cleanup.push(async () => s.cleanup());
+  for (let n = 0; n < 3; n++) {
+    const health = createHealthPump(s.deps);
+    await health.loginChanged(false);
+    await health.planRequestSucceeded(s.auth, "never-failed");
+    expect(health.outbox.diagnostics().replays).toBe(0);
+    await health.stop();
+  }
+  const root = `${s.dir}/outbox/health-v2`;
+  expect(existsSync(root) ? readdirSync(root).filter(f => f.endsWith(".jsonl")) : []).toEqual([]);
+});
+
+// regression: #0012
+test("draining a health backlog after restart creates no empty writer journals", async () => {
+  const s = setup();
+  const deps = { ...s.deps, post: async () => ({ ok: false as const, stallReason: "server_error" as const }) };
+  let health = createHealthPump(deps);
+  cleanup.push(async () => { await health.stop(); s.cleanup(); });
+  await health.planRequestFailed(s.auth, "backlog", "timeout");
+  await health.stop();
+  const files = () => readdirSync(`${s.dir}/outbox/health-v2`).filter(file => file.endsWith(".jsonl"));
+  const original = files();
+  expect(original).toHaveLength(1);
+  for (let restart = 0; restart < 3; restart++) {
+    health = createHealthPump(deps);
+    await health.loginChanged(false);
+    expect(health.status().pending).toBe(1);
+    await health.stop();
+    expect(files()).toEqual(original);
+  }
+});
+
+// regression: #0012
+test.each(["health", "runs"] as const)("%s org_required holds back off across restart, keep every row and lift only on delivery", async stream => {
+  const s = setup();
+  let now = 1000;
+  let status = 403;
+  let calls = 0;
+  const delivered: string[] = [];
+  const opened: { stop(): Promise<void> }[] = [];
+  const clock = { now: () => now, random: () => 0 };
+  const open = () => {
+    const pump = stream === "health" ? createHealthPump({ ...s.deps, clock, post: async (_auth, _uploads, rows) => {
+      calls++;
+      if (status === 0) throw new Error("lost reply");
+      if (status === 200) delivered.push(...rows.map(row => row.event_id));
+      return parseClientEventsReply(status, status === 403 ? { error: "org_required" } : status === 200 ? { results: rows.map(row => ({ event_id: row.event_id, outcome: "accepted" })) } : {}, new Headers(), rows);
+    } }) : createRunsPump({ ...s.deps, clock, enabled: true, post: async (_auth, _uploads, rows) => {
+      calls++;
+      if (status === 0) throw new Error("lost reply");
+      if (status === 200) delivered.push(...rows.map(row => row.run_id));
+      return parseRunsReply(status, status === 403 ? { error: "org_required" } : status === 200 ? { results: rows.map(row => ({ run_id: row.run_id, report_seq: row.report_seq, outcome: "accepted" })) } : {}, new Headers(), rows);
+    } });
+    opened.push(pump);
+    return pump;
+  };
+  cleanup.push(async () => { for (const p of opened) await p.stop(); s.cleanup(); });
+  let pump = open();
+  const append = async (id: string) => {
+    if (stream === "health") await (pump as ReturnType<typeof createHealthPump>).planRequestFailed(s.auth, id, "timeout");
+    else (pump as ReturnType<typeof createRunsPump>).outbox.enqueue({ run_id: id, report_seq: 1, session_id: "s", started_at: new Date(1000).toISOString(), tool_calls: 0, gated_tool_calls: 0, plan_ids: [] });
+  };
+  await append("first");
+  for (const [index, delay] of [300_000, 600_000, 1_200_000, 2_400_000, 3_600_000, 3_600_000].entries()) {
+    status = index === 1 ? 503 : 403;
+    await pump.kick();
+    expect(calls).toBe(index + 1);
+    await append(`later-${index}`);
+    expect(pump.status()).toMatchObject({ pending: index + 2, undeliverable: index + 2, held: ["org_required"], paused: false, deadLetters: 0 });
+    expect(pump.outbox.readPending().every(entry => entry.attempts === 0)).toBe(true);
+    await pump.stop();
+    pump = open();
+    await pump.outbox.authenticationSucceeded(auditLogin(s.auth));
+    now += delay - 1;
+    await pump.kick();
+    expect(calls).toBe(index + 1);
+    now++;
+  }
+  status = 0;
+  await pump.kick();
+  const before = calls;
+  expect(pump.status()).toMatchObject({ pending: 7, held: ["org_required"], paused: false });
+  await pump.stop();
+  pump = open();
+  status = 200;
+  now += 3_599_999;
+  await pump.kick();
+  expect(calls).toBe(before);
+  now++;
+  await pump.kick();
+  expect(delivered).toHaveLength(7);
+  expect(new Set(delivered).size).toBe(7);
+  expect(pump.status()).toMatchObject({ pending: 0, held: [], deadLetters: 0 });
+});
+
+test.each(["health", "runs"] as const)("%s authentication pause lifts through its periodic probe", async stream => {
+  const s = setup();
+  let now = 1000;
+  let refused = true;
+  let probes = 0;
+  const deps = { ...s.deps, clock: { now: () => now, random: () => 0 }, probe: async () => { probes++; return true; } };
+  const pump = stream === "health" ? createHealthPump({ ...deps, post: async () => refused ? { ok: false, relogin: true } : { ok: true, rejected: [] } })
+    : createRunsPump({ ...deps, enabled: true, post: async () => refused ? { ok: false, relogin: true } : { ok: true, rejected: [] } });
+  cleanup.push(async () => { await pump.stop(); s.cleanup(); });
+  if (stream === "health") await (pump as ReturnType<typeof createHealthPump>).planRequestFailed(s.auth, "paused", "timeout");
+  else (pump as ReturnType<typeof createRunsPump>).begin("paused", "s", now, true);
+  await pump.kick();
+  expect(pump.status().paused).toBe(true);
+  refused = false;
+  now += 120_000;
+  await pump.kick();
+  expect(probes).toBe(1);
+  expect(pump.status()).toMatchObject({ pending: 0, paused: false });
+});
+
+test("run dead letters and stalls reach health with queue runs", async () => {
+  const s = setup();
+  let now = Date.now();
+  const events: any[] = [];
+  const health = createHealthPump({ ...s.deps, post: async (_auth, _uploads, rows) => { events.push(...rows); return { ok: true, rejected: [] }; } });
+  const runs = createRunsPump({ ...s.deps, health, enabled: true, clock: { now: () => now, random: () => 0 }, post: async (_auth, _uploads, reports) => ({ ok: true, rejected: reports.map(item => ({ item, error: "refused", permanent: true })) }) });
+  cleanup.push(async () => { await runs.stop(); await health.stop(); s.cleanup(); });
+  runs.begin("refused", "s", now, true);
+  await runs.kick();
+  expect(events).toContainEqual(expect.objectContaining({ queue: "runs", type: "dead_letter", count: 1 }));
+  runs.begin("stalled", "s", now, true);
+  const pending = runs.outbox.readPending();
+  await runs.outbox.drain(async () => ({ ok: false, stallReason: "server_error" }));
+  now += 3_600_000;
+  await runs.outbox.reportHealth(health.outbox);
+  await health.kick();
+  expect(events).toContainEqual(expect.objectContaining({ queue: "runs", type: "queue_stalled", count: pending.length }));
+});
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); });
@@ -130,4 +277,51 @@ test("daemon shutdown waits for audit before closing the health outbox", async (
   cleanup.push(async () => s.cleanup());
   await Promise.all(registration.pumps.map(pump => pump.stop()));
   expect(health!.status()).toMatchObject({ pending: 0 });
+});
+
+test("another authenticated call resumes health and runs for the same credential", async () => {
+  const s = setup();
+  let listener: ((login: typeof s.auth) => void) | undefined;
+  let recorder: EvidenceRecorder | undefined;
+  const original = globalThis.fetch;
+  let refused = true;
+  const delivered: string[] = [];
+  globalThis.fetch = (async (_url, options) => {
+    const body = JSON.parse(String(options?.body));
+    if (refused) return Response.json({}, { status: 401 });
+    delivered.push(...(body.events ?? body.reports ?? []).map((row: any) => row.event_id ?? row.run_id));
+    return Response.json({ results: (body.events ?? body.reports ?? []).map((row: any) => ({ ...row, outcome: "accepted" })) });
+  }) as typeof fetch;
+  const registration = evidencePlugin({ runReportingEnabled: true, onRecorder: value => { recorder = value; } }).setup({ paths: { dataDir: s.dir }, log: quietLog, auth: {
+    client: s.deps.uploads.client, headers: {}, uploadLogin: () => s.auth, reportStatus() {}, onAuthenticated(callback) { listener = callback; return () => {}; },
+  } });
+  try {
+    const health = recorder!.health as ReturnType<typeof createHealthPump>;
+    const runs = recorder!.runs;
+    await health.planRequestFailed(s.auth, "authenticated", "timeout");
+    const eventId = health.outbox.readPending()[0]!.row.event_id;
+    runs.begin("authenticated", "s", Date.now(), true);
+    await health.kick();
+    await runs.kick();
+    expect(delivered).toEqual([]);
+    for (const pump of [health, runs]) {
+      expect(pump.status()).toMatchObject({ pending: 1, undeliverable: 1, paused: true });
+      expect(pump.outbox.readPending()[0]!.attempts).toBe(0);
+    }
+    refused = false;
+    for (const other of [{ ...s.auth, apiKey: "other-key" }, { ...s.auth, backend: "http://localhost:2" }]) {
+      await listener!(other);
+      expect(health.status()).toMatchObject({ pending: 1, paused: true });
+      expect(runs.status()).toMatchObject({ pending: 1, paused: true });
+      expect(delivered).toEqual([]);
+    }
+    await listener!(s.auth);
+    expect(health.status()).toMatchObject({ pending: 0, paused: false });
+    expect(runs.status()).toMatchObject({ pending: 0, paused: false });
+    expect(delivered.sort()).toEqual([eventId, "authenticated"].sort());
+  } finally {
+    await Promise.all(registration.pumps.map(pump => pump.stop()));
+    globalThis.fetch = original;
+    s.cleanup();
+  }
 });

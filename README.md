@@ -43,3 +43,13 @@ Only an install made by the installer (it leaves `~/.armoriq/armorantigravity/re
 updated. Set `ARMORANTIGRAVITY_NO_AUTO_UPDATE=1` to keep updates manual; the daemon then makes no
 network call for updates and applies nothing that is already staged. Re-running the installer still
 upgrades. `ARMORANTIGRAVITY_UPDATE_API_URL` points the check at a mirror of the repository releases API.
+
+Set `ARMORIQ_INTENT_VALIDITY_SECONDS` in the daemon's environment to an integer from 180 to 3600
+seconds (default 3600). The daemon reads it at startup and refuses to start if the value is invalid.
+Only an open, active prompt refreshes its token. Pending registration requests are saved in
+`intent-state.json` and reuse the same request id when you retry the same plan.
+
+
+Run reporting is off by default. Set `"runReportingEnabled": true` in `~/.armoriq/armorantigravity/config.json` and restart the daemon only after every serving backend revision supports prompt ids and `/iap/runs/batch` (spec 0013 rollout gate). The installer preserves this setting during upgrades. `ARMORIQ_RUN_REPORTING_ENABLED=true` or `false` in the daemon environment overrides it. Authenticated monitor runs are included. Runs started while logged out are never uploaded. Delivery uses the login fixed at prompt start, pauses while logged out or on a 404, and keeps queued reports locally. `armorantigravity status` shows pending reports, undeliverable reports (waiting for their original login or a paused endpoint), dead letters and whether delivery is paused.
+
+An `org_required` response holds health and run uploads locally without discarding rows or pausing authentication. Retries wait 5, 10, 20, 40 and then 60 minutes, including after a failed probe. The schedule survives a restart, and a successful send lifts the hold.

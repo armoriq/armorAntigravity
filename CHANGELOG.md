@@ -10,6 +10,31 @@ notes from the matching section, so add the section, with its date, in the relea
 ### Added
 - Workspace Monitor. Signed in, the daemon follows the mode set on the Tools Monitor page, read with the workspace policy and kept in `org-mode.json`: Quiet (the default) and Show in chat run every call, including ones the file guard, a policy, a v2 hold or the MCP gate would stop, and record on the audit row what Block would have done (`would_be`, `would_be_code`, `would_be_reason`); Block enforces as before. In Monitor no plan directive is injected, no approval request is filed and a backend outage blocks nothing. `ARMORIQ_ORG_MODE=enforce` forces Block on one machine. Requests send `X-ArmorIQ-Monitor-Aware: 1`, so the backend sends the real policy instead of the Monitor stand-in.
 
+### Changed
+
+- Run reporting can be enabled in `config.json`, with the daemon environment as an override.
+- Plans now belong to individual user prompts. Registration replies include the confirmed plan id,
+  kind and token expiry, and local plans are explicitly marked as unregistered.
+- Pending requests and prompt state are saved in `intent-state.json` so retries reuse the original
+  request. Signing out, changing credentials or changing mode retires the current plan.
+- `ARMORIQ_INTENT_VALIDITY_SECONDS` sets token validity from 180 to 3600 seconds (default 3600).
+  Invalid values stop daemon startup.
+
+### Fixed
+
+- C hook fallback decisions are retained for daemon ingestion, with incomplete records kept locally.
+- Plan requests can retry with the same idempotency key after their original reporting deadline.
+- Health and run reporting failures preserve registration replies and hook decisions. Temporary
+  delivery failures retain reports, and an organization requirement is shown as a local hold.
+  Hold retries back off from five minutes to one hour and resume delivery after a successful send.
+- Open runs continue across daemon restarts, and tool checkpoints store only changes.
+- Registering the same plan after retirement in one prompt requests a new backend plan.
+- Opening another root conversation after a subagent spawn gives it a prompt id.
+- Revoke, delegate and reanchor use the current token after a refresh, while revisions keep the
+  counted plan as their parent.
+- Invalid intent state files are preserved beside the original path and reported before the
+  daemon starts with empty state. Children retain their parent link when its session closes.
+
 ## [0.2.1] - 2026-11-17
 
 ### Changed

@@ -1,4 +1,45 @@
 {
+  "endReasons": [
+    "stop",
+    "next_prompt",
+    "session_end",
+    "recovered"
+  ],
+  "noPlanReasons": [
+    "monitor_mode",
+    "no_tool_use",
+    "read_only",
+    "backend_unreachable",
+    "request_failed",
+    "plan_rejected",
+    "not_registered"
+  ],
+  "limits": {
+    "maxBatchReports": 200,
+    "maxIdChars": 128,
+    "maxPlanIds": 20,
+    "maxBatchBytes": 8388608,
+    "maxInteger": 2147483647
+  },
+  "counting": {
+    "scope": "root_session",
+    "deduplicateBy": "host_tool_call_id",
+    "includeBlockedAndHeld": true,
+    "excludeSubagentHooks": true,
+    "excludedOwnToolPatterns": [
+      "^register_intent_plan$",
+      "^trust_.*$",
+      "^policy_read$"
+    ],
+    "ownToolsRequireTrustedServer": true,
+    "evaluateGatedBeforeMonitorOrEnforcementBypass": true
+  },
+  "toolMatching": {
+    "order": "first_matching_rule",
+    "patterns": "regular_expression",
+    "input": "adapter_normalized_tool_name",
+    "conditions": "A conditional rule applies only when its named host or policy fact matches. Other policy and protected path checks still apply to ungated tools."
+  },
   "capabilities": {
     "armorclaude": {
       "normalization": "Trim and lowercase the host tool name.",
@@ -316,6 +357,211 @@
       "notes": [
         "Ignore child invocations and parent invocations caused by a child send_message. PostInvocation is not a turn end. There is no session end hook; the next prompt or recovery closes a run without Stop. Stop carries terminationReason and error, with no separate cancel or error event."
       ]
+    }
+  },
+  "adminResponse": {
+    "planMade": "True when stored plan evidence matches the run, even when every matching plan is hidden from this caller.",
+    "planIds": "Only matching plan ids visible through the plan row builder. This array can be empty when planMade is true."
+  },
+  "examples": [
+    {
+      "name": "end time requires an end reason",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 2,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "ended_at": "2026-11-14T12:01:00Z",
+        "tool_calls": 0,
+        "gated_tool_calls": 0,
+        "plan_ids": []
+      },
+      "outcome": "rejected",
+      "error": "end_fields_required"
+    },
+    {
+      "name": "end reason requires an end time",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 2,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "end_reason": "stop",
+        "tool_calls": 0,
+        "gated_tool_calls": 0,
+        "plan_ids": []
+      },
+      "outcome": "rejected",
+      "error": "end_fields_required"
+    },
+    {
+      "name": "open start report",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 1,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "tool_calls": 0,
+        "gated_tool_calls": 0,
+        "plan_ids": []
+      },
+      "outcome": "accepted"
+    },
+    {
+      "name": "completed run with a confirmed plan",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 2,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "tool_calls": 2,
+        "gated_tool_calls": 1,
+        "plan_ids": [
+          "11111111-1111-4111-8111-111111111111"
+        ],
+        "ended_at": "2026-11-14T12:01:00Z",
+        "end_reason": "stop"
+      },
+      "outcome": "accepted"
+    },
+    {
+      "name": "chat only run",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 2,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "tool_calls": 0,
+        "gated_tool_calls": 0,
+        "plan_ids": [],
+        "ended_at": "2026-11-14T12:00:10Z",
+        "end_reason": "stop",
+        "no_plan_reason": "no_tool_use"
+      },
+      "outcome": "accepted"
+    },
+    {
+      "name": "future fields are ignored",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 1,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "tool_calls": 0,
+        "gated_tool_calls": 0,
+        "plan_ids": [],
+        "unrecognized": "ignore"
+      },
+      "outcome": "accepted"
+    },
+    {
+      "name": "gated count exceeds total",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 1,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "tool_calls": 0,
+        "gated_tool_calls": 1,
+        "plan_ids": []
+      },
+      "outcome": "rejected",
+      "error": "gated_exceeds_total"
+    },
+    {
+      "name": "end precedes start",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 1,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "tool_calls": 0,
+        "gated_tool_calls": 0,
+        "plan_ids": [],
+        "ended_at": "2026-11-14T11:59:59Z"
+      },
+      "outcome": "rejected",
+      "error": "ended_before_started"
+    },
+    {
+      "name": "confirmed plan contradicts reason",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 1,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "tool_calls": 0,
+        "gated_tool_calls": 0,
+        "plan_ids": [
+          "11111111-1111-4111-8111-111111111111"
+        ],
+        "no_plan_reason": "not_registered"
+      },
+      "outcome": "rejected",
+      "error": "plan_reason_conflict"
+    },
+    {
+      "name": "backend derived reason is not client input",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 1,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "tool_calls": 0,
+        "gated_tool_calls": 0,
+        "plan_ids": [],
+        "no_plan_reason": "plan_missing"
+      },
+      "outcome": "rejected",
+      "error": "invalid_no_plan_reason"
+    },
+    {
+      "name": "malformed plan UUID",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 1,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "tool_calls": 0,
+        "gated_tool_calls": 0,
+        "plan_ids": [
+          "not-a-uuid"
+        ]
+      },
+      "outcome": "rejected",
+      "error": "invalid_plan_ids"
+    },
+    {
+      "name": "invalid sequence",
+      "report": {
+        "run_id": "prompt-1",
+        "report_seq": 0,
+        "session_id": "session-1",
+        "started_at": "2026-11-14T12:00:00Z",
+        "tool_calls": 0,
+        "gated_tool_calls": 0,
+        "plan_ids": []
+      },
+      "outcome": "rejected",
+      "error": "invalid_report_seq"
+    }
+  ],
+  "labels": {
+    "endReasons": {
+      "stop": "Turn ended",
+      "next_prompt": "Next prompt started",
+      "session_end": "Session ended",
+      "recovered": "Recovered after a restart"
+    },
+    "noPlanReasons": {
+      "monitor_mode": "Monitor mode",
+      "no_tool_use": "No tool use",
+      "read_only": "Read only tools",
+      "backend_unreachable": "Backend unreachable",
+      "request_failed": "Plan request failed",
+      "plan_rejected": "Plan rejected",
+      "not_registered": "No plan registered",
+      "plan_missing": "Plan not stored"
     }
   }
 }
