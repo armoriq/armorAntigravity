@@ -25,6 +25,7 @@ import { fileLog, type Log } from "./log.ts";
 import { resolvePaths, type Env, type Paths } from "./paths.ts";
 import type { DaemonEvent, DaemonPlugin, DecisionHandler, EventObserver, HookContext, McpOutcomeHandler, Pump } from "./plugin.ts";
 import { createSessionStore, type SessionStore } from "./sessions.ts";
+import { intentValiditySeconds } from "@armorantigravity/intent";
 import { stubDecide } from "./stub.ts";
 import { surfaceFromTranscriptPath } from "./surface.ts";
 import { applyStagedUpdate, createUpdater, optedOut, readUpdateStatus, type Updater } from "./update.ts";
@@ -65,6 +66,7 @@ export class RestartRequired extends Error {
 }
 
 export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
+  intentValiditySeconds(opts.env);
   const paths = resolvePaths(opts.env);
   const log = opts.log ?? fileLog(paths.logFile, false);
   const lock = acquireInstanceLock(paths.lockFile);
@@ -305,7 +307,7 @@ function parseEnvelope(raw: unknown): Envelope {
   return { ok: true, id, receivedAt, event, payload: "payload" in raw ? raw.payload : undefined };
 }
 
-const MAX_OUTCOME_WAIT_MS = 10_000;
+const MAX_OUTCOME_WAIT_MS = 45_000;
 
 function parseMcpOutcome(raw: unknown): { id: string; tool: string; args: unknown; waitMs: number } | null {
   if (typeof raw !== "object" || raw === null || !("kind" in raw) || raw.kind !== "mcp_outcome") return null;

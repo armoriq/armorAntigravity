@@ -1,15 +1,18 @@
 import type { IntentToken } from "@armoriq/sdk-dev";
-import { AGENT_ID, type CallResult, type DelegateRequest, type Delegation, type Draft, type IntentBackend, type Login, type Minted } from "./types.ts";
+import type { PendingRequest, PlanKind } from "./registry.ts";
+import { toSdkPlan } from "./plan-request.ts";
+import { AGENT_ID, type CallResult, type DelegateRequest, type Delegation, type IntentBackend, type Login, type Minted, type RetryOptions } from "./types.ts";
+export { toSdkPlan, PLAN_SOURCE } from "./plan-request.ts";
 
 export const TOKEN_VALIDITY_SECONDS = 3600;
-export const PLAN_SOURCE = "antigravity-registered";
+export const REQUEST_DEADLINE_MS = 40_000;
 const TIMEOUT_MS = 5000;
 const ATTEMPTS = 2;
 const KEPT_TOKENS = 512;
 
 type Sdk = typeof import("@armoriq/sdk-dev");
 type Client = InstanceType<Sdk["ArmorIQClient"]>;
-type Seen = { status?: number; body?: unknown };
+type Seen = { status?: number; body?: unknown; retryAfter?: string | undefined; now: () => number };
 type StatusMap<T> = (status: number) => CallResult<T> | null;
 
 export interface ClientIdentity {
@@ -19,23 +22,7 @@ export interface ClientIdentity {
 
 export interface SdkBackendOptions {
   readonly client: ClientIdentity;
-  // The compiled local policy sent as `policy` on the mint (ArmorClaude intent.mjs); OpenCode sends undefined.
-  mintPolicy(): Record<string, unknown> | undefined;
   readonly loadSdk?: () => Promise<Sdk>;
-}
-
-export function toSdkPlan(plan: Draft): { goal: string; steps: Record<string, unknown>[]; metadata: Record<string, unknown> } {
-  return {
-    goal: plan.goal,
-    steps: plan.steps.map((s) => ({
-      action: s.tool,
-      tool: s.tool,
-      mcp: AGENT_ID,
-      description: s.action,
-      metadata: s.params ? { inputs: s.params } : {},
-    })),
-    metadata: { goal: plan.goal, source: PLAN_SOURCE, plan_hash: plan.hash },
-  };
 }
 
 // The SDK reads only planId and rawToken.token on revoke and reanchor; the backend resolves the rest from
@@ -69,7 +56,10 @@ export function createSdkBackend(options: SdkBackendOptions): IntentBackend {
     if (tokens.size > KEPT_TOKENS) tokens.delete(tokens.keys().next().value ?? planId);
   };
 
-  async function withRetry<T>(login: Login, run: (client: Client) => Promise<T>, mapStatus?: StatusMap<T>): Promise<CallResult<T>> {
+  async function withRetry<T>(login: Login, run: (client: Client, timeoutMs: number) => Promise<T>, mapStatus?: StatusMap<T>, retry: RetryOptions = {}, request?: PendingRequest): Promise<CallResult<T>> {
+    const now = retry.now ?? Date.now;
+    const sleep = retry.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+    const deadline = now() + REQUEST_DEADLINE_MS;
     let sdk: Sdk;
     try {
       sdk = await loadSdk();
@@ -78,81 +68,98 @@ export function createSdkBackend(options: SdkBackendOptions): IntentBackend {
     }
     let last: CallResult<T> = { ok: false, retryable: true, reason: "no attempt" };
     for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-      last = await attemptOnce(sdk, login, run, mapStatus);
-      if (last.ok || !last.retryable) return last;
+      if (retry.cancelled?.()) return { ok: false, retryable: false, reason: "the prompt or authentication changed" };
+      const remaining = deadline - now();
+      if (remaining <= 0) break;
+      last = await attemptOnce(sdk, login, run, Math.min(TIMEOUT_MS, remaining), now, mapStatus, request);
+      if (last.ok || !last.retryable || attempt + 1 === ATTEMPTS) return last;
+      const delay = last.retryAfterMs ?? 0;
+      if (delay >= deadline - now()) return last;
+      if (delay > 0) await sleep(delay);
     }
     return last;
   }
 
-  async function attemptOnce<T>(sdk: Sdk, login: Login, run: (client: Client) => Promise<T>, mapStatus?: StatusMap<T>): Promise<CallResult<T>> {
+  async function attemptOnce<T>(sdk: Sdk, login: Login, run: (client: Client, timeoutMs: number) => Promise<T>, timeoutMs: number, now: () => number, mapStatus?: StatusMap<T>, request?: PendingRequest): Promise<CallResult<T>> {
     const controller = new AbortController();
-    const seen: Seen = {};
+    const seen: Seen = { now };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => {
         controller.abort();
         resolve("timeout");
-      }, TIMEOUT_MS);
+      }, timeoutMs);
     });
     try {
-      const running = run(createClient(sdk, login, controller.signal, seen)).then((value) => ({ value }));
+      const running = run(createClient(sdk, login, controller.signal, seen, timeoutMs, request), timeoutMs).then((value) => ({ value }));
       running.catch(() => {});
       const outcome = await Promise.race([running, timedOut]);
-      if (outcome === "timeout") return { ok: false, retryable: true, reason: `timed out after ${TIMEOUT_MS} ms` };
+      if (outcome === "timeout") return { ok: false, retryable: true, reason: `timed out after ${timeoutMs} ms` };
       if (seen.status !== undefined && seen.status >= 400) return classify(sdk, seen, mapStatus, "");
       return { ok: true, value: outcome.value };
     } catch (error) {
-      if (controller.signal.aborted) return { ok: false, retryable: true, reason: `timed out after ${TIMEOUT_MS} ms` };
+      if (controller.signal.aborted) return { ok: false, retryable: true, reason: `timed out after ${timeoutMs} ms` };
       return classify(sdk, seen, mapStatus, error instanceof Error ? error.message : String(error));
     } finally {
       clearTimeout(timer);
     }
   }
 
-  function createClient(sdk: Sdk, login: Login, signal: AbortSignal, seen: Seen): Client {
+  function createClient(sdk: Sdk, login: Login, signal: AbortSignal, seen: Seen, timeoutMs: number, request?: PendingRequest): Client {
     // maxRetries is read by the SDK constructor but missing from its declared options; retries are ours.
     const clientOptions = {
       apiKey: login.apiKey,
       backendEndpoint: login.backend,
-      userId: login.userId,
+      userId: request ? String(request.body.user_id) : login.userId,
       agentId: AGENT_ID,
-      timeout: TIMEOUT_MS,
+      timeout: timeoutMs,
       maxRetries: 0,
       client: options.client,
     };
     const client = new sdk.ArmorIQClient(clientOptions);
     const http = client._sessionInternals().httpClient;
     http.defaults.signal = signal;
-    http.interceptors.response.use((response: { status: number; data: unknown }) => {
+    const observe = (response: { status: number; data: unknown; headers?: Record<string, string> }) => {
       seen.status = response.status;
       seen.body = response.data;
+      seen.retryAfter = response.headers?.["retry-after"];
       return response;
+    };
+    http.interceptors.response.use(observe, (error: { response?: Parameters<typeof observe>[0] }) => {
+      if (error?.response) observe(error.response);
+      return Promise.reject(error);
     });
     return client;
   }
 
   return {
-    mint(login, plan, contextId) {
+    mint(login, _plan, _contextId, request, retry) {
       return withRetry<Minted>(
         login,
-        async (client) => {
-          const capture = client.capturePlan(AGENT_ID, plan.goal, toSdkPlan(plan), {
-            source: AGENT_ID,
-            session_id: contextId,
-            plan_hash: plan.hash,
-            revision: plan.revision,
+        async (client, timeoutMs) => {
+          const body = request.body;
+          const capture = client.capturePlan(AGENT_ID, String((body.plan as Record<string, unknown>).goal), body.plan as Record<string, unknown>);
+          const token = await client.getIntentToken(capture, body.policy as Record<string, unknown> | undefined, Number(body.expires_in), {
+            contextId: String(body.context_id), idempotencyKey: request.key,
+            planKind: request.headers["X-ArmorIQ-Plan-Kind"] as PlanKind,
+            ...(request.headers["X-ArmorIQ-Parent-Plan-Id"] ? { parentPlanId: request.headers["X-ArmorIQ-Parent-Plan-Id"] } : {}),
+            ...(request.headers["X-ArmorIQ-Prompt-Id"] ? { promptId: request.headers["X-ArmorIQ-Prompt-Id"] } : {}),
+            timeoutMs,
           });
-          const token = await client.getIntentToken(capture, options.mintPolicy(), TOKEN_VALIDITY_SECONDS, { contextId });
           const validation: Record<string, unknown> = token.policyValidation ?? {};
           // validated:false means the org has no agent or active policy, and the backend then lists every
           // requested tool as denied. That is "no opinion", not a deny (PRD appendix A).
           const backendChecked = validation.validated !== false;
-          const expiresAtSec = Number(token.expiresAt);
+          const expiresAtSec = Number((token.rawToken?.token as { expires_at?: unknown } | undefined)?.expires_at);
           if (!token.planId) throw new Error("token response has no plan_id");
-          if (!Number.isFinite(expiresAtSec)) throw new Error(`token response has an invalid expires_at: ${String(token.expiresAt)}`);
+          if (!Number.isFinite(expiresAtSec) || expiresAtSec * 1000 <= Date.now()) throw new Error("token response has no usable expiry");
+          if (!token.jwtToken && !token.signature) throw new Error("token response has no usable token");
+          if (token.kind !== undefined && token.kind !== request.headers["X-ArmorIQ-Plan-Kind"]) throw new Error("token response has a different plan kind");
           keep(token.planId, token);
           return {
             planId: token.planId,
+            ...(token.kind ? { kind: token.kind as PlanKind } : {}),
+            legacy: token.kind === undefined,
             token: {
               status: "active",
               jwt: token.jwtToken || token.signature,
@@ -167,6 +174,8 @@ export function createSdkBackend(options: SdkBackendOptions): IntentBackend {
           if (status === 402) return { ok: true, value: { planId: "", token: { status: "refused", code: "billing_blocked" } } };
           return null;
         },
+        retry,
+        request,
       );
     },
 
@@ -206,11 +215,28 @@ export function createSdkBackend(options: SdkBackendOptions): IntentBackend {
 function classify<T>(sdk: Sdk, seen: Seen, mapStatus: StatusMap<T> | undefined, message: string): CallResult<T> {
   const status = seen.status;
   if (status === undefined) return { ok: false, retryable: true, reason: message || "network error" };
+  if (status < 400) return { ok: false, retryable: false, unconfirmed: true, reason: message || "invalid token response" };
   const mapped = mapStatus?.(status);
   if (mapped) return mapped;
   if (sdk.isReloginRequired(status, seen.body)) return { ok: false, retryable: false, relogin: true, reason: "relogin_required" };
   const detail = bodyMessage(seen.body) || message || `HTTP ${status}`;
-  return { ok: false, retryable: status >= 500 || status === 429, reason: `HTTP ${status}: ${detail}` };
+  const code = (seen.body as { error?: unknown } | null)?.error;
+  return { ok: false, retryable: status >= 500 || status === 429 || status === 409 && code === "request_in_progress", retryAfterMs: parseRetryAfter(seen.retryAfter, seen.now()), reason: `HTTP ${status}: ${detail}` };
+}
+
+export function parseRetryAfter(header: string | undefined, now = Date.now()): number | undefined {
+  if (!header) return undefined;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
+}
+
+const legacyLogged = new WeakSet<object>();
+export function logLegacyBackend(log: import("./types.ts").Log): void {
+  if (legacyLogged.has(log)) return;
+  legacyLogged.add(log);
+  log.warn("backend does not support the plan capture contract");
 }
 
 function bodyMessage(body: unknown): string {

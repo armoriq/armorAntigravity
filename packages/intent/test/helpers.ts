@@ -1,6 +1,6 @@
 import { createOwnTools } from "../src/own-tools.ts";
-import { createRegistry } from "../src/registry.ts";
-import type { AuditRow, CallResult, Draft, IntentBackend, Login, Minted, PolicyView } from "../src/types.ts";
+import { createRegistry, type PendingRequest } from "../src/registry.ts";
+import { conversationKey, type AuditRow, type CallResult, type Draft, type IntentBackend, type Login, type Minted, type PolicyView } from "../src/types.ts";
 
 export const LOGIN: Login = { backend: "http://backend.test", apiKey: "ak_test_x", userId: "user-1" };
 
@@ -12,7 +12,7 @@ export const permitAll: PolicyView = {
   evaluate: () => ({ effect: "permit", ruleId: null, reason: "" }),
 };
 
-export type MintCall = { contextId: string; goal: string; tools: string[] };
+export type MintCall = { contextId: string; goal: string; tools: string[]; request: PendingRequest };
 
 // Records what the registry asked the backend for; each mint resolves when `release` is called if gated.
 export function recordingBackend(opts: { gate?: boolean; now?: () => number } = {}) {
@@ -22,8 +22,8 @@ export function recordingBackend(opts: { gate?: boolean; now?: () => number } = 
   const gates: (() => void)[] = [];
   let next = 0;
   const backend: IntentBackend = {
-    async mint(_login: Login, plan: Draft, contextId: string): Promise<CallResult<Minted>> {
-      mints.push({ contextId, goal: plan.goal, tools: plan.steps.map((s) => s.tool) });
+    async mint(_login: Login, plan: Draft, contextId: string, request: PendingRequest): Promise<CallResult<Minted>> {
+      mints.push({ contextId, goal: plan.goal, tools: plan.steps.map((s) => s.tool), request });
       if (opts.gate) await new Promise<void>((r) => gates.push(r));
       next += 1;
       return {
@@ -63,5 +63,9 @@ export function harness(opts: { gate?: boolean; login?: Login | null; policy?: P
     audit: (row) => audit.push(row),
     log: silentLog,
   });
-  return { registry, tools, audit, ...rec };
+  return { registry, tools: { ...tools, handle: ((ref, ...args) => {
+    const c = registry.open(ref);
+    if (c.promptId === null) registry.beginPrompt(conversationKey(ref), 0);
+    return tools.handle(ref, ...args);
+  }) as typeof tools.handle }, audit, ...rec };
 }

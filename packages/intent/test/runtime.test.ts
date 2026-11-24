@@ -135,6 +135,49 @@ const stop: HookPayload = {
   ...parentPlanCall, event: "Stop", executionNum: 0, fullyIdle: true, terminationReason: "done", error: "",
 };
 
+for (const tool of ["register_intent_plan", "trust_reanchor"] as const) {
+  test(`${tool} allows the hook before a slow registration and delivers the MCP outcome later`, async () => {
+    let clock = Date.now();
+    const { rt, rec } = runtime({ gate: true, now: () => clock });
+    rt.observe("cli", prompt(0));
+    if (tool === "trust_reanchor") {
+      const initial = rt.ownToolDecision("cli", parentPlanCall);
+      rec.release();
+      await initial;
+      expect(await rt.mcpOutcome("register_intent_plan", parentPlanCall.toolCall.args, 0)).toStartWith("Intent registered:");
+    }
+    const plan = { goal: "slow registration", steps: [{ action: "run_command" }] };
+    const args = tool === "trust_reanchor" ? { updatedPlan: plan, reason: "changed task" } : plan;
+    const call = {
+      ...parentPlanCall, stepIdx: 2,
+      toolCall: { name: `mcp_armoriq_${tool}`, args: { ...args, toolSummary: "Register plan" } },
+    };
+    let decision: unknown;
+    const hook = rt.ownToolDecision("cli", call).then(value => { decision = value; });
+    const duplicate = rt.ownToolDecision("cli", call);
+    const outcome = rt.mcpOutcome(tool, args, 45_000);
+    try {
+      await Bun.sleep(0);
+      expect(rt.root(ROOT)?.pendingRequest).not.toBeNull();
+      expect(rec.mints).toHaveLength(tool === "trust_reanchor" ? 2 : 1);
+      expect(decision).toEqual({ decision: "allow" });
+      clock += 10_001;
+      rec.release();
+      const id = tool === "trust_reanchor" ? "plan-2" : "plan-1";
+      const kind = tool === "trust_reanchor" ? "revision" : "new";
+      expect(await outcome).toBe(`Intent registered: plan ${id} (${kind}), 1 steps. Token valid until ${new Date(clock + 3_600_000).toISOString()}.`);
+      expect(rt.root(ROOT)?.countedPlanId).toBe(id);
+      expect(await rt.ownToolDecision("cli", call)).toEqual({ decision: "allow" });
+      expect(rec.mints).toHaveLength(tool === "trust_reanchor" ? 2 : 1);
+      expect(await rt.mcpOutcome(tool, args, 0)).toBeNull();
+    } finally {
+      rec.release();
+      await Promise.all([hook, duplicate, outcome]);
+      await rt.pump.stop();
+    }
+  });
+}
+
 describe("prompt lifecycle", () => {
   test("the shared identity contract names the root conversation and prompt hooks", () => {
     expect(contract.identity.find((entry) => entry.plugin === "ArmorAntigravity")).toMatchObject({

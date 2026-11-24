@@ -2,13 +2,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 export const SERVER_NAME = "armoriq";
-export const OUTCOME_WAIT_MS = 3000;
+export const OUTCOME_WAIT_MS = 45_000;
 
 export type AskDaemon = (tool: string, args: Record<string, unknown>) => Promise<string | null>;
 
-// The hook handles every call before it reaches this server; reaching the fallback means it did not.
+// A missing outcome can follow a daemon restart while a persisted registration is still in flight.
 export const NO_OUTCOME =
   "ArmorIQ has no record of this call. The ArmorIQ hooks may not be installed for this Antigravity surface, or the ArmorIQ daemon is not running. Nothing was registered or changed, and side-effecting calls stay blocked until a plan is registered.";
+const UNCONFIRMED_REGISTRATION =
+  "Plan registration not confirmed: the daemon did not confirm the registration. It will be retried with the same request id.";
 
 const planArg = z.union([z.record(z.string(), z.unknown()), z.string()]);
 const stepsArg = z.union([z.array(z.unknown()), z.string()]);
@@ -18,8 +20,10 @@ const stepsArg = z.union([z.array(z.unknown()), z.string()]);
 export function createServer(askDaemon: AskDaemon, version: string): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version });
   const answer = (tool: string) => async (args: Record<string, unknown>) => {
-    const text = (await askDaemon(tool, args).catch(() => null)) ?? NO_OUTCOME;
-    return { content: [{ type: "text" as const, text }] };
+    const fallback = tool === "register_intent_plan" || tool === "trust_reanchor" ? UNCONFIRMED_REGISTRATION : NO_OUTCOME;
+    const text = (await askDaemon(tool, args).catch(() => null)) ?? fallback;
+    const isError = text === NO_OUTCOME || text.startsWith("Plan not registered:") || text.startsWith("Plan registration not confirmed:");
+    return { content: [{ type: "text" as const, text }], ...(isError ? { isError: true } : {}) };
   };
 
   server.registerTool(

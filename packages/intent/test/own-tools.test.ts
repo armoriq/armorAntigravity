@@ -4,6 +4,10 @@ import { AMBIGUOUS_OUTCOME, callDigest, createOwnTools, ownToolName } from "../s
 import { createRegistry } from "../src/registry.ts";
 import { conversationKey, type ConversationRef, type PolicyView } from "../src/types.ts";
 import { harness, LOGIN, permitAll, recordingBackend, silentLog } from "./helpers.ts";
+import { planHash, requestKey } from "../src/plan-request.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const A: ConversationRef = { surface: "cli", conversationId: "conv-a" };
 const B: ConversationRef = { surface: "cli", conversationId: "conv-b" };
@@ -17,7 +21,7 @@ describe("parallel conversations", () => {
     const rb = h.tools.handle(B, "register_intent_plan", plan("run tests", "run_command"));
     await Bun.sleep(0);
     h.release();
-    expect(await Promise.all([ra, rb])).toEqual([expect.stringMatching(/^Intent registered: 1 steps\./), expect.stringMatching(/^Intent registered: 1 steps\./)]);
+    expect(await Promise.all([ra, rb])).toEqual([expect.stringMatching(/^Intent registered: plan plan-1 \(new\), 1 steps\./), expect.stringMatching(/^Intent registered: plan plan-2 \(new\), 1 steps\./)]);
 
     expect(h.mints.map((m) => [m.contextId, m.tools])).toEqual([
       ["conv-a", ["write_to_file"]],
@@ -41,12 +45,164 @@ describe("parallel conversations", () => {
 });
 
 describe("registration rules", () => {
+  for (const tool of ["register_intent_plan", "trust_reanchor"] as const) {
+    test(`settled waits for the background ${tool} registration`, async () => {
+      const h = harness({ gate: true });
+      if (tool === "trust_reanchor") {
+        const initial = h.tools.handle(A, "register_intent_plan", plan("initial", "run_command"));
+        h.release();
+        await initial;
+      }
+      const updated = plan("slow registration", "run_command");
+      const pending = h.tools.handle(A, tool, tool === "trust_reanchor" ? { updatedPlan: updated, reason: "changed task" } : updated);
+      let finished = false;
+      const settled = h.tools.settled().then(() => { finished = true; });
+      try {
+        await Bun.sleep(0);
+        expect(finished).toBe(false);
+      } finally {
+        h.release();
+        await Promise.all([pending, settled]);
+      }
+      expect(finished).toBe(true);
+      expect(h.registry.get(conversationKey(A))?.countedPlanId).toBe(tool === "trust_reanchor" ? "plan-2" : "plan-1");
+    });
+  }
+
+  test("after a restart the retry sends the saved body even when policy and validity changed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "intent-retry-"));
+    const file = join(dir, "state.json");
+    try {
+      const registry = createRegistry(Date.now, file);
+      registry.syncAuth(LOGIN, "enforce");
+      registry.open(A);
+      registry.beginPrompt(conversationKey(A), 0);
+      const first = createOwnTools({ registry, backend: { ...recordingBackend().backend, mint: async () => ({ ok: false, retryable: true, reason: "timeout" }) }, login: () => LOGIN, mode: () => "enforce", policy: () => permitAll, mintPolicy: () => ({ source: "first" }), validitySeconds: 180, audit() {}, log: silentLog });
+      await first.handle(A, "register_intent_plan", plan("g", "run_command"));
+      const saved = registry.get(conversationKey(A))!.pendingRequest!;
+      const restored = createRegistry(Date.now, file);
+      const rec = recordingBackend();
+      const retry = createOwnTools({ registry: restored, backend: rec.backend, login: () => LOGIN, mode: () => "enforce", policy: () => permitAll, mintPolicy: () => ({ source: "changed" }), validitySeconds: 3600, audit() {}, log: silentLog });
+      expect(await retry.handle(A, "register_intent_plan", plan("g", "run_command"))).toStartWith("Intent registered: plan plan-1 (new)");
+      expect(rec.mints[0]?.request).toEqual(saved);
+      expect(rec.mints[0]?.request.body.expires_in).toBe(180);
+      expect(restored.get(conversationKey(A))?.pendingRequest).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  test("new, revision and reanchor send the prompt, counted parent and canonical plan key", async () => {
+    const h = harness();
+    await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"));
+    const promptId = h.registry.get(conversationKey(A))!.promptId!;
+    await h.tools.handle(A, "register_intent_plan", { ...plan("g", "write_to_file"), reason: "new work" });
+    await h.tools.handle(A, "trust_reanchor", { updatedPlan: plan("g", "write_to_file"), reason: "reanchor the same plan" });
+    expect(h.mints).toHaveLength(3);
+    for (const [i, m] of h.mints.entries()) {
+      const kind = i === 0 ? "new" : "revision";
+      const parent = i === 0 ? null : `plan-${i}`;
+      expect(m.request.headers).toEqual({ "Idempotency-Key": m.request.key, "X-ArmorIQ-Plan-Kind": kind, "X-ArmorIQ-Prompt-Id": promptId, ...(parent ? { "X-ArmorIQ-Parent-Plan-Id": parent } : {}) });
+      expect(m.request.key).toBe(requestKey({ kind, promptId, parentPlanId: parent, planHash: planHash(m.request.body.plan) }));
+    }
+    expect(h.registry.get(conversationKey(A))?.revisionsThisTurn).toBe(2);
+  });
+
+  test("an expired or empty token never makes an identical plan a no op", async () => {
+    for (const jwt of ["jwt", ""]) {
+      const h = harness();
+      await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"));
+      h.registry.setToken(conversationKey(A), { status: "active", jwt, expiresAt: jwt ? 1 : 9e12, deniedTools: new Set(), heldTools: new Set() });
+      expect(await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toStartWith("Plan not registered:");
+      await h.tools.handle(A, "register_intent_plan", { ...plan("g", "run_command"), reason: "replace unusable token" });
+      expect(h.mints).toHaveLength(2);
+      expect(h.mints[1]?.request.headers["X-ArmorIQ-Plan-Kind"]).toBe("revision");
+    }
+  });
+
+  test("a different plan cannot replace an uncertain counted request", async () => {
+    const registry = createRegistry();
+    registry.open(A);
+    registry.beginPrompt(conversationKey(A), 0);
+    let calls = 0;
+    const tools = createOwnTools({ registry, backend: { ...recordingBackend().backend, async mint() { calls++; return { ok: false, retryable: true, reason: "timeout" }; } }, login: () => LOGIN, mode: () => "enforce", policy: () => permitAll, audit() {}, log: silentLog });
+    await tools.handle(A, "register_intent_plan", plan("first", "run_command"));
+    const pending = registry.get(conversationKey(A))?.pendingRequest;
+    expect(await tools.handle(A, "register_intent_plan", plan("different", "write_to_file"))).toBe("Plan registration not confirmed: a different request is awaiting confirmation; retry that plan first. It will be retried with the same request id.");
+    expect(calls).toBe(1);
+    expect(registry.get(conversationKey(A))?.pendingRequest).toBe(pending);
+  });
+
+  test("a failed reanchor leaves its confirmed revision installed and logs the failure", async () => {
+    const registry = createRegistry();
+    registry.open(A);
+    registry.beginPrompt(conversationKey(A), 0);
+    const rec = recordingBackend();
+    const warnings: string[] = [];
+    const tools = createOwnTools({ registry, backend: { ...rec.backend, reanchor: async () => ({ ok: false, retryable: false, reason: "unavailable" }) }, login: () => LOGIN, mode: () => "enforce", policy: () => permitAll, audit() {}, log: { ...silentLog, warn: text => warnings.push(text) } });
+    await tools.handle(A, "register_intent_plan", plan("g", "run_command"));
+    expect(await tools.handle(A, "trust_reanchor", { updatedPlan: plan("g", "run_command"), reason: "reanchor" })).toStartWith("Intent registered: plan plan-2 (revision)");
+    await tools.settled();
+    expect(registry.get(conversationKey(A))?.countedPlanId).toBe("plan-2");
+    expect(warnings).toContain("reanchor failed");
+  });
+
+  test("without a prompt there is no backend registration or reanchor", async () => {
+    const registry = createRegistry();
+    const rec = recordingBackend();
+    const tools = createOwnTools({ registry, backend: rec.backend, login: () => LOGIN, mode: () => "enforce", policy: () => permitAll, audit() {}, log: silentLog });
+    expect(await tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toBe("Plan not registered: no current user prompt.");
+    expect(await tools.handle(A, "trust_reanchor", { updatedPlan: plan("g", "run_command"), reason: "reanchor" })).toStartWith("Plan not registered:");
+    expect(rec.mints).toEqual([]);
+  });
+  test("an identical confirmed plan is a no op with the exact committed reply", async () => {
+    const h = harness();
+    const first = await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"));
+    const state = h.registry.get(conversationKey(A))!;
+    expect(first).toBe(`Intent registered: plan plan-1 (new), 1 steps. Token valid until ${new Date(state.tokenExpiresAt!).toISOString()}.`);
+    expect(await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toBe(first);
+    expect(h.mints).toHaveLength(1);
+  });
+
+  test("forced monitor while logged in records an explicit local plan and sends nothing", async () => {
+    const registry = createRegistry();
+    const rec = recordingBackend();
+    const tools = createOwnTools({ registry, backend: rec.backend, login: () => LOGIN, mode: () => "monitor", policy: () => permitAll, audit() {}, log: silentLog });
+    expect(await tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toBe("Plan recorded locally, not registered (monitor_mode).");
+    expect(rec.mints).toEqual([]);
+    expect(registry.get(conversationKey(A))?.unregisteredLocalPlan?.goal).toBe("g");
+    expect(registry.get(conversationKey(A))?.countedPlanId).toBeNull();
+  });
+
+  test("an uncertain request remains pending and the same plan resends its descriptor", async () => {
+    const registry = createRegistry();
+    registry.open(A);
+    registry.beginPrompt(conversationKey(A), 0);
+    const descriptors: unknown[] = [];
+    const tools = createOwnTools({ registry, backend: { ...recordingBackend().backend, async mint(...args) {
+      descriptors.push(args[3]);
+      expect(registry.get(conversationKey(A))?.pendingRequest).toBe(args[3]);
+      return { ok: false, retryable: true, reason: "network error" };
+    } }, login: () => LOGIN, mode: () => "enforce", policy: () => permitAll, audit() {}, log: silentLog });
+    const expected = "Plan registration not confirmed: network error. It will be retried with the same request id.";
+    expect(await tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toBe(expected);
+    expect(await tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toBe(expected);
+    expect(descriptors[0]).toBeDefined();
+    expect(descriptors[1]).toBe(descriptors[0]);
+  });
+
+  test("a confirmed backend rejection uses the exact failure reply", async () => {
+    const registry = createRegistry();
+    registry.open(A);
+    registry.beginPrompt(conversationKey(A), 0);
+    const tools = createOwnTools({ registry, backend: { ...recordingBackend().backend, mint: async () => ({ ok: false, retryable: false, reason: "org_required" }) }, login: () => LOGIN, mode: () => "enforce", policy: () => permitAll, audit() {}, log: silentLog });
+    expect(await tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toBe("Plan not registered: org_required.");
+  });
   test("only one registration may be in flight per conversation", async () => {
     const h = harness({ gate: true });
     const first = h.tools.handle(A, "register_intent_plan", plan("g", "run_command"));
     await Bun.sleep(0);
     expect(await h.tools.handle(A, "register_intent_plan", plan("g2", "run_command"))).toBe(
-      "A plan registration is already in progress for this conversation. Wait for it to finish.",
+      "Plan not registered: A plan registration is already in progress for this conversation. Wait for it to finish.",
     );
     h.release();
     await first;
@@ -56,16 +212,16 @@ describe("registration rules", () => {
     const h = harness();
     await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"));
     expect(await h.tools.handle(A, "register_intent_plan", plan("g", "write_to_file"))).toBe(
-      'Plan revision rejected: a plan is already registered. Pass a "reason" explaining why the plan changed.',
+      'Plan not registered: a plan is already registered. Pass a "reason" explaining why the plan changed.',
     );
-    expect(await h.tools.handle(A, "register_intent_plan", { ...plan("g", "write_to_file"), reason: "need a file" })).toMatch(/^Intent revised \(revision 2\)/);
-    expect(await h.tools.handle(A, "trust_reanchor", { updatedPlan: plan("g", "view_file"), reason: "r2" })).toMatch(/^Intent revised \(revision 3\)/);
+    expect(await h.tools.handle(A, "register_intent_plan", { ...plan("g", "write_to_file"), reason: "need a file" })).toMatch(/^Intent registered: plan plan-2 \(revision\)/);
+    expect(await h.tools.handle(A, "trust_reanchor", { updatedPlan: plan("g", "view_file"), reason: "r2" })).toMatch(/^Intent registered: plan plan-3 \(revision\)/);
     expect(await h.tools.handle(A, "register_intent_plan", { ...plan("g", "run_command"), reason: "r3" })).toBe(
-      "Plan revision rejected: at most 2 revisions are allowed per user message. Continue with the current plan or ask the user how to proceed.",
+      "Plan not registered: at most 2 revisions are allowed per user message.",
     );
     h.registry.beginPrompt(conversationKey(A), 7);
     expect(await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toMatch(/^Intent registered:/);
-    expect(await h.tools.handle(A, "register_intent_plan", { ...plan("g", "view_file"), reason: "next prompt revision" })).toMatch(/^Intent revised \(revision 2\)/);
+    expect(await h.tools.handle(A, "register_intent_plan", { ...plan("g", "view_file"), reason: "next prompt revision" })).toMatch(/^Intent registered: plan plan-5 \(revision\)/);
   });
 
   test("a revision re-anchors the old plan and writes a held plan_revision row", async () => {
@@ -102,7 +258,7 @@ describe("registration rules", () => {
     };
     const h = harness({ policy });
     expect(await h.tools.handle(A, "register_intent_plan", plan("g", "write_to_file", "Bash"))).toBe(
-      "Plan rejected: step 2 uses run_command, which the current policy forbids (rule no-shell): shell is off",
+      "Plan not registered: step 2 uses run_command, which the current policy forbids (rule no-shell): shell is off.",
     );
     expect(h.mints).toEqual([]);
     expect(h.registry.root(conversationKey(A))?.plan).toBeNull();
@@ -111,7 +267,7 @@ describe("registration rules", () => {
   test("logged out, the plan is kept locally with an empty id and nothing is minted", async () => {
     const h = harness({ login: null });
     expect(await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toBe(
-      "Intent recorded locally: 1 steps. ArmorIQ is not logged in, so calls are monitored, not enforced.",
+      "Plan recorded locally, not registered (logged_out).",
     );
     expect(h.registry.root(conversationKey(A))?.plan?.id).toBe("");
     expect(h.mints).toEqual([]);
@@ -156,7 +312,7 @@ describe("subagents", () => {
     await h.tools.handle(A, "register_intent_plan", plan("g", "run_command"));
     expect(h.registry.link(CHILD, A)).toBe(true);
     expect(await h.tools.handle(CHILD, "register_intent_plan", plan("mine", "write_to_file"))).toBe(
-      "This is a subagent conversation. It inherits the plan registered by its parent and cannot register its own. Continue within the parent plan.",
+      "Plan not registered: This is a subagent conversation. It inherits the plan registered by its parent and cannot register its own. Continue within the parent plan.",
     );
     expect(await h.tools.handle(CHILD, "trust_revoke", { reason: "x" })).toBe(
       "This is a subagent conversation; its plan belongs to the parent conversation and cannot be revoked here.",
@@ -230,6 +386,8 @@ describe("MCP outcome hand-off", () => {
 describe("a 401 on mint", () => {
   test("reports signed out instead of storing an account_revoked token", async () => {
     const registry = createRegistry();
+    registry.open(A);
+    registry.beginPrompt(conversationKey(A), 0);
     let unauthorized = 0;
     const tools = createOwnTools({
       registry,
@@ -241,7 +399,7 @@ describe("a 401 on mint", () => {
       log: silentLog,
       onUnauthorized: () => unauthorized++,
     });
-    expect(await tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toMatch(/local-only mode/);
+    expect(await tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toBe("Plan not registered: account_revoked.");
     expect(unauthorized).toBe(1);
     expect(registry.root(conversationKey(A))?.token ?? null).toBeNull();
   });
