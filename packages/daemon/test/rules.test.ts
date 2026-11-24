@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { rulesFileText } from "@armorantigravity/intent";
+import { resolvePaths } from "../src/paths.ts";
 import { syncRules } from "../src/rules.ts";
 
 const shipped = readFileSync(path.join(import.meta.dir, "..", "..", "mcp", "rules", "armoriq.md"), "utf8");
@@ -36,4 +37,21 @@ test("a rules file the installer did not write is left alone, and none is create
   const missing = fileIn();
   syncRules(missing, "monitor", quiet);
   expect(existsSync(missing)).toBe(false);
+});
+
+test("a symlinked rules file keeps its link and the target follows the mode", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "agd-rules-"));
+  const target = path.join(dir, "dotfiles-armoriq.md");
+  const link = path.join(dir, "armoriq.md");
+  writeFileSync(target, shipped);
+  symlinkSync(target, link);
+
+  syncRules(link, "monitor", quiet);
+  expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(readFileSync(target, "utf8")).toBe(rulesFileText("monitor"));
+});
+
+test("a daemon under ARMORIQ_HOME, a dev or test one, leaves the real rule alone", () => {
+  expect(resolvePaths({ ARMORIQ_HOME: "/tmp/sandbox-armoriq" }).rulesFile).toBeNull();
+  expect(resolvePaths({}).rulesFile).toEndWith(path.join(".gemini", "config", "rules", "armoriq.md"));
 });

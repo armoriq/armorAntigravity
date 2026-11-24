@@ -348,7 +348,7 @@ function listen(socketPath: string, onConnection: (socket: Socket) => void): Pro
 // published here so they cannot drift: the hook never builds a response, it copies one of these files.
 function publishMode(paths: Paths, mode: Mode, log: Log): void {
   writeAtomic(paths.modeFile, `${mode}\n`, log);
-  syncRules(paths.rulesFile, mode, log);
+  if (paths.rulesFile) syncRules(paths.rulesFile, mode, log);
   try {
     mkdirSync(paths.fallbackDir, { recursive: true, mode: 0o700 });
   } catch (error) {

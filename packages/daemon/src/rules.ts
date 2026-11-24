@@ -1,4 +1,4 @@
-import { readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { rulesFileText } from "@armorantigravity/intent";
 import type { Log } from "./log.ts";
 
@@ -15,10 +15,15 @@ export function syncRules(file: string, mode: "enforce" | "monitor", log: Log): 
   }
   const next = rulesFileText(mode);
   if (current === next || !current.includes(INSTALLED_MARKER)) return;
-  const tmp = `${file}.${process.pid}.tmp`;
+  // Through a symlink (dotfile managers) the target is replaced and the link kept.
+  let target = file;
   try {
-    writeFileSync(tmp, next, { mode: statSync(file).mode & 0o777 });
-    renameSync(tmp, file);
+    target = realpathSync(file);
+  } catch {}
+  const tmp = `${target}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, next, { mode: statSync(target).mode & 0o777 });
+    renameSync(tmp, target);
   } catch (error) {
     rmSync(tmp, { force: true });
     log.warn("rules file not updated", { file, error: String(error) });
