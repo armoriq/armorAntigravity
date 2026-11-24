@@ -16,15 +16,19 @@ import { sandboxHome } from "../../daemon/test/sandbox.ts";
 
 const buildDir = mkdtempSync(path.join(tmpdir(), "agd-hook-build-"));
 const CLIENT = path.join(buildDir, "agd-hook");
+const releaseDir = mkdtempSync(path.join(tmpdir(), "agd-hook-release-"));
+const RELEASE = path.join(releaseDir, "agd-hook");
 const DAEMON_MAIN = path.join(import.meta.dir, "../../daemon/src/main.ts");
 let sandbox: ReturnType<typeof sandboxHome>;
 let daemon: RunningDaemon | null = null;
 
 beforeAll(() => {
-  compileHook(hostTarget(), CLIENT);
+  compileHook(hostTarget(), CLIENT, { dev: true });
+  compileHook(hostTarget(), RELEASE);
 });
 afterAll(() => {
   rmSync(buildDir, { recursive: true, force: true });
+  rmSync(releaseDir, { recursive: true, force: true });
 });
 beforeEach(() => {
   sandbox = sandboxHome();
@@ -52,8 +56,8 @@ const payload = (id: string) => ({ ...base(id), invocationNum: 0, initialNumStep
 const stopPayload = (id: string) => ({ ...base(id), executionNum: 0, fullyIdle: true, terminationReason: "NO_TOOL_CALL", error: "" });
 const toolPayload = (id: string) => ({ ...base(id), toolCall: { name: "write_to_file", args: { TargetFile: "/w/a" } }, stepIdx: 2 });
 
-async function run(args: string[], stdin: string, env: Record<string, string> = {}): Promise<string> {
-  const proc = Bun.spawn([CLIENT, ...args], { stdin: new TextEncoder().encode(stdin), stdout: "pipe", env: { ...process.env, ...env } });
+async function run(args: string[], stdin: string, env: Record<string, string> = {}, client = CLIENT): Promise<string> {
+  const proc = Bun.spawn([client, ...args], { stdin: new TextEncoder().encode(stdin), stdout: "pipe", env: { ...process.env, ...env } });
   const out = await new Response(proc.stdout).text();
   expect(await proc.exited).toBe(0);
   return out;
@@ -182,4 +186,24 @@ test("a socket path too long for sun_path still reaches the daemon", async () =>
   const started = Date.now();
   expect(await hook(["PreToolUse"], JSON.stringify(toolPayload("c-deep")), { ARMORANTIGRAVITY_SOCKET: socketPath })).toEqual(FROM_DAEMON);
   expect(Date.now() - started).toBeLessThan(3_000);
+}, 20_000);
+
+test("a release build ignores the socket, daemon and ARMORIQ_HOME overrides and keeps them from the daemon it starts", async () => {
+  const socketPath = path.join(sandbox.home, "elsewhere", "agd.sock");
+  daemon = await startDaemon({ env: { ARMORANTIGRAVITY_SOCKET: socketPath }, plugins: [decider], log: quiet });
+  const started = path.join(sandbox.home, "override-started");
+  const starter = path.join(sandbox.home, "start-agd");
+  writeFileSync(starter, `#!/bin/sh\ntouch '${started}'\n`, { mode: 0o755 });
+  const envFile = path.join(sandbox.home, "spawned-env");
+  writeFileSync(path.join(releaseDir, "armoriq-agd"), `#!/bin/sh\nenv > '${envFile}'\n`, { mode: 0o755 });
+  const overrides = { ARMORANTIGRAVITY_SOCKET: socketPath, ARMORANTIGRAVITY_DAEMON: starter, ARMORIQ_HOME: path.join(sandbox.home, "alt") };
+
+  expect(await hook(["PreToolUse"], JSON.stringify(toolPayload("c-dev")), overrides)).toEqual(FROM_DAEMON);
+  const out = await run(["PreToolUse"], JSON.stringify(toolPayload("c-release")), overrides, RELEASE);
+  expect(JSON.parse(out)).toEqual(fallbackResponse("PreToolUse", "enforce", DAEMON_UNAVAILABLE_CODE, DAEMON_UNAVAILABLE_REASON));
+  expect(existsSync(started)).toBe(false);
+  const spawnedEnv = await Bun.file(envFile).text();
+  expect(spawnedEnv).toContain(`HOME=${sandbox.home}`);
+  expect(spawnedEnv).not.toContain("ARMORANTIGRAVITY_SOCKET=");
+  expect(spawnedEnv).not.toContain("ARMORIQ_HOME=");
 }, 20_000);

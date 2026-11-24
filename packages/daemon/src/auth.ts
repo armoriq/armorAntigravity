@@ -226,12 +226,12 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
     client,
     headers,
     state: () => state,
-    mode: () => (state.kind === "logged_out" || config.forceMonitor || orgMonitor() ? "monitor" : "enforce"),
+    mode: () => (state.kind === "logged_out" || orgMonitor() ? "monitor" : "enforce"),
     failClosed() {
       if (state.kind === "local_only") {
         return { code: "login_rejected", reason: `the ArmorIQ backend rejected this device's key (HTTP 401); only read calls run until you sign in again with \`${loginCommand(state.login)}\`` };
       }
-      if ((state.kind === "active" || state.kind === "refused") && !config.forceMonitor && !orgMode.known()) {
+      if ((state.kind === "active" || state.kind === "refused") && !orgMode.known()) {
         return { code: "org_mode_unknown", reason: "the ArmorIQ backend has not confirmed this workspace's Tools mode yet; only read calls run until it answers" };
       }
       return null;

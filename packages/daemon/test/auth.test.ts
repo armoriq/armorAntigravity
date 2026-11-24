@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createAuth, loginBinding, readLogin, resolveBackend, type Auth, type AuthState } from "../src/auth.ts";
-import { DEFAULT_CONFIG, type Config } from "../src/config.ts";
+import { DEFAULT_CONFIG, readConfig, type Config } from "../src/config.ts";
 import type { Log } from "../src/log.ts";
 import { sandboxHome } from "./sandbox.ts";
 
@@ -159,9 +159,14 @@ test("402 on mint refuses until a mint succeeds", () => {
   expect(a.state().kind).toBe("active");
 });
 
-test("config mode monitor keeps a logged-in user in monitor", () => {
+test("a config file asking for monitor is reported as drift and does not change the mode", () => {
   save(STAGING, "armorantigravity", "ak_1");
-  expect(start({ forceMonitor: true }).mode()).toBe("monitor");
+  const file = path.join(sandbox.home, "config.json");
+  writeFileSync(file, JSON.stringify({ backendUrl: STAGING, mode: "monitor" }));
+  const warnings: string[] = [];
+  const config = readConfig(file, { ...quiet, warn: (message) => warnings.push(message) });
+  expect(warnings).toEqual([expect.stringContaining("drift")]);
+  expect((auth = createAuth(quiet, { env: { ARMORIQ_ORG_MODE: "enforce" }, config, dataDir: dataDir() })).mode()).toBe("enforce");
 });
 
 test("a signed-in workspace whose mode was never confirmed fails closed instead of monitoring", () => {

@@ -5,10 +5,9 @@ import type { Log } from "./log.ts";
 export interface Config {
   readonly backendUrl: string | null;
   readonly channel: "stable" | "dev";
-  readonly forceMonitor: boolean;
 }
 
-export const DEFAULT_CONFIG: Config = { backendUrl: null, channel: "stable", forceMonitor: false };
+export const DEFAULT_CONFIG: Config = { backendUrl: null, channel: "stable" };
 
 export function readConfig(file: string, log: Log): Config {
   let raw: unknown;
@@ -21,6 +20,6 @@ export function readConfig(file: string, log: Log): Config {
   if (typeof raw !== "object" || raw === null) return DEFAULT_CONFIG;
   const backendUrl = "backendUrl" in raw && typeof raw.backendUrl === "string" && raw.backendUrl.trim() ? raw.backendUrl.trim() : null;
   const channel = "channel" in raw && raw.channel === "dev" ? "dev" : "stable";
-  const forceMonitor = "mode" in raw && raw.mode === "monitor";
-  return { backendUrl, channel, forceMonitor };
+  if ("mode" in raw && raw.mode === "monitor") log.warn("config drift: mode monitor in the daemon config is ignored; the workspace mode decides", { file });
+  return { backendUrl, channel };
 }
