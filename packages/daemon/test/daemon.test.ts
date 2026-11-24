@@ -88,8 +88,8 @@ function recorder() {
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
 function fallbackRows(d: RunningDaemon) {
-  const dir = path.join(d.paths.dataDir, "outbox", "audit");
-  return readdirSync(dir).filter(file => /^\d+-[0-9a-f]+\.jsonl$/.test(file)).flatMap(file => readFileSync(path.join(dir, file), "utf8").trim().split("\n").map(line => JSON.parse(line))).filter(line => line.t === "a").map(line => line.entry.row);
+  const dir = path.join(d.paths.dataDir, "outbox", "audit-v2");
+  return readdirSync(dir).filter(file => /^queue-\d+-[0-9a-f]+\.jsonl$/.test(file)).flatMap(file => readFileSync(path.join(dir, file), "utf8").trim().split("\n").map(line => JSON.parse(line))).filter(line => line.t === "a").map(line => line.entry.row);
 }
 
 test("a hook request gets a decision and the session is keyed by surface", async () => {
@@ -187,7 +187,7 @@ test("enforce mode fails closed on a bad payload or a handler error; monitor fai
   expect(await hook("PostToolUse", { conversationId: "x" })).toBeNull();
   expect(fallbackRows(d)).toEqual(expect.arrayContaining([
     { client_row_id: expect.any(String), session_id: "x", tool: "unknown", action: "unknown", input: {}, executed_at: expect.any(String), decision_code: "internal_error", status: "blocked" },
-    { client_row_id: clientRowId("conv-4", "0", "decision"), session_id: "conv-4", tool: "unknown", action: "unknown", input: {}, executed_at: expect.any(String), decision_code: "internal_error", status: "blocked" },
+    { client_row_id: clientRowId("conv-4", "conv-4:0", "decision"), session_id: "conv-4", tool: "unknown", action: "unknown", input: {}, executed_at: expect.any(String), decision_code: "internal_error", status: "blocked" },
   ]));
   expect(fallbackRows(d)).toHaveLength(2);
 });
@@ -201,7 +201,7 @@ test("a request with another protocol version gets the fallback for its event", 
     id: "r1",
     response: { decision: "deny", reason: "ArmorIQ blocked this call [protocol_mismatch]: unsupported protocol version, expected 1" },
   });
-  expect(fallbackRows(d)).toEqual([{ client_row_id: clientRowId("c", "0", "decision"), session_id: "c", tool: "unknown", action: "unknown", input: {}, executed_at: new Date(0).toISOString(), decision_code: "internal_error", status: "blocked" }]);
+  expect(fallbackRows(d)).toEqual([{ client_row_id: clientRowId("c", "c:0", "decision"), session_id: "c", tool: "unknown", action: "unknown", input: {}, executed_at: new Date(0).toISOString(), decision_code: "internal_error", status: "blocked" }]);
 });
 
 test("a fallback keeps the hook login binding when the daemon now has a different key", async () => {
@@ -233,6 +233,30 @@ test("one connection can carry several requests and each answer keeps its id", a
   });
   expect(replies).toContainEqual({ v: 1, id: "a", response: { decision: "allow" } });
   expect(replies).toContainEqual({ v: 1, id: "b", response: null });
+});
+
+test("an unreadable fallback identity preserves other replies on a pipelined connection", async () => {
+  login();
+  const d = await start([{ name: "thrower", setup: () => ({ decide: () => { throw new Error("guard failed"); } }) }]);
+  writeFileSync(path.join(d.paths.dataDir, "intent-state.json"), "unreadable state");
+  const replies = await new Promise<unknown[]>((resolve, reject) => {
+    const socket = connect(d.paths.socket);
+    let buffer = "";
+    const timer = setTimeout(() => { socket.destroy(); reject(new Error("missing pipelined reply")); }, 1_000);
+    socket.on("error", error => { clearTimeout(timer); reject(error); });
+    socket.on("data", chunk => {
+      buffer += chunk;
+      const lines = buffer.split("\n").filter(Boolean);
+      if (lines.length < 2) return;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(lines.map(line => JSON.parse(line)));
+    });
+    socket.write(`${JSON.stringify({ v: 1, id: "a", event: "PreToolUse", payload: toolPayload("broken") })}\n${JSON.stringify({ v: 1, id: "b", event: "PostToolUse", payload: {} })}\n`);
+  });
+  expect(replies).toContainEqual({ v: 1, id: "a", response: { decision: "deny", reason: "ArmorIQ blocked this call [internal_error]: guard error" } });
+  expect(replies).toContainEqual({ v: 1, id: "b", response: null });
+  expect(await auditStatus({ ARMORIQ_BACKEND_URL: STAGING, ARMORIQ_API_KEY: "ak_test" })).toMatchObject({ pending: 0, captureFailures: 1 });
 });
 
 test("stop does not wait on a client that connected and never sent a line", async () => {

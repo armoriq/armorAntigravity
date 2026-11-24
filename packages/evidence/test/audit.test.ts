@@ -70,7 +70,7 @@ describe("audit pump", () => {
     await pump.stop();
     expect(sent().every(batch => batch.length <= AUDIT_SIZE_LIMITS.maxBatchRows)).toBe(true);
     expect(new Set(sent().flatMap(batch => batch.slice(0, 50).map(row => row.client_row_id))).size).toBe(400);
-    expect(readdirSync(path.join(tmp.dir, "outbox", "audit", "dead"))).toEqual([]);
+    expect(readdirSync(path.join(tmp.dir, "outbox", "audit-v2", "dead"))).toEqual([]);
   });
 
   test("an invalid row is dead-lettered, a deferred row is retried, accepted rows are not resent", async () => {
@@ -90,7 +90,7 @@ describe("audit pump", () => {
     expect(first?.length).toBe(3);
     expect(second?.map((r) => r.input)).toEqual([{ CommandLine: "echo 3" }]);
     expect(second?.[0]?.client_row_id).toBe(first?.[2]?.client_row_id ?? "");
-    const deadDir = path.join(tmp.dir, "outbox", "audit", "dead");
+    const deadDir = path.join(tmp.dir, "outbox", "audit-v2", "dead");
     const dead = readdirSync(deadDir).map((f) => readFileSync(path.join(deadDir, f), "utf8")).join("");
     expect(dead).toContain("invalid row: action must be a string");
     expect(dead).toContain("echo 1");
@@ -123,15 +123,15 @@ describe("audit pump", () => {
     await pump.stop();
   });
 
-  test("a 413 retries the intact batch without legacy bisection", async () => {
+  test("a 413 retains every row and reduces the next batch without legacy bisection", async () => {
     let calls = 0;
     const { pump, sent } = setup(({ body }) => (++calls === 1 ? { status: 413, body: {} } : { body: { written: rowsOf(body).length, failures: [] } }));
     for (const n of [1, 2, 3, 4, 5]) pump.enqueue(row(n));
     pump.start();
-    await until(() => (pump.kick(), sent().length >= 2));
+    await until(() => (pump.kick(), pump.status().pending === 0));
     await pump.stop();
-    expect(sent().map(batch => batch.length)).toEqual([5, 5]);
-    expect(sent()[1]?.map(row => row.client_row_id)).toEqual(sent()[0]?.map(row => row.client_row_id));
+    expect(sent().map(batch => batch.length)).toEqual([5, 2, 2, 1]);
+    expect(sent().slice(1).flatMap(batch => batch.map(row => row.client_row_id))).toEqual(sent()[0]!.map(row => row.client_row_id));
   });
 
   test("stop() sends what is queued before exiting", async () => {

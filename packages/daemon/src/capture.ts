@@ -1,21 +1,22 @@
 import { clientRowId, createOutbox, fallbackAuditRow, type OutboxStatus, type QueueLogin } from "@armorantigravity/core";
+import { auditLogin, callIdOf } from "@armorantigravity/evidence";
 import type { AuditIdentity, DaemonRequest } from "@armorantigravity/protocol";
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { readLogin, type Login } from "./auth.ts";
+import { readLogin } from "./auth.ts";
 import { readConfig } from "./config.ts";
 import { resolvePaths, type Env } from "./paths.ts";
 import { surfaceFromTranscriptPath } from "./surface.ts";
 
 const quiet = { info() {}, warn() {}, error() {} };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-export const queueLogin = (login: Login | null): QueueLogin | null => login ? { backend: login.backend, keyId: createHash("sha256").update(login.apiKey).digest("hex") } : null;
+export const queueLogin = auditLogin;
 
 // Read only the conversation relationship. Tokens and tool arguments never enter the fallback row.
 export function auditIdentity(request: Pick<DaemonRequest, "id" | "payload">, dataDir: string): AuditIdentity {
   const payload = request.payload && typeof request.payload === "object" ? request.payload as Record<string, unknown> : {};
   let sessionId = typeof payload.conversationId === "string" && payload.conversationId ? payload.conversationId : undefined;
+  const conversationId = sessionId;
   if (sessionId && typeof payload.transcriptPath === "string") {
     try {
       const state = JSON.parse(readFileSync(path.join(dataDir, "intent-state.json"), "utf8"));
@@ -35,7 +36,7 @@ export function auditIdentity(request: Pick<DaemonRequest, "id" | "payload">, da
     }
   }
   const hasStep = typeof payload.stepIdx === "number" && Number.isInteger(payload.stepIdx);
-  const rowId = sessionId && hasStep ? clientRowId(sessionId, String(payload.stepIdx), "decision")
+  const rowId = sessionId && conversationId && hasStep ? clientRowId(sessionId, callIdOf(conversationId, payload.stepIdx as number), "decision")
     : UUID.test(request.id) ? request.id : clientRowId(sessionId ?? "unknown", request.id, "decision");
   return { rowId, ...(sessionId ? { sessionId } : {}) };
 }
@@ -54,7 +55,8 @@ export async function captureFallback(dataDir: string, identity: AuditIdentity, 
 export function prepareHookCapture(request: Pick<DaemonRequest, "id" | "payload" | "receivedAt">, env: Env) {
   const paths = resolvePaths(env);
   const config = readConfig(paths.configFile, quiet);
-  let binding = queueLogin(readLogin(env, config.backendUrl));
+  const login = readLogin(env, config.backendUrl);
+  let binding = queueLogin(login);
   let identity: AuditIdentity;
   try { identity = auditIdentity(request, paths.dataDir); }
   catch {
@@ -63,14 +65,18 @@ export function prepareHookCapture(request: Pick<DaemonRequest, "id" | "payload"
     binding = null;
   }
   const at = request.receivedAt;
-  return { identity: { ...identity, binding }, stop: () => captureFallback(paths.dataDir, identity, at, binding) };
+  return { identity: { ...identity, binding }, stop: () => captureFallback(paths.dataDir, identity, at, binding, login === null) };
 }
 
 export async function auditStatus(env: Env): Promise<OutboxStatus> {
   const paths = resolvePaths(env);
   const config = readConfig(paths.configFile, quiet);
   const binding = queueLogin(readLogin(env, config.backendUrl));
-  const outbox = createOutbox(paths.dataDir, "audit", quiet, { login: () => binding });
+  // Construction with no login opens no writer. Status then uses the actual credential
+  // without prepare, so a status command cannot add an empty queue on each run.
+  let statusLogin: QueueLogin | null = null;
+  const outbox = createOutbox(paths.dataDir, "audit", quiet, { login: () => statusLogin });
+  statusLogin = binding;
   await outbox.persist();
   return outbox.status();
 }

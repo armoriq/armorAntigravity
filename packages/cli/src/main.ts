@@ -184,7 +184,7 @@ async function cmdStatus(): Promise<number> {
   info(`daemon: ${(await waitForSocket(l.socket, 0)) ? `listening on ${l.socket}` : "not running"}`);
   info(`updates: ${updateLine(l.dataDir)}`);
   const audit = await auditStatus(process.env);
-  info(`audit: ${audit.pending} pending, ${audit.undeliverable} undeliverable, ${audit.deadLetters} dead letters, ${audit.captureFailures} capture failures`);
+  info(`audit: ${audit.pending} pending, ${audit.undeliverable} undeliverable, ${audit.deadLetters} dead letters, ${audit.captureFailures} capture failures, ${audit.legacyPending ?? 0} written by an older version without a login binding`);
   reportSurfaces();
   return 0;
 }

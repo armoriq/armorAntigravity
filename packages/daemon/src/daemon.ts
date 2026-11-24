@@ -210,12 +210,20 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
       if (response && "decision" in response && response.decision === "deny") {
         const value = raw as { id?: string; payload?: unknown; receivedAt?: number; audit?: { rowId?: unknown; sessionId?: unknown; binding?: { backend?: unknown; keyId?: unknown } | null } };
         const carried = value.audit;
-        const identity = carried && typeof carried.rowId === "string" && /^[0-9a-f-]{36}$/i.test(carried.rowId)
-          ? { rowId: carried.rowId, ...(typeof carried.sessionId === "string" ? { sessionId: carried.sessionId } : {}) }
-          : auditIdentity({ id: value.id || crypto.randomUUID(), payload: value.payload }, paths.dataDir);
-        const binding = carried ? carried.binding && typeof carried.binding.backend === "string" && typeof carried.binding.keyId === "string"
+        let binding = carried ? carried.binding && typeof carried.binding.backend === "string" && typeof carried.binding.keyId === "string"
           ? { backend: carried.binding.backend, keyId: carried.binding.keyId } : null
           : queueLogin("login" in capturedAuth ? capturedAuth.login : null);
+        let identity;
+        try {
+          identity = carried && typeof carried.rowId === "string" && /^[0-9a-f-]{36}$/i.test(carried.rowId)
+            ? { rowId: carried.rowId, ...(typeof carried.sessionId === "string" ? { sessionId: carried.sessionId } : {}) }
+            : auditIdentity({ id: value.id || crypto.randomUUID(), payload: value.payload }, paths.dataDir);
+        } catch {
+          // An unreadable relationship counts locally. It must not drop other requests
+          // sharing this socket or become a row under a guessed conversation.
+          identity = { rowId: value.id || crypto.randomUUID() };
+          binding = null;
+        }
         await captureFallback(paths.dataDir, identity, typeof value.receivedAt === "number" && Number.isFinite(value.receivedAt) ? value.receivedAt : Date.now(), binding, capturedAuth.kind === "logged_out");
       }
       return response;

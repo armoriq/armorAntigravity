@@ -17,8 +17,8 @@ const ok = (rejected: Extract<SendResult<Item>, { ok: true }>["rejected"] = []) 
 const CHILD = join(import.meta.dir, "./helpers/outbox-child.ts");
 
 function liveFiles(dir: string): string[] {
-  const root = join(dir, "outbox", "audit");
-  return existsSync(root) ? readdirSync(root).filter((n) => /^\d+-[0-9a-f]+\.jsonl$/.test(n)) : [];
+  const root = join(dir, "outbox", "audit-v2");
+  return existsSync(root) ? readdirSync(root).filter((n) => /^queue-\d+-[0-9a-f]+\.jsonl$/.test(n)) : [];
 }
 
 function spawnChild(dir: string, prefix: string, count: number, backend: string, mode = "") {
@@ -51,8 +51,6 @@ describe("outbox", () => {
     let fail = false;
     const outbox = createOutbox<Item>(dir, "audit", memoryLog().log, point => { if (point === "append" && fail) throw new Error("injected append failure"); });
     outbox.enqueue({ id: "a" });
-    const [name] = liveFiles(dir);
-    const file = join(dir, "outbox", "audit", name!);
     fail = true;
     expect(() => outbox.enqueue({ id: "b" })).toThrow("injected append failure");
     expect(outbox.status().captureFailures).toBe(1);
@@ -60,8 +58,8 @@ describe("outbox", () => {
     outbox.enqueue({ id: "b" });
     outbox.enqueue({ id: "c" });
     await outbox.persist();
-    const ids = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter(l => l.t === "a").map(l => l.entry.row.id);
-    expect(ids).toEqual(["a", "b", "c"]);
+    const ids = liveFiles(dir).flatMap(name => readFileSync(join(dir, "outbox", "audit-v2", name), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter(l => l.t === "a").map(l => l.entry.row.id));
+    expect(ids.sort()).toEqual(["a", "b", "c"]);
   });
 
   test(`a rejected row is retried until ${MAX_ATTEMPTS} attempts, then dead-lettered`, async () => {
@@ -78,9 +76,9 @@ describe("outbox", () => {
     for (let i = 0; i < 20; i++) await outbox.drain(send, 10);
     expect(sends).toBe(MAX_ATTEMPTS);
     await outbox.persist();
-    const deadDir = join(dir, "outbox", "audit", "dead");
+    const deadDir = join(dir, "outbox", "audit-v2", "dead");
     const dead = readdirSync(deadDir).flatMap((f) => readFileSync(join(deadDir, f), "utf8").trim().split("\n")).map((l) => JSON.parse(l));
-    expect(dead.map((d) => [d.item.id, d.attempts, d.error])).toEqual([["flaky", MAX_ATTEMPTS, "row timeout"]]);
+    expect(dead.map((d) => [d.row.id, d.attempts, d.reason])).toEqual([["flaky", MAX_ATTEMPTS, "row timeout"]]);
     expect(lines.filter((l) => l.message === "outbox row dead-lettered")).toHaveLength(1);
   });
 
@@ -94,7 +92,7 @@ describe("outbox", () => {
     await outbox.drain(send, 10);
     expect(sends).toBe(1);
     await outbox.persist();
-    expect(readdirSync(join(dir, "outbox", "audit", "dead"))).toHaveLength(1);
+    expect(readdirSync(join(dir, "outbox", "audit-v2", "dead"))).toHaveLength(1);
   });
 
   test("persist writes unsent rows to the process file", async () => {
@@ -105,8 +103,8 @@ describe("outbox", () => {
     await outbox.drain(async (batch) => ok(), 1);
     await outbox.persist();
     const [file] = liveFiles(dir);
-    expect(file).toMatch(new RegExp(`^${process.pid}-[0-9a-f]+\\.jsonl$`));
-    const text = readFileSync(join(dir, "outbox", "audit", file!), "utf8");
+    expect(file).toMatch(new RegExp(`^queue-${process.pid}-[0-9a-f]+\\.jsonl$`));
+    const text = readFileSync(join(dir, "outbox", "audit-v2", file!), "utf8");
     expect(text).toContain('"id":"b"');
   });
 
@@ -115,7 +113,7 @@ describe("outbox", () => {
     const outbox = createOutbox<Item>(dir, "audit", memoryLog().log);
     outbox.enqueue({ id: "a" });
     expect(liveFiles(dir)).toHaveLength(1);
-    expect(readFileSync(join(dir, "outbox", "audit", liveFiles(dir)[0]!), "utf8")).toContain('"row":{"id":"a"}');
+    expect(readFileSync(join(dir, "outbox", "audit-v2", liveFiles(dir)[0]!), "utf8")).toContain('"row":{"id":"a"}');
     await Bun.sleep(250);
     expect(liveFiles(dir)).toHaveLength(1);
   });
@@ -129,7 +127,7 @@ describe("outbox", () => {
     await outbox.drain(async () => ok(), 8);
     for (let i = 9; i < 11; i++) outbox.enqueue({ id: `big-${i}`, pad });
     await Bun.sleep(150);
-    const file = join(dir, "outbox", "audit", liveFiles(dir)[0]!);
+    const file = join(dir, "outbox", "audit-v2", liveFiles(dir)[0]!);
     expect(statSync(file).size).toBeLessThan(ROTATE_BYTES);
     const ids = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter(l => l.t === "a").map(l => l.entry.row.id);
     expect(ids).toEqual(["big-8", "big-9", "big-10"]);

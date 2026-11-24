@@ -1,22 +1,11 @@
 import type { AuditRow, BatchAck, Login } from "@armorantigravity/core";
-import { AUDIT_SIZE_LIMITS } from "@armorantigravity/core";
 import type { Uploads } from "../context.ts";
-import { authHeaders, type CallResult } from "./http.ts";
-export type QueuedAuditRow = AuditRow & { readonly client_row_id: string };
-export const PAYLOAD_TOO_LARGE = 413;
+import { isReloginRequired } from "@armoriq/sdk-dev/dist/credentials.js";
+import { authHeaders, retryAfterMs, type CallResult } from "./http.ts";
 
 // The backend can spend 15 s on a batch (10 s budget plus a 5 s row timeout). Abandoning
 // sooner makes the client resend batches the server already committed.
 export const BATCH_TIMEOUT_MS = 20_000;
-export const MAX_BATCH_ROWS = AUDIT_SIZE_LIMITS.maxBatchRows;
-
-function retryAfterMs(header: string | null, now: number): number | undefined {
-  if (!header) return undefined;
-  const seconds = Number(header);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-  const at = Date.parse(header);
-  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
-}
 
 // An index outside the batch means the ack does not describe these rows, so none counts as written.
 export function parseFailures(body: unknown, rowCount: number): BatchAck["failures"] | null {
@@ -47,9 +36,15 @@ export function parseAuditReply(status: number, body: unknown, headers: Headers,
     })) return failed("audit batch returned an invalid results list");
     return { ok: true, value: { written: results.filter(r => r.outcome === "accepted" || r.outcome === "duplicate").length, failures: [], results, ...(delay === undefined ? {} : { retryAfterMs: delay }) } };
   }
-  if (status === 403) return { ok: false, retryable: false, relogin: true, status, reason: "audit batch authentication refused" };
+  if (isReloginRequired(status, body)) return { ok: false, retryable: false, relogin: true, status, reason: "relogin_required" };
   if (status < 200 || status >= 300) {
-    return { ok: false, retryable: true, status, unreachable: status >= 500, legacyRefusal: status === 400 || status === 422,
+    const jsonRefusal = body !== null && typeof body === "object" && !Array.isArray(body);
+    const refusal = body as { statusCode?: unknown; message?: unknown; error?: unknown } | null;
+    const legacyRefusal = (status === 400 || status === 422) && jsonRefusal && refusal?.statusCode === status &&
+      typeof refusal.error === "string" && (typeof refusal.message === "string" || (Array.isArray(refusal.message) && refusal.message.every(message => typeof message === "string")));
+    const inProgress = status === 409 && jsonRefusal && (body as { error?: unknown }).error === "request_in_progress";
+    const nonTransient = status >= 400 && status < 500 && ![400, 401, 403, 408, 422, 429].includes(status) && !inProgress;
+    return { ok: false, retryable: true, status, unreachable: status >= 500, legacyRefusal, nonTransient, tooLarge: status === 413,
       ...(delay === undefined ? {} : { retryAfterMs: delay }), reason: `audit batch returned ${status}` };
   }
   const failures = parseFailures(body, rows.length);
@@ -83,5 +78,6 @@ export async function postAuditBatch(
     body = JSON.parse(text);
   } catch {}
   uploads.report(response.status, body);
+  if (response.status >= 200 && response.status < 300) uploads.authenticationSucceeded?.(login);
   return parseAuditReply(response.status, body, response.headers, rows);
 }

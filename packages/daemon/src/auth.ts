@@ -2,7 +2,7 @@ import { clientHeaders, type ClientIdentity } from "@armoriq/sdk-dev/dist/client
 import { getCredentialsPath, isReloginRequired, loadLoginContext } from "@armoriq/sdk-dev/dist/credentials.js";
 import type { Mode } from "@armorantigravity/protocol";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import pkg from "../package.json" with { type: "json" };
@@ -46,10 +46,14 @@ export interface Auth {
   orgMonitor(): boolean;
   // Null while logged out or after relogin_required: audit, usage and trace pumps must stay idle.
   uploadLogin(): Login | null;
+  // Retain the original credential for authentication probes while uploads are paused.
+  authenticationLogin(): Login | null;
   // Call with every backend response a mint, upload or reachability probe gets; it applies the PRD 4a error
   // rules, except that a 401 means signed out (spec 0002 posture).
   reportStatus(status: number, body: unknown, source: "mint" | "upload" | "probe"): void;
   onChange(listener: (state: AuthState) => void): () => void;
+  authenticationSucceeded(login: Pick<Login, "backend" | "apiKey">): void;
+  onAuthenticated(listener: (login: Login) => void): () => void;
   stop(): void;
 }
 
@@ -104,7 +108,7 @@ export function readLogin(env: Env, configuredBackend: string | null): Login | n
   return { backend, ...identity, ...deviceIdentity(env, path.dirname(getCredentialsPath())) };
 }
 
-export const loginBinding = (login: Login) => createHash("sha256").update(`${login.backend}\n${login.apiKey}`).digest("hex").slice(0, 16);
+export const loginBinding = (login: Pick<Login, "backend" | "apiKey">) => createHash("sha256").update(`${login.backend}\n${login.apiKey}`).digest("hex").slice(0, 16);
 
 // Reads credentials at startup and on directory change; state() never touches disk.
 export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: string; pollMs?: number; orgMode?: OrgModeStore }): Auth {
@@ -115,6 +119,7 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
   const client = clientIdentity(config.channel);
   const headers = { ...clientHeaders(client), "X-ArmorIQ-Monitor-Aware": "1" };
   const listeners = new Set<(state: AuthState) => void>();
+  const authenticated = new Set<(login: Login) => void>();
   const warned = new Set<string>();
   const markerPath = (login: Login) => path.join(dataDir, `relogin-required-${loginBinding(login)}`);
   let state = fromLogin(load());
@@ -226,6 +231,7 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
     orgMode,
     orgMonitor,
     uploadLogin: () => (state.kind === "active" || state.kind === "refused" ? state.login : null),
+    authenticationLogin: () => "login" in state ? state.login : null,
 
     reportStatus(status, body, source) {
       if (!("login" in state)) return;
@@ -240,6 +246,20 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
     onChange(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+
+    authenticationSucceeded(login) {
+      if (!("login" in state) || loginBinding(state.login) !== loginBinding(login)) return;
+      if (state.kind === "relogin_required") {
+        try { unlinkSync(markerPath(state.login)); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      }
+      if (state.kind === "relogin_required" || state.kind === "local_only") set({ kind: "active", login: state.login });
+      for (const listener of authenticated) listener(state.login);
+    },
+    onAuthenticated(listener) {
+      authenticated.add(listener);
+      return () => authenticated.delete(listener);
     },
 
     stop() {

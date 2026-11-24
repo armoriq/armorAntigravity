@@ -49,7 +49,7 @@ export async function createUsageClient(login: Login, uploads: Uploads): Promise
   const sdk = await import("@armoriq/sdk-dev");
   const client = new sdk.ArmorIQClient({ apiKey: login.apiKey, backendEndpoint: login.backend, product: PRODUCT, client: uploads.client });
   const result = <T>(r: UsageCallResult<T>): UsageResult<T> => {
-    if (r.ok) return { ok: true, value: r.value };
+    if (r.ok) { uploads.authenticationSucceeded?.(login); return { ok: true, value: r.value }; }
     if (r.status !== undefined) uploads.report(r.status, r.reloginRequired ? { error: "relogin_required" } : { message: r.reason });
     return {
       ok: false,

@@ -33,6 +33,7 @@ export function createTokenPump(deps: {
   mode?: () => Mode;
   log: Log;
   onUnauthorized?: () => void;
+  onAuthenticated?: (login: Login) => void;
   now?: () => number;
   checkEveryMs?: number;
   idleAfterStopMs?: number;
@@ -153,6 +154,7 @@ export function createTokenPump(deps: {
         registry.setPendingRequest(c.key, null, generation);
         return;
       }
+      if (token.status === "active") deps.onAuthenticated?.(auth);
       if (result.value.legacy) logLegacyBackend(log);
       registry.setToken(c.key, token, generation, planId);
       registry.setPendingRequest(c.key, null, generation);

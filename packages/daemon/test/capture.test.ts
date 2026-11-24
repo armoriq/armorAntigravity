@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { AUDIT_SIZE_LIMITS, createOutbox, clientRowId } from "@armorantigravity/core";
 import { createRegistry, conversationKey } from "@armorantigravity/intent";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { auditIdentity, auditStatus, captureFallback, prepareHookCapture, queueLogin } from "../src/capture.ts";
@@ -16,6 +16,37 @@ function store() {
   dirs.push(root);
   return { root, dir: path.join(root, "armorantigravity"), env: { ARMORIQ_HOME: root, ARMORIQ_API_KEY: login.apiKey, ARMORIQ_BACKEND_URL: login.backend } };
 }
+
+test("released v0.2.0 files stay untouched and rows without a binding appear in status", async () => {
+  const { dir, env } = store();
+  const released = path.join(dir, "outbox", "audit");
+  mkdirSync(path.join(released, "dead"), { recursive: true });
+  const oldRow = { client_row_id: crypto.randomUUID(), tool: "unknown", action: "unknown", input: {}, status: "blocked" };
+  const journal = path.join(released, "999999999-deadbeef.jsonl");
+  const dead = path.join(released, "dead", "999999999-deadbeef.jsonl");
+  const lock = path.join(released, ".adopt.lock");
+  // These are the append, acknowledgement and dead letter formats shipped in v0.2.0.
+  writeFileSync(journal, [
+    { t: "a", id: "settled", n: 0, v: oldRow },
+    { t: "k", ids: ["settled"] },
+    { t: "a", id: "pending", n: 3, v: oldRow },
+  ].map(line => JSON.stringify(line) + "\n").join(""));
+  writeFileSync(dead, JSON.stringify({ item: oldRow, attempts: 10 }) + "\n");
+  writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+  const snapshot = () => [journal, dead, lock].map(file => ({ file, bytes: readFileSync(file), mtime: statSync(file).mtimeMs, ino: statSync(file).ino }));
+  const before = snapshot();
+  await captureFallback(dir, { rowId: crypto.randomUUID() }, 1_000, binding);
+  const queue = createOutbox(dir, "audit", quiet, { login: () => binding });
+  try {
+    const sent: unknown[] = [];
+    await queue.drain(async rows => { sent.push(...rows); return { ok: true, rejected: [] }; });
+    expect(sent).toHaveLength(1);
+    expect(sent).not.toContainEqual(oldRow);
+    expect(await auditStatus(env)).toMatchObject({ pending: 1, undeliverable: 1, deadLetters: 1, legacyPending: 1 });
+    expect(snapshot()).toEqual(before);
+    expect(readdirSync(released).sort()).toEqual([".adopt.lock", "999999999-deadbeef.jsonl", "dead"]);
+  } finally { await queue.persist(); }
+});
 
 test("the hook snapshots root identity and login before an asynchronous decision or a login change", async () => {
   const { dir, env } = store();
@@ -34,11 +65,32 @@ test("the hook snapshots root identity and login before an asynchronous decision
   await captured.stop();
   const outbox = createOutbox(dir, "audit", quiet, { login: () => binding });
   expect(outbox.readPending().map(entry => entry.row)).toEqual([{
-    client_row_id: clientRowId("root", "7", "decision"), session_id: "root", tool: "unknown", action: "unknown", input: {},
+    client_row_id: clientRowId("root", "child:7", "decision"), session_id: "root", tool: "unknown", action: "unknown", input: {},
     executed_at: new Date(1_000).toISOString(), decision_code: "internal_error", status: "blocked",
   }]);
   expect(outbox.status().undeliverable).toBe(0);
   await outbox.persist();
+});
+
+test("parent and child fallback stops at the same step have distinct ids", async () => {
+  const { dir } = store();
+  const registry = createRegistry(() => 1_000, path.join(dir, "intent-state.json"));
+  const root = { surface: "cli" as const, conversationId: "root" };
+  const child = { surface: "cli" as const, conversationId: "child" };
+  registry.open(root);
+  registry.open(child);
+  registry.link(child, root);
+  const identity = (conversationId: string) => auditIdentity({ id: crypto.randomUUID(), payload: { conversationId, stepIdx: 7, transcriptPath: `/.gemini/antigravity-cli/brain/${conversationId}/t.jsonl` } }, dir);
+  const parentId = identity("root");
+  const childId = identity("child");
+  expect(parentId.sessionId).toBe("root");
+  expect(childId.sessionId).toBe("root");
+  expect(childId.rowId).not.toBe(parentId.rowId);
+  await captureFallback(dir, parentId, 1_000, binding);
+  await captureFallback(dir, childId, 1_000, binding);
+  const queue = createOutbox(dir, "audit", quiet, { login: () => binding });
+  expect(queue.readPending()).toHaveLength(2);
+  await queue.persist();
 });
 
 test("a missing host call id carries the UUID allocated on entry through fallback capture", () => {
@@ -54,7 +106,7 @@ test("logged out stops create no queue, while missing identity stays a local cap
   expect(existsSync(dir)).toBe(false);
   await captureFallback(dir, identity, 1_000, null);
   const outbox = createOutbox(dir, "audit", quiet, { login: () => binding });
-  expect(outbox.status()).toEqual({ pending: 0, undeliverable: 0, deadLetters: 0, captureFailures: 1 });
+  expect(outbox.status()).toEqual({ pending: 0, undeliverable: 0, deadLetters: 0, captureFailures: 1, legacyPending: 0, corruptRecords: 0 });
   await outbox.persist();
 });
 
@@ -67,7 +119,17 @@ test("status counts paused rows, other login rows, dead letters and capture fail
   outbox.captureFailure();
   await outbox.drain(async () => ({ ok: false, relogin: true }));
   await outbox.persist();
-  const expected = { pending: 1, undeliverable: 1, deadLetters: 1, captureFailures: 1 };
+  const expected = { pending: 1, undeliverable: 1, deadLetters: 1, captureFailures: 1, legacyPending: 0, corruptRecords: 0 };
   expect(await auditStatus(env)).toEqual(expected);
   expect(await auditStatus({ ...env, ARMORIQ_API_KEY: "ak_test_other_login" })).toEqual(expected);
+});
+
+test("repeated status calls create no queue writers", async () => {
+  const { dir, env } = store();
+  await auditStatus(env);
+  const queues = () => readdirSync(path.join(dir, "outbox", "audit-v2")).filter(file => /^queue-\d+-[0-9a-f]+\.jsonl$/.test(file));
+  expect(queues()).toEqual([]);
+  await auditStatus(env);
+  await auditStatus(env);
+  expect(queues()).toEqual([]);
 });

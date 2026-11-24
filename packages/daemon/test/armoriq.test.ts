@@ -27,9 +27,9 @@ afterAll(() => {
 type Capture = { event: HookEvent; stdin: Record<string, unknown> };
 
 // The r3 agy CLI run: shell, write, read, web search and MCP calls, each with its pre and post hooks.
-function captured(): Map<number, Capture> {
+function captured(file = CAPTURE): Map<number, Capture> {
   const out = new Map<number, Capture>();
-  for (const line of readFileSync(CAPTURE, "utf8").split("\n").slice(1)) {
+  for (const line of readFileSync(file, "utf8").split("\n").slice(1)) {
     if (!line.trim()) continue;
     const rec: unknown = JSON.parse(line);
     if (typeof rec !== "object" || rec === null || !("source" in rec) || rec.source !== "global") continue;
@@ -52,6 +52,7 @@ function stubBackend() {
   const mode: { now: "shadow" | "enforce"; notices: boolean } = { now: "enforce", notices: false };
   const policy = {
     schemaVersion: "armor.policy.v1",
+    intentRequired: true,
     defaults: { decision: "allow" },
     statements: [{ id: "org-no-web-search", effect: "forbid", action: { type: "tool", eq: "search_web" } }],
   };
@@ -71,6 +72,7 @@ function stubBackend() {
       if (health.now === "down") return new Response("", { status: 503 });
       if (route === "GET /policy/bundles/current") return Response.json(bundle.now, { headers: { ETag: `"${Bun.hash(JSON.stringify(bundle.now))}"` } });
       if (route === "GET /policies/profiles/active") return Response.json({ version: 1, policy, updatedBy: "dashboard", publishedAt: "2026-10-12T10:00:00.000Z", enforcementMode: mode.now, monitorNotices: mode.notices });
+      if (route === "GET /mcp/servers") return Response.json({ servers: [{ mcpName: "denied-server", status: "denied" }] });
       // The fields the SDK's getIntentToken reads from conmap's /iap/sdk/token.
       if (route === "POST /iap/sdk/token") {
         return Response.json({ success: true, plan_id: "plan-wiring-1", plan_hash: "h", token: { expires_at: Date.now() / 1000 + 3600, signature: "sig" }, jwt_token: "jwt", policy_validation: { validated: false } });
@@ -84,7 +86,7 @@ function stubBackend() {
       return Response.json({ message: `Cannot ${route}`, statusCode: 404 }, { status: 404 });
     },
   });
-  return { url: `http://127.0.0.1:${server.port}`, seen, health, bundle, mode, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}`, seen, health, bundle, policy, mode, stop: () => server.stop(true) };
 }
 
 function isRows(body: unknown): body is { rows: Record<string, unknown>[] } {
@@ -163,7 +165,9 @@ test("captured agy hooks get policy, plan and drift decisions, and every decisio
   expect(await hook(at(1))).toEqual({ injectSteps: [{ type: "ephemeralMessage", text: expect.stringContaining("register_intent_plan") }] });
   expect(await hook(at(19))).toEqual({ decision: "allow" });
   expect(await hook(at(27))).toEqual({ decision: "deny", reason: expect.stringContaining("[policy_forbid]") });
-  expect(await hook(writeFile)).toEqual({ decision: "deny", reason: expect.stringContaining("[intent_plan_missing]") });
+  const childWrite = captured(path.join(path.dirname(CAPTURE), "r4-subagent-browser.jsonl")).get(25)!;
+  expect(childWrite.stdin.stepIdx).toBe(writeFile.stdin.stepIdx);
+  expect(await hook(childWrite)).toEqual({ decision: "deny", reason: expect.stringContaining("[intent_plan_missing]") });
 
   // agy proxies the armoriq MCP server's tools through call_mcp_tool, as in the captured echo call.
   const plan = { goal: "Print a greeting", steps: [{ action: "run_command", description: "echo a greeting" }] };
@@ -176,7 +180,7 @@ test("captured agy hooks get policy, plan and drift decisions, and every decisio
   expect(await hook(at(9))).toBeNull();
   expect(await hook(runCommand)).toEqual({ decision: "allow" });
   expect(await hook(at(5))).toBeNull();
-  expect(await hook({ ...writeFile, stdin: { ...writeFile.stdin, stepIdx: 100 } })).toEqual({ decision: "deny", reason: expect.stringContaining("[intent_drift]") });
+  expect(await hook(writeFile)).toEqual({ decision: "deny", reason: expect.stringContaining("[intent_drift]") });
   expect(await hook(at(7))).toBeNull();
   expect(await hook(at(53))).toBeNull();
 
@@ -194,13 +198,15 @@ test("captured agy hooks get policy, plan and drift decisions, and every decisio
       ["write_to_file", "blocked", "intent_drift", null],
     ]),
   );
-  for (const row of rows) expect(row).toMatchObject({ session_id: runCommand.stdin.conversationId, agent_id: "antigravity", client_id: "armorantigravity", user_id: "user-1" });
+  for (const row of rows) expect(row).toMatchObject({ session_id: row.decision_code === "missing_plan" ? childWrite.stdin.conversationId : runCommand.stdin.conversationId, agent_id: "antigravity", client_id: "armorantigravity", user_id: "user-1" });
   for (const row of rows.filter(r => r.status === "blocked")) {
     expect(row.decision_code).toBe({ policy_forbid: "policy_deny", intent_plan_missing: "missing_plan", intent_drift: "out_of_scope" }[String(row.error_message).split(":")[0]!]);
     expect(row.client_row_id).toMatch(/^[0-9a-f-]{36}$/);
   }
   const drift = rows.find(r => r.decision_code === "out_of_scope");
-  expect(drift).toMatchObject({ context_plan_id: "plan-wiring-1", prompt_id: expect.any(String), client_row_id: clientRowId(String(runCommand.stdin.conversationId), "100", "decision") });
+  expect(drift).toMatchObject({ context_plan_id: "plan-wiring-1", prompt_id: expect.any(String), client_row_id: clientRowId(String(runCommand.stdin.conversationId), `${writeFile.stdin.conversationId}:${writeFile.stdin.stepIdx}`, "decision") });
+  const missing = rows.find(r => r.decision_code === "missing_plan");
+  expect(missing?.client_row_id).not.toBe(drift?.client_row_id);
   expect(backend.seen.some((r) => r.path === "/v1/traces")).toBe(true);
 }, 60_000);
 
