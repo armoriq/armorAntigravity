@@ -1,7 +1,7 @@
 import type { IntentToken } from "@armoriq/sdk-dev";
 import type { PendingRequest, PlanKind } from "./registry.ts";
 import { toSdkPlan } from "./plan-request.ts";
-import { AGENT_ID, type CallResult, type DelegateRequest, type Delegation, type IntentBackend, type Login, type Minted, type RetryOptions } from "./types.ts";
+import { AGENT_ID, type CallResult, type DelegateRequest, type Delegation, type IntentBackend, type Login, type Minted, type PlanFailureReason, type RetryOptions } from "./types.ts";
 export { toSdkPlan, PLAN_SOURCE } from "./plan-request.ts";
 
 export const TOKEN_VALIDITY_SECONDS = 3600;
@@ -23,6 +23,7 @@ export interface ClientIdentity {
 export interface SdkBackendOptions {
   readonly client: ClientIdentity;
   readonly loadSdk?: () => Promise<Sdk>;
+  readonly log?: Pick<import("./types.ts").Log, "error">;
 }
 
 // The SDK reads only planId and rawToken.token on revoke and reanchor; the backend resolves the rest from
@@ -133,8 +134,10 @@ export function createSdkBackend(options: SdkBackendOptions): IntentBackend {
   }
 
   return {
-    mint(login, _plan, _contextId, request, retry) {
-      return withRetry<Minted>(
+    async mint(login, _plan, _contextId, request, retry = {}) {
+      const now = retry.now ?? Date.now;
+      const deadlineAt = request.deadlineAt ?? now() + REQUEST_DEADLINE_MS;
+      const result = await withRetry<Minted>(
         login,
         async (client, timeoutMs) => {
           const body = request.body;
@@ -175,8 +178,23 @@ export function createSdkBackend(options: SdkBackendOptions): IntentBackend {
           return null;
         },
         retry,
-        request,
+        { ...request, deadlineAt },
       );
+      try { if (!retry.cancelled?.()) {
+        if (result.ok) {
+          if (result.value.token.status === "refused") await retry.onFailure?.("rejected");
+          else await retry.onSuccess?.();
+        } else {
+          const reason: PlanFailureReason = result.status === 429 ? "rate_limited"
+            : result.status !== undefined && result.status >= 500 ? "server_error"
+            : result.status === 409 && result.retryable ? "request_in_progress"
+            : result.status !== undefined ? "rejected"
+            : result.retryable && /timed out|deadline|timeout|no attempt/i.test(result.reason) ? "timeout"
+            : result.retryable && /network|ECONN|ENOTFOUND|EAI_AGAIN|fetch failed|socket|connection|offline/i.test(result.reason) ? "network" : "rejected";
+          await retry.onFailure?.(reason, (result.retryable || result.unconfirmed) && now() < deadlineAt ? deadlineAt : undefined);
+        }
+      } } catch { options.log?.error("plan health reporting failed"); }
+      return result;
     },
 
     reanchor(login, planId, plan, reason) {
@@ -218,10 +236,10 @@ function classify<T>(sdk: Sdk, seen: Seen, mapStatus: StatusMap<T> | undefined, 
   if (status < 400) return { ok: false, retryable: false, unconfirmed: true, reason: message || "invalid token response" };
   const mapped = mapStatus?.(status);
   if (mapped) return mapped;
-  if (sdk.isReloginRequired(status, seen.body)) return { ok: false, retryable: false, relogin: true, reason: "relogin_required" };
+  if (sdk.isReloginRequired(status, seen.body)) return { ok: false, retryable: false, status, relogin: true, reason: "relogin_required" };
   const detail = bodyMessage(seen.body) || message || `HTTP ${status}`;
   const code = (seen.body as { error?: unknown } | null)?.error;
-  return { ok: false, retryable: status >= 500 || status === 429 || status === 409 && code === "request_in_progress", retryAfterMs: parseRetryAfter(seen.retryAfter, seen.now()), reason: `HTTP ${status}: ${detail}` };
+  return { ok: false, status, retryable: status >= 500 || status === 429 || status === 409 && code === "request_in_progress", retryAfterMs: parseRetryAfter(seen.retryAfter, seen.now()), reason: `HTTP ${status}: ${detail}` };
 }
 
 export function parseRetryAfter(header: string | undefined, now = Date.now()): number | undefined {

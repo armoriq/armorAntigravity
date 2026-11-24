@@ -8,7 +8,7 @@ import { createTokenPump } from "./pump.ts";
 import { intentValiditySeconds } from "./plan-request.ts";
 import { createRegistry, type Conversation, type Registry } from "./registry.ts";
 import { createSubagentLinker } from "./subagents.ts";
-import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type IntentBackend, type Log, type Login, type Mode, type PolicyView } from "./types.ts";
+import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type IntentBackend, type Log, type Login, type Mode, type PlanRequestHealth, type PolicyView } from "./types.ts";
 
 type PreToolUse = Extract<HookPayload, { event: "PreToolUse" }>;
 
@@ -41,6 +41,7 @@ export interface IntentRuntimeOptions {
   readonly now?: () => number;
   readonly fileExists?: (path: string) => boolean;
   readonly stateFile?: string;
+  readonly health?: PlanRequestHealth;
 }
 
 export interface IntentRuntime {
@@ -79,11 +80,12 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
     now,
     validitySeconds,
     mintPolicy: opts.mintPolicy,
+    ...(opts.health ? { health: opts.health } : {}),
     ...(opts.onRelogin ? { onRelogin: opts.onRelogin } : {}),
     ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}),
     ...(opts.onAuthenticated ? { onAuthenticated: opts.onAuthenticated } : {}),
   });
-  const pump = createTokenPump({ registry, backend, login: opts.login, mode: opts.mode, log: opts.log, now, validitySeconds, mintPolicy: opts.mintPolicy, ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}), ...(opts.onAuthenticated ? { onAuthenticated: opts.onAuthenticated } : {}) });
+  const pump = createTokenPump({ registry, backend, login: opts.login, mode: opts.mode, log: opts.log, now, validitySeconds, mintPolicy: opts.mintPolicy, ...(opts.health ? { health: opts.health } : {}), ...(opts.onUnauthorized ? { onUnauthorized: opts.onUnauthorized } : {}), ...(opts.onAuthenticated ? { onAuthenticated: opts.onAuthenticated } : {}) });
   const linker = createSubagentLinker(registry, now, opts.fileExists);
   const drafts = new Map<ConversationKey, string>();
   const childMessagedAt = new Map<ConversationKey, number>();

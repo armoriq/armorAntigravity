@@ -4,6 +4,7 @@ import { postAuditBatch } from "../io/backend-audit.ts";
 import { authHeaders } from "../io/http.ts";
 import type { CallResult } from "../io/http.ts";
 import type { EvidenceDeps } from "../context.ts";
+import type { HealthPump } from "./health.ts";
 import { createOutbox, type OutboxStatus, type QueueLogin, type SendResult, type AuditRow, type BatchAck, type Login, type Pump } from "@armorantigravity/core";
 
 export type AuditPump = Omit<Pump, "kick"> & {
@@ -28,7 +29,8 @@ export function auditLogin(login: Pick<Login, "backend" | "apiKey"> | null): Que
 
 // Preserve the distinction between a row refusal, a retry and a legacy batch refusal.
 export function auditSendResult(rows: readonly AuditRow[], result: CallResult<BatchAck>): SendResult<AuditRow> {
-  if (!result.ok) return { ok: false, relogin: !!(result.relogin || result.unauthorized), legacyRefusal: !!result.legacyRefusal, nonTransient: !!result.nonTransient, tooLarge: !!result.tooLarge, reason: result.reason, ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }) };
+  if (!result.ok) return { ok: false, relogin: !!(result.relogin || result.unauthorized), legacyRefusal: !!result.legacyRefusal, nonTransient: !!result.nonTransient, tooLarge: !!result.tooLarge, reason: result.reason, ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }),
+    stallReason: result.relogin || result.unauthorized ? "auth_paused" : result.status === 429 ? "rate_limited" : result.status !== undefined && result.status >= 500 ? "server_error" : "backend_unreachable" };
   if (result.value.results) {
     const outcomes = new Map(result.value.results.map(outcome => [outcome.client_row_id, outcome]));
     return { ok: true, ...(result.value.retryAfterMs === undefined ? {} : { retryAfterMs: result.value.retryAfterMs }), rejected: rows.flatMap(item => {
@@ -47,6 +49,7 @@ export function createAuditPump(deps: EvidenceDeps & {
   clock?: { now: () => number; random: () => number };
   post?: typeof postAuditBatch;
   probe?: AuthProbe;
+  health?: HealthPump;
 }): AuditPump {
   const timing = { ...DEFAULT_TIMING, ...deps.timing };
   const post = deps.post ?? postAuditBatch;
@@ -87,6 +90,10 @@ export function createAuditPump(deps: EvidenceDeps & {
         const response = await probe({ login });
         return response.status >= 200 && response.status < 300;
       } });
+      if (deps.health) {
+        await outbox.reportHealth(deps.health.outbox);
+        await deps.health.kick();
+      }
     } while (again && !stopped);
   }
 

@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { logLegacyBackend } from "./backend.ts";
+import { logLegacyBackend, REQUEST_DEADLINE_MS } from "./backend.ts";
 import { intentValiditySeconds, planRequest, requestBody } from "./plan-request.ts";
 import { isPlainObject, mcpPart, parsePlan } from "./plan.ts";
 import type { Conversation, Generation, PlanKind, PendingRequest, Registry } from "./registry.ts";
-import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PolicyView, type Token } from "./types.ts";
+import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PlanRequestHealth, type PolicyView, type Token } from "./types.ts";
 
 export const OWN_TOOLS = ["register_intent_plan", "trust_reanchor", "trust_revoke", "trust_delegate", "policy_read"] as const;
 export type OwnTool = (typeof OWN_TOOLS)[number];
@@ -94,6 +94,7 @@ export interface OwnToolDeps {
   readonly log: Log;
   readonly now?: () => number;
   readonly validitySeconds?: number;
+  readonly health?: PlanRequestHealth;
   mintPolicy?(): Record<string, unknown> | undefined;
 }
 
@@ -182,7 +183,8 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       const request = planRequest({ kind, promptId: conv.promptId, parentPlanId: conv.countedPlanId, planHash: parsed.plan.hash, epoch: conv.retirementEpoch }, requestBody(login, parsed.plan, conv.ref.conversationId, validity, deps.mintPolicy?.()));
       const pending = conv.pendingRequest;
       if (pending && pending.key !== request.key && pending.headers["X-ArmorIQ-Plan-Kind"] !== "refresh") return notConfirmed("a different request is awaiting confirmation; retry that plan first");
-      const descriptor = pending?.key === request.key ? pending : request;
+      const saved = pending?.key === request.key ? pending : request;
+      const descriptor = saved.deadlineAt === undefined ? { ...saved, deadlineAt: now() + REQUEST_DEADLINE_MS } : saved;
       try {
         if (!registry.setPendingRequest(conv.key, descriptor, generation)) return notRegistered("the prompt or authentication changed");
       } catch {
@@ -211,7 +213,12 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       registry.syncAuth(deps.login(), deps.mode());
       return !registry.isCurrent(conv.key, generation);
     };
-    const minted = await backend.mint(login, draft, conv.ref.conversationId, request, { cancelled, now });
+    const minted = await backend.mint(login, draft, conv.ref.conversationId, request, {
+      cancelled,
+      now,
+      onFailure: (reason, notBefore) => deps.health?.planRequestFailed(login, request.key, reason, notBefore),
+      onSuccess: async () => { await deps.health?.planRequestSucceeded(login, request.key); },
+    });
     registry.syncAuth(deps.login(), deps.mode());
     if (!registry.isCurrent(conv.key, generation)) return notRegistered("the prompt or authentication changed while registration was in progress");
     if (!minted.ok) {
