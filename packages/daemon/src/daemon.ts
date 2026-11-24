@@ -31,6 +31,7 @@ import { surfaceFromTranscriptPath } from "./surface.ts";
 import { applyStagedUpdate, createUpdater, optedOut, readUpdateStatus, type Updater } from "./update.ts";
 import { auditIdentity, captureFallback, queueLogin } from "./capture.ts";
 import { createFallbackSpool } from "./fallback-spool.ts";
+import { runReportingEnabled } from "@armorantigravity/evidence";
 
 export const SESSION_IDLE_MS = 30 * 60 * 1000;
 const IDLE_SWEEP_MS = 60_000;
@@ -99,7 +100,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   let decide: DecisionHandler | null = null;
   let mcpOutcome: McpOutcomeHandler | null = null;
   const observers: EventObserver[] = [];
-  const ctx = { log, paths, auth, sessions };
+  const ctx = { log, paths, auth, sessions, runReportingEnabled: runReportingEnabled(opts.env, config.runReportingEnabled) };
   try {
     for (const plugin of opts.plugins) {
       const reg = await plugin.setup(ctx);

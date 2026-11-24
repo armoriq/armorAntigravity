@@ -6,6 +6,7 @@ export interface Config {
   readonly backendUrl: string | null;
   readonly channel: "stable" | "dev";
   readonly forceMonitor: boolean;
+  readonly runReportingEnabled?: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = { backendUrl: null, channel: "stable", forceMonitor: false };
@@ -22,5 +23,5 @@ export function readConfig(file: string, log: Log): Config {
   const backendUrl = "backendUrl" in raw && typeof raw.backendUrl === "string" && raw.backendUrl.trim() ? raw.backendUrl.trim() : null;
   const channel = "channel" in raw && raw.channel === "dev" ? "dev" : "stable";
   const forceMonitor = "mode" in raw && raw.mode === "monitor";
-  return { backendUrl, channel, forceMonitor };
+  return { backendUrl, channel, forceMonitor, ...("runReportingEnabled" in raw ? { runReportingEnabled: raw.runReportingEnabled === true } : {}) };
 }
