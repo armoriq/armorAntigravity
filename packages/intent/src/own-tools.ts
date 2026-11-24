@@ -243,37 +243,9 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
   }
 
   async function recordRevision(login: Login, conv: Conversation, previous: Plan, plan: Plan, reason: string, tokenPlanId: string): Promise<void> {
-    let trustId: string | null = null;
     const { id: _id, ...unminted } = plan;
     const r = await backend.reanchor(login, tokenPlanId, unminted, reason);
-    if (r.ok) trustId = r.value.trustId;
-    else log.warn("reanchor failed", { conversationId: conv.ref.conversationId, reason: r.reason });
-    try {
-      deps.audit({
-        ...(plan.id ? { plan_id: plan.id } : {}),
-        session_id: conv.ref.conversationId,
-        // ArmorOpenCode omits these, so its revisions show as unknown-agent and unknown-client in the console.
-        agent_id: AGENT_ID,
-        client_id: CLIENT_ID,
-        user_id: login.userId,
-        step_index: -1,
-        action: "plan_revision",
-        tool: "register_intent_plan",
-        input: {
-          reason: reason.slice(0, 2000),
-          old_plan_id: previous.id,
-          old_plan_hash: previous.hash,
-          new_plan_hash: plan.hash,
-          revision: plan.revision,
-          ...(trustId ? { trust_id: trustId } : {}),
-        },
-        status: "held",
-        error_message: `plan_revision: ${reason.slice(0, 500)}`,
-        executed_at: new Date(now()).toISOString(),
-      });
-    } catch (error) {
-      log.error("audit enqueue failed", { error: String(error) });
-    }
+    if (!r.ok) log.warn("reanchor failed", { conversationId: conv.ref.conversationId, reason: r.reason });
   }
 
   async function revoke(conv: Conversation, reason: string): Promise<string> {
