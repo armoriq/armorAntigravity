@@ -67,7 +67,8 @@ test("audit, usage, latency and traces all carry the raw conversationId as the s
   const decision: Decision = { kind: "allow", stepIndex: null, paramMismatch: false };
   recorder!.decided({ conversationId: CONV, stepIdx: 4, tool: "run_command", args: toolCall.args, mcpServer: null, decision, at: t0 + 101 });
   registration.observe({ kind: "hook", hook: { receivedAt: t0 + 1_600, payload: post, session }, at: t0 + 1_600 });
-  const core: Session = { id: CONV as SessionID, parentId: null, mode: "enforce", plan: null, token: null, stepCursor: 0, revisionsThisMessage: 0, currentMessageId: null };
+  const core: Session = { id: CONV as SessionID, parentId: null, mode: "enforce", plan: null, token: null, stepCursor: 0, revisionsThisMessage: 0, currentMessageId: null,
+    promptId: null, promptGeneration: 0, retirementEpoch: 0, promptOpenSince: null, lastActivityAt: null, countedPlanId: null, tokenPlanId: null, planHash: null, kind: null, tokenExpiresAt: null, authGeneration: 0, pendingRequest: null, unregisteredLocalPlan: null, seenMessageIds: [] };
   recorder!.audit(
     toAuditRow({
       call: { sessionId: CONV as SessionID, callId: `${CONV}:4`, tool: "run_command", args: toolCall.args },

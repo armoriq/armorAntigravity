@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { toAuditRow, type AuditInput } from "../src/audit.ts";
 import { OPENCODE } from "../src/products/opencode.ts";
 import type { Decision, Plan, Session, SessionID } from "../src/types.ts";
+import { clientRowId } from "../src/audit.ts";
+import { planCaptureState } from "./helpers/session.ts";
 
 const AT = Date.parse("2026-10-11T10:00:01.000Z");
 const plan: Plan = {
@@ -18,6 +20,7 @@ const plan: Plan = {
 
 function session(id: string, parentId: string | null = null, withPlan = true): Session {
   return {
+    ...planCaptureState(),
     id: id as SessionID,
     parentId: parentId as SessionID | null,
     mode: "enforce",
@@ -52,6 +55,7 @@ function build(overrides: Partial<AuditInput>) {
 describe("toAuditRow", () => {
   test("a successful in-plan call carries the plan, its step and armorClaude's attribution", () => {
     expect(build({})).toEqual({
+      client_row_id: clientRowId("ses_root", "call-1", "result"),
       plan_id: "plan-1",
       session_id: "ses_root",
       agent_id: "opencode",

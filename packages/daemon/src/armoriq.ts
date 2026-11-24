@@ -327,6 +327,20 @@ function toCoreSession(c: Conversation, parentId: SessionID | null): CoreSession
     stepCursor: c.stepCursor,
     revisionsThisMessage: c.revisionsThisTurn,
     currentMessageId: `turn-${c.turn}`,
+    countedPlanId: c.countedPlanId,
+    tokenPlanId: c.tokenPlanId,
+    promptId: c.promptId,
+    promptGeneration: c.promptGeneration,
+    retirementEpoch: c.retirementEpoch,
+    promptOpenSince: c.promptOpenSince,
+    lastActivityAt: c.lastActivityAt,
+    planHash: c.planHash,
+    kind: c.kind,
+    tokenExpiresAt: c.tokenExpiresAt,
+    authGeneration: c.authGeneration,
+    pendingRequest: c.pendingRequest ? { key: c.pendingRequest.key, headers: { ...c.pendingRequest.headers }, body: { ...c.pendingRequest.body } } : null,
+    unregisteredLocalPlan: c.unregisteredLocalPlan,
+    seenMessageIds: [],
   };
 }
 

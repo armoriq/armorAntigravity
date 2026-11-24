@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import { toAuditRow } from "../src/audit.ts";
 import type { Session, SessionID } from "../src/types.ts";
+import { planCaptureState } from "./helpers/session.ts";
 
 const session = (id: string, parentId: string | null): Session => ({
+  ...planCaptureState(),
   id: id as SessionID,
   parentId: parentId as SessionID | null,
   mode: "enforce",

@@ -5,6 +5,7 @@ import { parsePlan as parsePlanFor } from "../src/intent.ts";
 import { compilePolicy as compileFor, DEFAULT_POLICY_SOURCE } from "../src/policy.ts";
 import { OPENCODE } from "../src/products/opencode.ts";
 import type { CompiledPolicy, Plan, Session, SessionID, Token } from "../src/types.ts";
+import { planCaptureState } from "./helpers/session.ts";
 
 const compilePolicy = (raw: unknown) => compileFor(raw, OPENCODE.tools);
 const parsePlan = (raw: unknown, revision: number, messageId: string) => parsePlanFor(raw, revision, messageId, OPENCODE.tools);
@@ -53,6 +54,7 @@ const active = (over: Partial<Extract<Token, { status: "active" }>> = {}): Token
 
 function session(over: Partial<Session> = {}): Session {
   return {
+    ...planCaptureState(),
     id: "root" as SessionID,
     parentId: null,
     mode: "enforce",

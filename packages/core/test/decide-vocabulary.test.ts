@@ -3,6 +3,7 @@ import { decide } from "../src/decide.ts";
 import { parsePlan } from "../src/intent.ts";
 import { compilePolicy, DEFAULT_POLICY_SOURCE } from "../src/policy.ts";
 import type { Plan, Session, SessionID, ToolCall } from "../src/types.ts";
+import { planCaptureState } from "./helpers/session.ts";
 import { EXAMPLE_HOST } from "./support/example-host.ts";
 
 const NOW = 1_800_000_000_000;
@@ -15,6 +16,7 @@ if (!parsed.ok) throw new Error(parsed.error);
 const plan: Plan = { ...parsed.plan, id: "plan-1" };
 
 const session = (over: Partial<Session> = {}): Session => ({
+  ...planCaptureState(),
   id: "root" as SessionID,
   parentId: null,
   mode: "enforce",
