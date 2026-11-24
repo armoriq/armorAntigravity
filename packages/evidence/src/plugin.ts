@@ -11,7 +11,7 @@ import { createTracePump, type ModelCall, type TracePump, type ToolSpan } from "
 import { createUsagePump, type UsagePump } from "./pumps/usage.ts";
 import { observeConversation } from "./usage/observe.ts";
 import { EMPTY_SOURCE, type ConversationRef, type UsageSource } from "./usage/source.ts";
-import { auditLogin } from "./pumps/audit.ts";
+import { auditLogin, DEFAULT_TIMING } from "./pumps/audit.ts";
 
 // Structural slices of the daemon's plugin types (packages/daemon/src/plugin.ts), so the daemon
 // can import this package without a cycle.
@@ -91,13 +91,7 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
   const rootOf = options.rootOf ?? ((id: string) => id);
   const health = createHealthPump(deps);
   const audit = createAuditPump({ ...deps, health });
-  let runs: RunsPump;
-  try { runs = createRunsPump({ ...deps, health, enabled: options.runReportingEnabled ?? runReportingEnabled(process.env) }); }
-  catch {
-    deps.log.error("runs storage initialization failed; reporting disabled for this daemon");
-    try { health.outbox.captureFailure(); } catch { deps.log.error("run capture failure count could not be saved"); }
-    runs = createRunsPump({ ...deps, enabled: false });
-  }
+  const runs = recoverableRuns(deps, health, options.runReportingEnabled ?? runReportingEnabled(process.env));
   const traces = createTracePump(deps);
   const usage = createUsagePump(deps);
   const history = createHistoryPump({ ...deps, usage, source, rootOf });
@@ -283,6 +277,43 @@ export function createEvidence(deps: EvidenceDeps, options: EvidenceOptions = {}
   }
 
   return { observe, recorder, pumps, start, settle };
+}
+
+function recoverableRuns(deps: EvidenceDeps, health: HealthPump, enabled: boolean): RunsPump {
+  if (!enabled) return createRunsPump({ ...deps, enabled: false });
+  let current = createRunsPump({ ...deps, enabled: false });
+  let failed = false;
+  let stopped = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  function initialize(): void {
+    if (stopped || current.enabled) return;
+    try {
+      current = createRunsPump({ ...deps, health, enabled: true });
+      failed = false;
+    } catch {
+      deps.log.error("runs storage initialization failed; reporting will retry");
+      if (!failed) {
+        failed = true;
+        try { health.outbox.captureFailure(); } catch { deps.log.error("run capture failure count could not be saved"); }
+      }
+    }
+  }
+  initialize();
+  const kick = async () => { initialize(); if (!stopped) await current.kick(); };
+  return new Proxy(current, {
+    get(_target, property) {
+      if (property === "kick") return kick;
+      if (property === "start") return () => {
+        if (timer || stopped) return;
+        timer = setInterval(() => { void kick(); }, DEFAULT_TIMING.intervalMs);
+        timer.unref?.();
+        void kick();
+      };
+      if (property === "loginChanged") return async (revalidated = true) => { initialize(); if (!stopped) await current.loginChanged(revalidated); };
+      if (property === "stop") return async () => { stopped = true; clearInterval(timer); await current.stop(); };
+      return Reflect.get(current, property);
+    },
+  });
 }
 
 // The daemon plugin: registers the observer and the pumps; the recorder goes to the decision plugin.

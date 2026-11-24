@@ -67,6 +67,22 @@ test("the off switch never reads run storage or credentials", async () => {
   await pump.stop();
 });
 
+// regression: #0013
+test("a failed runs initialization closes the journals it already opened", async () => {
+  const tmp = tempDir();
+  cleanup.push(async () => tmp.cleanup());
+  expect(() => createRunsPump({ enabled: true, dataDir: tmp.dir, log: quietLog,
+    uploads: uploads(() => { throw new Error("credentials unavailable"); }),
+  })).toThrow("credentials unavailable");
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const box = createOutbox(tmp.dir, "runs", quietLog, { login: () => null });
+  try {
+    await box.drain(async () => ({ ok: true, rejected: [] }));
+    expect(readdirSync(`${tmp.dir}/outbox/runs-v2`).filter(file => file.endsWith(".jsonl"))).toEqual([]);
+    expect(readdirSync(`${tmp.dir}/outbox/runs-v2/archive`).filter(file => file.endsWith(".jsonl"))).toHaveLength(1);
+  } finally { await box.persist(); }
+});
+
 test("prompt start is persisted with report sequence 1 before any turn end", async () => {
   const store = setup();
   const pump = store.open();
@@ -147,6 +163,26 @@ test("a restart keeps a prompt open and continues counting until its Stop", asyn
   await recovered.stop();
   const twice = store.open();
   expect(twice.outbox.readPending()).toHaveLength(2);
+});
+
+// regression: #0013
+test.each([false, true])("a live run keeps counting after thirty idle minutes, resumed=%p", async resumed => {
+  const store = setup();
+  const at = Date.now();
+  let pump = store.open();
+  pump.begin("live", "s", at, true);
+  if (resumed) {
+    await pump.stop();
+    pump = store.open();
+  }
+  pump.attempt("live", "first", "bash", true);
+  store.login(null);
+  store.advance(30 * 60_000);
+  await pump.kick();
+  expect(pump.outbox.readPending().map(entry => entry.row.report_seq)).toEqual([1]);
+  pump.attempt("live", "second", "bash", true);
+  pump.end("live", "stop", at + 30 * 60_000 + 1);
+  expect(pump.outbox.readPending().find(entry => entry.row.report_seq === 2)?.row).toMatchObject({ tool_calls: 2, gated_tool_calls: 2, end_reason: "stop" });
 });
 
 test("final reporting waits for registrations and a late result never changes the next run", async () => {

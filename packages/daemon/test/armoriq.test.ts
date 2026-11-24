@@ -247,6 +247,7 @@ test("a v2 policy blocks through agd-hook with its name, v1 still applies where 
   expect(rows.find((r) => r.tool === "search_web")).toMatchObject({ status: "blocked", input: { armoriq_policy: { source: "v1_org", rule_id: "org-no-web-search" } } });
 }, 60_000);
 
+// regression: #0010
 test("a daemon unavailable C hook writes one sanitized fallback that the daemon adopts", async () => {
   const dataDir = path.join(sandbox.home, ".armoriq", "armorantigravity");
   mkdirSync(dataDir, { recursive: true });
@@ -262,7 +263,7 @@ test("a daemon unavailable C hook writes one sanitized fallback that the daemon 
   daemon = await startDaemon({ env: { ARMORIQ_ORG_MODE: "enforce" }, plugins: armoriqPlugins(), log: quiet });
   await until(() => backend.seen.some(r => r.path === "/iap/audit/batch"));
   const rows = backend.seen.filter(r => r.path === "/iap/audit/batch").flatMap(r => isRows(r.body) ? r.body.rows : []);
-  expect(rows).toEqual([{ client_row_id: expect.stringMatching(/^[0-9a-f-]{36}$/), session_id: call.stdin.conversationId, tool: "unknown", action: "unknown", input: {}, executed_at: expect.any(String), decision_code: "internal_error", status: "blocked" }]);
+  expect(rows).toEqual([{ client_row_id: clientRowId(String(call.stdin.conversationId), `${call.stdin.conversationId}:${call.stdin.stepIdx}`, "decision"), session_id: call.stdin.conversationId, tool: "unknown", action: "unknown", input: {}, executed_at: expect.any(String), decision_code: "internal_error", status: "blocked" }]);
 }, 15_000);
 
 const AGY_14 = path.join(import.meta.dir, "../../adapter/test/fixtures/captured");

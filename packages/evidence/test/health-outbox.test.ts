@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createOutbox } from "@armorantigravity/core";
 import { parseClientEventsReply } from "../src/io/backend-client-events.ts";
+import { parseRunsReply } from "../src/io/backend-runs.ts";
 import { quietLog, tempDir } from "./support.ts";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -22,6 +23,57 @@ function store() {
   cleanup.push(async () => { for (const box of handles) await box.persist(); remove(); });
   return { open, advance: (ms: number) => { now += ms; } };
 }
+
+// regression: #0010
+test.each(["health", "runs"] as const)("%s permanent batch refusals exhaust ten charged attempts across restarts", async stream => {
+  for (const status of [413, 405, 409]) {
+    const disk = store();
+    let box = disk.open(stream);
+    for (const id of ["first", "second"]) box.enqueue(stream === "health"
+      ? { event_id: id, type: "queue_stalled", queue: "audit", count: 1, reason_code: "server_error", occurred_at: new Date(10_000).toISOString() }
+      : { run_id: id, report_seq: 1, session_id: "s", started_at: new Date(10_000).toISOString(), tool_calls: 0, gated_tool_calls: 0, plan_ids: [] });
+    let calls = 0;
+    const send = async (rows: readonly any[]) => {
+      calls++;
+      return stream === "health" ? parseClientEventsReply(status, {}, new Headers(), rows) : parseRunsReply(status, {}, new Headers(), rows);
+    };
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      await box.drain(send);
+      if (attempt === 1) expect(calls).toBe(1);
+      if (attempt < 10) {
+        expect(box.readPending().map(entry => entry.attempts)).toEqual([attempt, attempt]);
+        expect(box.readDeadLetters()).toEqual([]);
+      }
+      await box.persist();
+      box = disk.open(stream);
+      disk.advance(10);
+    }
+    expect(box.readPending()).toEqual([]);
+    expect(box.readDeadLetters().map(entry => entry.attempts)).toEqual([10, 10]);
+    const before = calls;
+    await box.drain(send);
+    expect(calls).toBe(before);
+  }
+});
+
+// regression: #0012
+test.each(["health", "runs"] as const)("%s transient and malformed replies never charge attempts", async stream => {
+  for (const [status, body] of [[408, {}], [429, {}], [503, {}], [409, { error: "request_in_progress" }], [413, { results: null }]] as const) {
+    const disk = store();
+    let box = disk.open(stream);
+    box.enqueue(stream === "health"
+      ? { event_id: "event", type: "queue_stalled", queue: "audit", count: 1, reason_code: "server_error", occurred_at: new Date(10_000).toISOString() }
+      : { run_id: "run", report_seq: 1, session_id: "s", started_at: new Date(10_000).toISOString(), tool_calls: 0, gated_tool_calls: 0, plan_ids: [] });
+    for (let attempt = 0; attempt < 11; attempt++) {
+      await box.drain(async rows => stream === "health" ? parseClientEventsReply(status, body, new Headers(), rows) : parseRunsReply(status, body, new Headers(), rows));
+      await box.persist();
+      box = disk.open(stream);
+      disk.advance(10);
+    }
+    expect(box.readPending().map(entry => entry.attempts)).toEqual([0]);
+    expect(box.readDeadLetters()).toEqual([]);
+  }
+});
 
 test("dead letters after an outage report newly moved records once across restarts", async () => {
   const disk = store();

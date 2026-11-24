@@ -4,7 +4,7 @@ import { auditLogin, createAuditPump } from "../src/pumps/audit.ts";
 import { parseClientEventsReply, postClientEvents } from "../src/io/backend-client-events.ts";
 import { createEvidence, evidencePlugin, type EvidenceRecorder } from "../src/plugin.ts";
 import { login, quietLog, tempDir, uploads } from "./support.ts";
-import { readdirSync, existsSync } from "node:fs";
+import { readdirSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRunsPump } from "../src/pumps/runs.ts";
 import { parseRunsReply } from "../src/io/backend-runs.ts";
 import contract from "./fixtures/client-events-v1.json";
@@ -86,11 +86,14 @@ test.each(["health", "runs"] as const)("%s org_required holds back off across re
     await pump.kick();
     expect(calls).toBe(index + 1);
     await append(`later-${index}`);
-    expect(pump.status()).toMatchObject({ pending: index + 2, undeliverable: index + 2, held: ["org_required"], paused: false, deadLetters: 0 });
+    expect(pump.status()).toMatchObject({ pending: index + 2, undeliverable: index + 2, holds: ["org_required"], paused: false, deadLetters: 0 });
     expect(pump.outbox.readPending().every(entry => entry.attempts === 0)).toBe(true);
     await pump.stop();
     pump = open();
     await pump.outbox.authenticationSucceeded(auditLogin(s.auth));
+    const leases = pump.outbox.diagnostics().leases;
+    for (let tick = 0; tick < 3; tick++) await pump.kick();
+    expect(pump.outbox.diagnostics().leases).toBe(leases);
     now += delay - 1;
     await pump.kick();
     expect(calls).toBe(index + 1);
@@ -99,7 +102,7 @@ test.each(["health", "runs"] as const)("%s org_required holds back off across re
   status = 0;
   await pump.kick();
   const before = calls;
-  expect(pump.status()).toMatchObject({ pending: 7, held: ["org_required"], paused: false });
+  expect(pump.status()).toMatchObject({ pending: 7, holds: ["org_required"], paused: false });
   await pump.stop();
   pump = open();
   status = 200;
@@ -110,7 +113,7 @@ test.each(["health", "runs"] as const)("%s org_required holds back off across re
   await pump.kick();
   expect(delivered).toHaveLength(7);
   expect(new Set(delivered).size).toBe(7);
-  expect(pump.status()).toMatchObject({ pending: 0, held: [], deadLetters: 0 });
+  expect(pump.status()).toMatchObject({ pending: 0, holds: [], deadLetters: 0 });
 });
 
 test.each(["health", "runs"] as const)("%s authentication pause lifts through its periodic probe", async stream => {
@@ -265,6 +268,25 @@ test("evidence starts and exposes the health pump", async () => {
   cleanup.push(async () => { for (const pump of Object.values(evidence.pumps)) await pump.stop(); s.cleanup(); });
   expect(evidence.pumps.health.name).toBe("health");
   evidence.start();
+});
+
+// regression: #0013
+test("a runs startup storage failure is visible, counted once and retried on a kick", async () => {
+  const s = setup();
+  const root = `${s.dir}/outbox/runs-v2`;
+  mkdirSync(`${s.dir}/outbox`, { recursive: true });
+  writeFileSync(root, "storage unavailable");
+  const evidence = createEvidence(s.deps, { runReportingEnabled: true });
+  cleanup.push(async () => { for (const pump of Object.values(evidence.pumps)) await pump.stop(); s.cleanup(); });
+  const runs = evidence.recorder.runs;
+  expect(evidence.pumps.health.status().captureFailures).toBe(1);
+  for (let tick = 0; tick < 3; tick++) await runs.kick();
+  expect(evidence.pumps.health.status().captureFailures).toBe(1);
+  rmSync(root);
+  await runs.kick();
+  expect(runs.enabled).toBe(true);
+  runs.begin("recovered-startup", "s", Date.now(), true);
+  expect(runs.outbox.readPending().map(entry => entry.row.run_id)).toEqual(["recovered-startup"]);
 });
 
 test("daemon shutdown waits for audit before closing the health outbox", async () => {

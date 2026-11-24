@@ -10,17 +10,19 @@ import type { ReportingResult } from "./reporting-delivery.ts";
 // A malformed list acknowledges nothing. Missing entries retry independently of accepted entries.
 export function parseRunsReply(status: number, body: unknown, headers: Headers, reports: readonly RunReport[], now = Date.now()): ReportingResult<RunReport> {
   const retryAfterMs = parseRetryAfter(headers.get("retry-after"), now);
-  const failed = (reason: string): SendResult<RunReport> => ({ ok: false, endpointStatus: status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }), reason,
+  const failed = (reason: string): Extract<SendResult<RunReport>, { ok: false }> => ({ ok: false, endpointStatus: status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }), reason,
     stallReason: status === 429 ? "rate_limited" : status >= 500 ? "server_error" : "backend_unreachable" });
   if (status === 404) return failed("runs endpoint unavailable");
-  if (status === 403 && (body as { error?: unknown } | null)?.error === "org_required") return { ok: false, hold: "org_required", deferred: true, endpointStatus: status };
+  if (status === 403 && (body as { error?: unknown } | null)?.error === "org_required") return { ok: false, hold: "org_required", reason: "org_required", endpointStatus: status };
   const unauthorized = (): SendResult<RunReport> => ({ ok: false, endpointStatus: status, relogin: true, reason: "runs authentication refused", stallReason: "auth_paused" });
   if (status === 401) return unauthorized();
   const hasResults = body !== null && typeof body === "object" && Object.hasOwn(body, "results");
   if (!hasResults) {
     if (status === 403) return unauthorized();
     if (status === 400 || status === 422) return { ...failed(`runs returned ${status}`), ok: false, legacyRefusal: true };
-    return failed(`runs returned ${status} without a valid results list`);
+    const inProgress = status === 409 && (body as { error?: unknown } | null)?.error === "request_in_progress";
+    return { ...failed(`runs returned ${status} without a valid results list`),
+      nonTransient: status >= 400 && status < 500 && ![408, 429].includes(status) && !inProgress, tooLarge: status === 413 };
   }
   const results = body && typeof body === "object" ? (body as { results?: unknown }).results : null;
   const sent = new Set(reports.map(runTransportId));
