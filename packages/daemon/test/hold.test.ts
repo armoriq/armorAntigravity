@@ -22,9 +22,14 @@ function held(rawArgs: Record<string, unknown> = writeArgs, name = "write_to_fil
 
 type Call = { url: string; method: string; headers: Record<string, string>; body: Record<string, unknown> | null };
 
-function setup(answers: Record<string, (body: Record<string, unknown> | null) => [number, unknown]>, plan: SignedPlan | null = PLAN) {
+function setup(
+  answers: Record<string, (body: Record<string, unknown> | null) => [number, unknown]>,
+  plan: SignedPlan | null = PLAN,
+  opts: { budgetMs?: number; delays?: Record<string, number> } = {},
+) {
   const calls: Call[] = [];
   const resolve = createHoldResolver({
+    ...(opts.budgetMs === undefined ? {} : { budgetMs: opts.budgetMs }),
     access: () => ({ login, client: "armorantigravity/test" }),
     plan: () => plan,
     agentId: "antigravity",
@@ -36,6 +41,16 @@ function setup(answers: Record<string, (body: Record<string, unknown> | null) =>
       const path = new URL(url).pathname;
       const answer = answers[path];
       if (!answer) throw new Error(`unexpected request ${path}`);
+      const delay = opts.delays?.[path] ?? 0;
+      if (delay) {
+        await new Promise<void>((done, fail) => {
+          const timer = setTimeout(done, delay);
+          init.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            fail(new Error("aborted"));
+          });
+        });
+      }
       const [status, data] = answer(body);
       return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
     },
@@ -129,4 +144,38 @@ test("an MCP call is scoped to its server and inner arguments", async () => {
   await resolve(held(raw, "call_mcp_tool"));
   expect(calls[0]?.body).toMatchObject({ tool: "create_issue", mcp: "github", arguments: { title: "x" } });
   expect(calls[2]?.body).toMatchObject({ tool: "create_issue", domain: "github", arguments: { title: "x" } });
+});
+
+async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
+  const start = performance.now();
+  const value = await work;
+  return { value, ms: performance.now() - start };
+}
+
+test("a slow filing answers within the budget, and the retry names the request it filed once", async () => {
+  let filed = 0;
+  const { resolve, paths } = setup(
+    { "/iap/sdk/enforce": stillHeld, "/delegation/my-role": role, "/delegation/request": () => [201, { delegationId: `req-${++filed}` }] },
+    PLAN,
+    { budgetMs: 300, delays: { "/delegation/request": 700 } },
+  );
+  const first = await timed(resolve(held()));
+  expect(first.ms).toBeLessThan(500);
+  expect(first.value).toEqual({
+    kind: "hold",
+    ruleId: "v2:p1:write_to_file#0",
+    reason: 'ArmorIQ policy "no-file-writes" holds write_to_file for approval (approval_required). The approval request is still being filed; retry in a few seconds to get its id.',
+  });
+  expect(await resolve(held())).toMatchObject({ reason: expect.stringContaining("still being filed") });
+  await Bun.sleep(800);
+  expect(await resolve(held())).toMatchObject({ kind: "hold", reason: expect.stringContaining("Approval request req-1 is waiting") });
+  expect(filed).toBe(1);
+  expect(paths().filter((p) => p === "POST /delegation/request")).toHaveLength(1);
+});
+
+test("a slow approval check answers within the budget and keeps the call held", async () => {
+  const { resolve } = setup({ "/iap/sdk/enforce": stillHeld }, PLAN, { budgetMs: 300, delays: { "/iap/sdk/enforce": 2_000 } });
+  const answer = await timed(resolve(held()));
+  expect(answer.ms).toBeLessThan(500);
+  expect(answer.value).toMatchObject({ kind: "hold", reason: expect.stringContaining("did not answer the approval check (timed out after 300 ms)") });
 });
