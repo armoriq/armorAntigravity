@@ -7,6 +7,7 @@ import { createConnection } from "node:net";
 import path from "node:path";
 import { armoriqPlugins } from "../src/armoriq.ts";
 import { clientRowId } from "@armorantigravity/core";
+import { createRegistry } from "@armorantigravity/intent";
 import { startDaemon, type RunningDaemon } from "../src/daemon.ts";
 import { compileHook, hostTarget } from "../../../scripts/build-hook.ts";
 import { sandboxHome } from "./sandbox.ts";
@@ -246,6 +247,24 @@ test("a v2 policy blocks through agd-hook with its name, v1 still applies where 
   expect(rows.find((r) => r.tool === "search_web")).toMatchObject({ status: "blocked", input: { armoriq_policy: { source: "v1_org", rule_id: "org-no-web-search" } } });
 }, 60_000);
 
+test("a daemon unavailable C hook writes one sanitized fallback that the daemon adopts", async () => {
+  const dataDir = path.join(sandbox.home, ".armoriq", "armorantigravity");
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(path.join(dataDir, "config.json"), JSON.stringify({ backendUrl: backend.url }));
+  writeFileSync(path.join(dataDir, "mode"), "enforce");
+  saveLoginProfile({ backend: backend.url, product: "armorantigravity", apiKey: "ak_test_wiring", email: "dev@example.com", userId: "user-1", orgId: "org-1" });
+  const prior = await startDaemon({ env: { ARMORIQ_ORG_MODE: "enforce" }, plugins: [], log: quiet });
+  await prior.stop();
+  const call = captured().get(3)!;
+  const proc = Bun.spawn([HOOK, "PreToolUse"], { stdin: new TextEncoder().encode(JSON.stringify(call.stdin)), stdout: "pipe", env: { ...process.env, ARMORANTIGRAVITY_DAEMON: "/usr/bin/false" } });
+  expect(JSON.parse(await new Response(proc.stdout).text())).toMatchObject({ decision: "deny" });
+  expect(await proc.exited).toBe(0);
+  daemon = await startDaemon({ env: { ARMORIQ_ORG_MODE: "enforce" }, plugins: armoriqPlugins(), log: quiet });
+  await until(() => backend.seen.some(r => r.path === "/iap/audit/batch"));
+  const rows = backend.seen.filter(r => r.path === "/iap/audit/batch").flatMap(r => isRows(r.body) ? r.body.rows : []);
+  expect(rows).toEqual([{ client_row_id: expect.stringMatching(/^[0-9a-f-]{36}$/), session_id: call.stdin.conversationId, tool: "unknown", action: "unknown", input: {}, executed_at: expect.any(String), decision_code: "internal_error", status: "blocked" }]);
+}, 15_000);
+
 const AGY_14 = path.join(import.meta.dir, "../../adapter/test/fixtures/captured");
 
 // agy CLI 1.4 calls its file tools read_file, write_file and edit_file with a `Path` argument.
@@ -294,6 +313,68 @@ async function signedInDaemon(): Promise<RunningDaemon> {
   await Bun.sleep(100);
   return started;
 }
+
+test("linked parent and child calls at the same steps retain distinct decision and result rows", async () => {
+  const dataDir = path.join(sandbox.home, ".armoriq", "armorantigravity");
+  const r4 = captured(path.join(path.dirname(CAPTURE), "r4-subagent-browser.jsonl"));
+  const parent = r4.get(47)!.stdin;
+  const child = r4.get(77)!.stdin;
+  const registry = createRegistry(Date.now, path.join(dataDir, "intent-state.json"));
+  registry.syncAuth(null, "monitor");
+  const root = { surface: "cli" as const, conversationId: String(parent.conversationId) };
+  const subagent = { surface: "cli" as const, conversationId: String(child.conversationId) };
+  registry.open(root);
+  registry.open(subagent);
+  expect(registry.link(subagent, root)).toBe(true);
+  daemon = await signedInDaemon();
+  for (const stdin of [parent, child]) {
+    const read = { ...stdin, toolCall: captured().get(19)!.stdin.toolCall };
+    expect(await hook({ event: "PreToolUse", stdin: read })).toEqual({ decision: "allow" });
+    expect(await hook({ event: "PostToolUse", stdin: { ...read, error: "" } })).toBeNull();
+    expect(await hook({ event: "PreToolUse", stdin: { ...stdin, toolCall: captured().get(27)!.stdin.toolCall } })).toMatchObject({ decision: "deny" });
+  }
+  await daemon.stop();
+  daemon = null;
+  const rows = uploaded();
+  expect(rows).toHaveLength(4);
+  expect(new Set(rows.map(row => row.client_row_id)).size).toBe(4);
+  for (const stdin of [parent, child]) {
+    const callId = `${stdin.conversationId}:${stdin.stepIdx}`;
+    expect(rows).toContainEqual(expect.objectContaining({ session_id: root.conversationId, client_row_id: clientRowId(root.conversationId, callId, "decision"), status: "blocked", decision_code: "policy_deny" }));
+    expect(rows).toContainEqual(expect.objectContaining({ session_id: root.conversationId, client_row_id: clientRowId(root.conversationId, callId, "result"), status: "success" }));
+  }
+}, 60_000);
+
+test("policy holds and denied or unapproved MCP servers produce the expected audit rows", async () => {
+  backend.policy.intentRequired = false;
+  backend.policy.statements.push({ id: "hold-read", effect: "require_approval", action: { type: "tool", eq: "view_file" } });
+  daemon = await signedInDaemon();
+  await until(() => backend.seen.some(request => request.path === "/mcp/servers"));
+  expect(await hook(captured().get(19)!)).toMatchObject({ decision: "deny", reason: expect.stringContaining("approval") });
+  const base = captured().get(35)!;
+  for (const [server, stepIdx] of [["denied-server", 10], ["pending-server", 12]] as const) {
+    expect(await hook({ ...base, stdin: { ...base.stdin, stepIdx, toolCall: { name: "call_mcp_tool", args: { ServerName: server, ToolName: "echo", Arguments: {} } } } })).toMatchObject({ decision: server === "denied-server" ? "deny" : "ask" });
+  }
+  await daemon.stop();
+  daemon = null;
+  const rows = uploaded();
+  expect(rows).toHaveLength(3);
+  expect(rows.map(row => [row.status, row.decision_code])).toEqual([["held", "approval_required"], ["blocked", "policy_deny"], ["held", "approval_required"]]);
+  expect(new Set(rows.map(row => row.client_row_id)).size).toBe(3);
+}, 60_000);
+
+test("daemon audit uploads keep the released tool content limit below the shared row cap", async () => {
+  daemon = await signedInDaemon();
+  const base = captured().get(27)!;
+  for (const [index, length] of [2_000, 2_001, 8_000].entries()) {
+    expect(await hook({ ...base, stdin: { ...base.stdin, stepIdx: 20 + index, toolCall: { name: "search_web", args: { query: "x".repeat(length) } } } })).toMatchObject({ decision: "deny" });
+  }
+  await daemon.stop();
+  daemon = null;
+  const rows = uploaded();
+  expect(rows).toHaveLength(3);
+  expect(rows.map(row => (row.input as { query: string }).query.length)).toEqual([2_000, 2_003, 2_003]);
+}, 60_000);
 
 async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
   const start = performance.now();

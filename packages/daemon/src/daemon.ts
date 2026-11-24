@@ -30,6 +30,7 @@ import { stubDecide } from "./stub.ts";
 import { surfaceFromTranscriptPath } from "./surface.ts";
 import { applyStagedUpdate, createUpdater, optedOut, readUpdateStatus, type Updater } from "./update.ts";
 import { auditIdentity, captureFallback, queueLogin } from "./capture.ts";
+import { createFallbackSpool } from "./fallback-spool.ts";
 
 export const SESSION_IDLE_MS = 30 * 60 * 1000;
 const IDLE_SWEEP_MS = 60_000;
@@ -84,6 +85,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   const sessions = createSessionStore(paths.sessionsDir);
   const idleMs = opts.sessionIdleMs ?? SESSION_IDLE_MS;
   const pumps: Pump[] = [];
+  const fallbackSpool = createFallbackSpool({ dataDir: paths.dataDir, socket: paths.socket, log });
+  await fallbackSpool.kick();
+  fallbackSpool.start();
+  pumps.push(fallbackSpool);
   const abort = async (error: unknown): Promise<never> => {
     await Promise.allSettled([...pumps.map((p) => p.stop()), updater.stop()]);
     auth.stop();
@@ -127,12 +132,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   };
   const kickAll = () => pumps.forEach((p) => p.kick());
 
-  publishMode(paths, auth.mode(), log);
+  publishMode(paths, auth.mode(), log, auth.state());
   // The hook falls back to this mode file while the daemon is down, so a workspace switch rewrites it too.
-  const stopOrgMode = auth.orgMode.onChange(() => publishMode(paths, auth.mode(), log));
+  const stopOrgMode = auth.orgMode.onChange(() => publishMode(paths, auth.mode(), log, auth.state()));
   let lastUploadLogin = auth.uploadLogin();
   const unsubscribe = auth.onChange((state) => {
-    publishMode(paths, auth.mode(), log);
+    publishMode(paths, auth.mode(), log, auth.state());
     emit({ kind: "auth", state, at: Date.now() });
     const uploadLogin = auth.uploadLogin();
     if (uploadLogin && uploadLogin !== lastUploadLogin) kickAll();
@@ -208,16 +213,11 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     return async (event: HookEvent, code: string, reason: string): Promise<HookResponse> => {
       const response = fallbackResponse(event, mode, code, reason);
       if (response && "decision" in response && response.decision === "deny") {
-        const value = raw as { id?: string; payload?: unknown; receivedAt?: number; audit?: { rowId?: unknown; sessionId?: unknown; binding?: { backend?: unknown; keyId?: unknown } | null } };
-        const carried = value.audit;
-        let binding = carried ? carried.binding && typeof carried.binding.backend === "string" && typeof carried.binding.keyId === "string"
-          ? { backend: carried.binding.backend, keyId: carried.binding.keyId } : null
-          : queueLogin("login" in capturedAuth ? capturedAuth.login : null);
+        const value = raw as { id?: string; payload?: unknown; receivedAt?: number };
+        let binding = queueLogin("login" in capturedAuth ? capturedAuth.login : null);
         let identity;
         try {
-          identity = carried && typeof carried.rowId === "string" && /^[0-9a-f-]{36}$/i.test(carried.rowId)
-            ? { rowId: carried.rowId, ...(typeof carried.sessionId === "string" ? { sessionId: carried.sessionId } : {}) }
-            : auditIdentity({ id: value.id || crypto.randomUUID(), payload: value.payload }, paths.dataDir);
+          identity = auditIdentity({ id: value.id || crypto.randomUUID(), payload: value.payload }, paths.dataDir);
         } catch {
           // An unreadable relationship counts locally. It must not drop other requests
           // sharing this socket or become a row under a guessed conversation.
@@ -381,7 +381,7 @@ function listen(socketPath: string, onConnection: (socket: Socket) => void): Pro
 
 // The mode, and the answer the hook prints for each event while the daemon is unreachable. Both are
 // published here so they cannot drift: the hook never builds a response, it copies one of these files.
-function publishMode(paths: Paths, mode: Mode, log: Log): void {
+function publishMode(paths: Paths, mode: Mode, log: Log, state: ReturnType<Auth["state"]>): void {
   writeAtomic(paths.modeFile, `${mode}\n`, log);
   try {
     mkdirSync(paths.fallbackDir, { recursive: true, mode: 0o700 });
@@ -392,6 +392,7 @@ function publishMode(paths: Paths, mode: Mode, log: Log): void {
     const line = hookResponseLine(fallbackResponse(event, mode, DAEMON_UNAVAILABLE_CODE, DAEMON_UNAVAILABLE_REASON));
     writeAtomic(path.join(paths.fallbackDir, event), line, log);
   }
+  writeAtomic(path.join(paths.fallbackDir, "capture-context"), JSON.stringify({ binding: queueLogin("login" in state ? state.login : null), loggedOut: state.kind === "logged_out" }), log);
 }
 
 function writeAtomic(file: string, contents: string, log: Log): void {

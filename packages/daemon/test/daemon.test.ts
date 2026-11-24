@@ -204,15 +204,15 @@ test("a request with another protocol version gets the fallback for its event", 
   expect(fallbackRows(d)).toEqual([{ client_row_id: clientRowId("c", "c:0", "decision"), session_id: "c", tool: "unknown", action: "unknown", input: {}, executed_at: new Date(0).toISOString(), decision_code: "internal_error", status: "blocked" }]);
 });
 
-test("a fallback keeps the hook login binding when the daemon now has a different key", async () => {
+test("an obsolete hook audit field cannot override the daemon's captured login", async () => {
   login();
   const d = await start([], { ARMORIQ_API_KEY: "ak_test_other_login" });
-  const binding = queueLogin({ backend: STAGING, apiKey: "ak_test", userId: "user-1", orgId: "org-1", email: "", deviceId: "test", deviceName: "test" });
+  const binding = queueLogin({ backend: STAGING, apiKey: "ak_test" });
   const rowId = clientRowId("c", "0", "decision");
   const reply = await send(d.paths.socket, JSON.stringify({ v: 2, id: crypto.randomUUID(), receivedAt: 1_000, event: "PreToolUse", payload: toolPayload("c"), audit: { rowId, sessionId: "c", binding } }));
   expect(reply).toMatchObject({ response: { decision: "deny" } });
-  expect(fallbackRows(d)).toEqual([{ client_row_id: rowId, session_id: "c", tool: "unknown", action: "unknown", input: {}, executed_at: new Date(1_000).toISOString(), decision_code: "internal_error", status: "blocked" }]);
-  expect(await auditStatus({ ARMORIQ_BACKEND_URL: STAGING, ARMORIQ_API_KEY: "ak_test_other_login" })).toMatchObject({ pending: 1, undeliverable: 1 });
+  expect(fallbackRows(d)).toEqual([{ client_row_id: clientRowId("c", "c:0", "decision"), session_id: "c", tool: "unknown", action: "unknown", input: {}, executed_at: new Date(1_000).toISOString(), decision_code: "internal_error", status: "blocked" }]);
+  expect(await auditStatus({ ARMORIQ_BACKEND_URL: STAGING, ARMORIQ_API_KEY: "ak_test_other_login" })).toMatchObject({ pending: 1, undeliverable: 0 });
 });
 
 test("one connection can carry several requests and each answer keeps its id", async () => {

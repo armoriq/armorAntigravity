@@ -7,7 +7,7 @@ import {
   type HookEvent,
 } from "@armorantigravity/protocol";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -124,6 +124,27 @@ test("a missing fallback file denies the tool call with the protocol's own enfor
   );
   expect(await run(["PostToolUse"], JSON.stringify(toolPayload("c")), env)).toBe("");
 }, 20_000);
+
+test("concurrent C fallback spools retain the exact frame and printed bytes in private complete files", async () => {
+  const dir = path.join(dataDir(), "fallback-spool");
+  mkdirSync(dataDir(), { recursive: true });
+  const inputs = [1, 2, 3].map(step => JSON.stringify({ ...toolPayload("spooled"), stepIdx: step }, null, 2));
+  const outputs = await Promise.all(inputs.map(input => run(["PreToolUse"], input, { ARMORANTIGRAVITY_DAEMON: "/usr/bin/false" })));
+  const files = readdirSync(dir);
+  expect(files).toHaveLength(3);
+  expect(files.every(file => file.endsWith(".spool"))).toBe(true);
+  for (const [index, input] of inputs.entries()) {
+    expect(files.some(file => {
+      const bytes = readFileSync(path.join(dir, file));
+      return bytes.includes(Buffer.from(input.replaceAll("\n", " ") + "\n")) && bytes.includes(Buffer.from(outputs[index]!)) && bytes.toString().startsWith("agds1 dial_failed ");
+    })).toBe(true);
+  }
+}, 10_000);
+
+test("a compiled deny creates its spool even before the socket directory exists", async () => {
+  expect(await hook(["PreToolUse"], JSON.stringify(toolPayload("cold-spool")), { ARMORANTIGRAVITY_DAEMON: "/usr/bin/false" })).toMatchObject({ decision: "deny" });
+  expect(readdirSync(path.join(dataDir(), "fallback-spool")).filter(file => file.endsWith(".spool"))).toHaveLength(1);
+}, 10_000);
 
 // A socket the hook can reach that is not this daemon: a stalled peer, a peer on an older protocol.
 function peer(socketPath: string, onLine: (socket: Socket) => void): Promise<Server> {

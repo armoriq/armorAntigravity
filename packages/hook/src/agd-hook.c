@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
@@ -61,7 +62,7 @@ static int append(Buffer *b, const char *src, size_t n) {
   return 1;
 }
 
-static void write_all(int fd, const char *data, size_t n) {
+static int write_all(int fd, const char *data, size_t n) {
   while (n > 0) {
     ssize_t wrote = write(fd, data, n);
     if (wrote > 0) {
@@ -70,9 +71,10 @@ static void write_all(int fd, const char *data, size_t n) {
     } else if (wrote < 0 && errno == EINTR) {
       continue;
     } else {
-      return;
+      return 0;
     }
   }
+  return 1;
 }
 
 static long monotonic_ms(void);
@@ -187,7 +189,51 @@ static void spawn_daemon(void) {
 // anything is printed, because a tool call that would print nothing has to become the deny instead:
 // Antigravity reads empty PreToolUse output as no opinion and runs the call. Missing, unreadable, empty
 // and unopenable all land there, so nothing short of a file with content in it can fail open.
-static int print_fallback(const char *socket_path, const char *event) {
+static void spool_fallback(const char *socket_path, const Buffer *frame, const char *reason, const char *printed, size_t printed_len) {
+  if (!frame || frame->len > MAX_REPLY_BYTES) return;
+  char dir[PATH_MAX], temporary[PATH_MAX], complete[PATH_MAX], context_path[PATH_MAX];
+  const char *slash = strrchr(socket_path, '/');
+  size_t dir_len = slash ? (size_t)(slash - socket_path) : 0;
+  if (snprintf(dir, sizeof dir, "%.*s/fallback-spool", (int)dir_len, socket_path) >= (int)sizeof dir) return;
+  for (char *part = dir + 1; *part; part++) {
+    if (*part != '/') continue;
+    *part = '\0';
+    int made = mkdir(dir, 0700);
+    *part = '/';
+    if (made != 0 && errno != EEXIST) return;
+  }
+  if (mkdir(dir, 0700) != 0 && errno != EEXIST) return;
+  char context[4096];
+  size_t context_len = 0;
+  if (snprintf(context_path, sizeof context_path, "%.*s/fallback/capture-context", (int)dir_len, socket_path) < (int)sizeof context_path) {
+    int context_fd = open(context_path, O_RDONLY | O_NONBLOCK);
+    if (context_fd >= 0) {
+      ssize_t got = read(context_fd, context, sizeof context);
+      if (got > 0 && got < (ssize_t)sizeof context) context_len = (size_t)got;
+      close(context_fd);
+    }
+  }
+  char header[160];
+  int n = snprintf(header, sizeof header, "agds1 %s %zu %zu %zu\n", reason, frame->len, printed_len, context_len);
+  if (n <= 0 || n >= (int)sizeof header || (size_t)n + frame->len + printed_len + context_len > MAX_REPLY_BYTES) return;
+  int fd = -1;
+  for (int attempt = 0; attempt < 8; attempt++) {
+    if (snprintf(temporary, sizeof temporary, "%s/record-%ld-%lld-%ld-%d.tmp", dir, (long)getpid(), wall_ms(), monotonic_ms(), attempt) >= (int)sizeof temporary) return;
+    fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NONBLOCK, 0600);
+    if (fd >= 0 || errno != EEXIST) break;
+  }
+  if (fd < 0) return;
+  int ok = write_all(fd, header, (size_t)n) && write_all(fd, frame->data, frame->len) &&
+           write_all(fd, printed, printed_len) && write_all(fd, context, context_len) && fsync(fd) == 0;
+  close(fd);
+  // Failed or interrupted writes remain recognizable as temporary records, never as complete ones.
+  if (!ok || snprintf(complete, sizeof complete, "%.*s.spool", (int)(strlen(temporary) - 4), temporary) >= (int)sizeof complete) return;
+  if (rename(temporary, complete) != 0) return;
+  int directory = open(dir, O_RDONLY);
+  if (directory >= 0) { fsync(directory); close(directory); }
+}
+
+static int print_fallback(const char *socket_path, const char *event, const Buffer *frame, const char *reason) {
   int tool_call = strcmp(event, "PreToolUse") == 0;
   char path[PATH_MAX];
   const char *slash = strrchr(socket_path, '/');
@@ -205,8 +251,10 @@ static int print_fallback(const char *socket_path, const char *event) {
     }
     close(fd);
   }
-  if (file.len > 0) write_all(STDOUT_FILENO, file.data, file.len);
-  else if (tool_call) write_all(STDOUT_FILENO, ENFORCE_DENY, sizeof ENFORCE_DENY - 1);
+  const char *printed = file.len > 0 ? file.data : tool_call ? ENFORCE_DENY : "";
+  size_t printed_len = file.len > 0 ? file.len : tool_call ? sizeof ENFORCE_DENY - 1 : 0;
+  spool_fallback(socket_path, frame, reason, printed, printed_len);
+  write_all(STDOUT_FILENO, printed, printed_len);
   return 0;
 }
 
@@ -309,7 +357,7 @@ int main(int argc, char **argv) {
   if (!known_event(event)) return 0;
 
   char socket_path[PATH_MAX];
-  if (!resolve_socket(socket_path, sizeof socket_path)) return print_fallback("", event);
+  if (!resolve_socket(socket_path, sizeof socket_path)) return print_fallback("", event, NULL, "before_frame");
 
   // The payload goes to the daemon exactly as Antigravity wrote it, so the hook needs no JSON writer.
   // JSON never has a bare newline inside a token, so turning newlines into spaces keeps the frame on
@@ -317,9 +365,9 @@ int main(int argc, char **argv) {
   Buffer request = {0};
   char header[64 + PATH_MAX];
   int header_len = snprintf(header, sizeof header, "%s %s %lld ", FRAME_TAG, event, wall_ms());
-  if (!append(&request, header, (size_t)header_len)) return print_fallback(socket_path, event);
+  if (!append(&request, header, (size_t)header_len)) return print_fallback(socket_path, event, NULL, "before_frame");
   for (;;) {
-    if (!reserve(&request, 64 * 1024)) return print_fallback(socket_path, event);
+    if (!reserve(&request, 64 * 1024)) return print_fallback(socket_path, event, NULL, "before_frame");
     ssize_t got = read(STDIN_FILENO, request.data + request.len, request.cap - request.len);
     if (got > 0) {
       for (ssize_t i = 0; i < got; i++)
@@ -331,10 +379,10 @@ int main(int argc, char **argv) {
       break;
     }
   }
-  if (!append(&request, "\n", 1)) return print_fallback(socket_path, event);
+  if (!append(&request, "\n", 1)) return print_fallback(socket_path, event, NULL, "before_frame");
 
   int fd = dial(socket_path);
-  if (fd < 0) return print_fallback(socket_path, event);
+  if (fd < 0) return print_fallback(socket_path, event, &request, "dial_failed");
   Buffer reply = {0};
   int answered = exchange(fd, &request, &reply);
   close(fd);
@@ -343,7 +391,7 @@ int main(int argc, char **argv) {
   // of to Antigravity, which reads whatever arrives on stdout as the decision.
   int tagged = answered && reply.len >= sizeof FRAME_TAG - 1 && memcmp(reply.data, FRAME_TAG, sizeof FRAME_TAG - 1) == 0 &&
                (reply.len == sizeof FRAME_TAG - 1 || reply.data[sizeof FRAME_TAG - 1] == ' ');
-  if (!tagged) return print_fallback(socket_path, event);
+  if (!tagged) return print_fallback(socket_path, event, &request, answered ? "untagged_reply" : "no_answer");
   size_t offset = reply.len == sizeof FRAME_TAG - 1 ? reply.len : sizeof FRAME_TAG;
   if (reply.len > offset) {
     append(&reply, "\n", 1);

@@ -22,7 +22,7 @@ export type PumpTiming = { intervalMs: number; minBackoffMs: number; maxBackoffM
 export const DEFAULT_TIMING: PumpTiming = { intervalMs: 5_000, minBackoffMs: 5_000, maxBackoffMs: 600_000, stopBudgetMs: 2_000, authProbeMs: 120_000 };
 type AuthProbe = (request: { login: QueueLogin }) => Promise<{ status: number }>;
 
-export function auditLogin(login: Login | null): QueueLogin | null {
+export function auditLogin(login: Pick<Login, "backend" | "apiKey"> | null): QueueLogin | null {
   return login?.apiKey && login.backend ? { backend: login.backend, keyId: createHash("sha256").update(login.apiKey).digest("hex") } : null;
 }
 

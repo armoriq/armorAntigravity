@@ -1,6 +1,6 @@
 import { removeProfile, saveLoginProfile } from "@armoriq/sdk-dev/dist/credentials.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { createAuth, loginBinding, readLogin, resolveBackend, type Auth, type AuthState } from "../src/auth.ts";
 import { DEFAULT_CONFIG, type Config } from "../src/config.ts";
@@ -28,6 +28,40 @@ const dataDir = () => path.join(sandbox.home, ".armoriq", "armorantigravity");
 const start = (config: Partial<Config> = {}, env: Record<string, string> = {}) =>
   (auth = createAuth(quiet, { env: { ARMORIQ_ORG_MODE: "enforce", ...env }, config: { ...DEFAULT_CONFIG, backendUrl: STAGING, ...config }, dataDir: dataDir(), pollMs: 50 }));
 const nextChange = (a: Auth) => new Promise<AuthState>((resolve) => a.onChange(resolve));
+
+test("successful authentication notifies evidence even when active state is unchanged", () => {
+  save(STAGING, "armorantigravity", "ak_1");
+  const a = start();
+  const accepted: unknown[] = [];
+  const changes: unknown[] = [];
+  const unsubscribe = a.onAuthenticated(login => accepted.push(login));
+  a.onChange(state => changes.push(state));
+  const login = a.uploadLogin()!;
+  a.authenticationSucceeded({ ...login, apiKey: "ak_other" });
+  a.authenticationSucceeded({ ...login, backend: "https://other.invalid" });
+  expect(accepted).toEqual([]);
+  a.authenticationSucceeded(login);
+  expect(accepted).toEqual([login]);
+  expect(changes).toEqual([]);
+  unsubscribe();
+  a.authenticationSucceeded(login);
+  expect(accepted).toEqual([login]);
+});
+
+test("a verified original key clears a persistent relogin pause without changing credentials", () => {
+  save(STAGING, "armorantigravity", "ak_1");
+  const a = start();
+  const login = a.uploadLogin()!;
+  a.reportStatus(403, { error: "relogin_required" }, "upload");
+  expect(a.uploadLogin()).toBeNull();
+  expect(a.authenticationLogin()).toEqual(login);
+  a.authenticationSucceeded(login);
+  expect(a.state().kind).toBe("active");
+  expect(a.uploadLogin()).toEqual(login);
+  expect(existsSync(path.join(dataDir(), `relogin-required-${loginBinding(login)}`))).toBe(false);
+  a.stop();
+  expect(start().state().kind).toBe("active");
+});
 
 test("backend order is ARMORIQ_BACKEND_URL, then config, then prod", () => {
   expect(resolveBackend({ ARMORIQ_BACKEND_URL: "http://localhost:3000/" }, STAGING)).toBe("http://localhost:3000");

@@ -4,7 +4,9 @@ import { createRegistry, conversationKey } from "@armorantigravity/intent";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { auditIdentity, auditStatus, captureFallback, prepareHookCapture, queueLogin } from "../src/capture.ts";
+import { auditIdentity, auditStatus, captureFallback, queueLogin } from "../src/capture.ts";
+import * as spoolModule from "../src/fallback-spool.ts";
+import * as capture from "../src/capture.ts";
 
 const dirs: string[] = [];
 const quiet = { info() {}, warn() {}, error() {} };
@@ -48,7 +50,7 @@ test("released v0.2.0 files stay untouched and rows without a binding appear in 
   } finally { await queue.persist(); }
 });
 
-test("the hook snapshots root identity and login before an asynchronous decision or a login change", async () => {
+test("spool records keep their captured login, deduplicate replay, and retain incomplete files", async () => {
   const { dir, env } = store();
   const registry = createRegistry(() => 1_000, path.join(dir, "intent-state.json"));
   registry.syncAuth(login, "enforce");
@@ -58,17 +60,31 @@ test("the hook snapshots root identity and login before an asynchronous decision
   registry.open(child);
   registry.link(child, root);
   const request = { id: crypto.randomUUID(), receivedAt: 1_000, payload: { conversationId: "child", stepIdx: 7, transcriptPath: "/.gemini/antigravity-cli/brain/child/t.jsonl", toolCall: { args: { secret: "never captured" } } } };
-  const captured = prepareHookCapture(request, env);
+  const socket = path.join(dir, "agd.sock");
+  const spoolDir = path.join(dir, "fallback-spool");
+  mkdirSync(spoolDir, { recursive: true });
+  const frame = `agd1 PreToolUse 1000 ${JSON.stringify(request.payload)}\n`;
+  const printed = '{"decision":"deny","reason":"daemon unavailable"}\n';
+  const context = JSON.stringify({ binding, loggedOut: false });
+  const bytes = Buffer.from(`agds1 dial_failed ${Buffer.byteLength(frame)} ${Buffer.byteLength(printed)} ${Buffer.byteLength(context)}\n${frame}${printed}${context}`);
+  writeFileSync(path.join(spoolDir, "record-999999999-1.spool"), bytes);
+  writeFileSync(path.join(spoolDir, "record-999999999-2.tmp"), "incomplete");
   registry.close(conversationKey(root));
   env.ARMORIQ_API_KEY = "ak_test_other_login";
   request.payload.stepIdx = 99;
-  await captured.stop();
+  const spool = spoolModule.createFallbackSpool({ dataDir: dir, socket, log: quiet });
+  await spool.kick();
+  writeFileSync(path.join(spoolDir, "record-999999999-1.spool"), bytes);
+  await spool.kick();
+  await spool.stop();
   const outbox = createOutbox(dir, "audit", quiet, { login: () => binding });
   expect(outbox.readPending().map(entry => entry.row)).toEqual([{
-    client_row_id: clientRowId("root", "child:7", "decision"), session_id: "root", tool: "unknown", action: "unknown", input: {},
+    client_row_id: expect.stringMatching(/^[0-9a-f-]{36}$/), session_id: "child", tool: "unknown", action: "unknown", input: {},
     executed_at: new Date(1_000).toISOString(), decision_code: "internal_error", status: "blocked",
   }]);
   expect(outbox.status().undeliverable).toBe(0);
+  expect(readdirSync(path.join(spoolDir, "archive"))).toHaveLength(1);
+  expect(readdirSync(path.join(spoolDir, "quarantine"))).toHaveLength(1);
   await outbox.persist();
 });
 
@@ -91,6 +107,22 @@ test("parent and child fallback stops at the same step have distinct ids", async
   const queue = createOutbox(dir, "audit", quiet, { login: () => binding });
   expect(queue.readPending()).toHaveLength(2);
   await queue.persist();
+});
+
+test("an invalid spool login snapshot is retained without stopping the next valid record", async () => {
+  const { dir, env } = store();
+  const root = path.join(dir, "fallback-spool");
+  mkdirSync(root, { recursive: true });
+  const frame = 'agd1 PreToolUse 1000 {"conversationId":"captured"}\n';
+  const printed = '{"decision":"deny"}\n';
+  const record = (context: string) => `agds1 dial_failed ${Buffer.byteLength(frame)} ${Buffer.byteLength(printed)} ${Buffer.byteLength(context)}\n${frame}${printed}${context}`;
+  writeFileSync(path.join(root, "record-999999999-1.spool"), record("null"));
+  writeFileSync(path.join(root, "record-999999999-2.spool"), record(JSON.stringify({ binding, loggedOut: false })));
+  const spool = spoolModule.createFallbackSpool({ dataDir: dir, socket: path.join(dir, "agd.sock"), log: quiet });
+  try { await spool.kick(); } finally { await spool.stop(); }
+  expect(await auditStatus(env)).toMatchObject({ pending: 1, captureFailures: 1 });
+  expect(readdirSync(path.join(root, "archive"))).toHaveLength(1);
+  expect(readFileSync(path.join(root, "quarantine", "record-999999999-1.spool"), "utf8")).toContain("null");
 });
 
 test("a missing host call id carries the UUID allocated on entry through fallback capture", () => {
@@ -132,3 +164,4 @@ test("repeated status calls create no queue writers", async () => {
   await auditStatus(env);
   expect(existsSync(path.join(dir, "outbox", "audit-v2"))).toBe(false);
 });
+
