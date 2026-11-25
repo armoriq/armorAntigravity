@@ -1,4 +1,7 @@
-// Shared contract for every module, vendored from armorOpenCode src/types.ts.
+// Shared contract for every module. See docs/architecture.md, section 4.
+
+import type { Capability } from "./core/capability.ts";
+export type { Capability };
 
 export type SessionID = string & { readonly __brand: "SessionID" };
 export type Mode = "enforce" | "monitor";
@@ -6,6 +9,8 @@ export type Mode = "enforce" | "monitor";
 export type ToolCall = {
   sessionId: SessionID;
   callId: string;
+  // V2 reuses an outer call id in code mode. Its stable attempt id also distinguishes nested calls.
+  attemptId?: string;
   tool: string;
   args: Readonly<Record<string, unknown>>;
 };
@@ -53,6 +58,33 @@ export type Token =
     }
   | { status: "refused"; code: "account_revoked" | "billing_blocked" };
 
+export type PlanKind = "new" | "revision" | "refresh";
+
+export type PendingPlanRequest = {
+  key: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+};
+
+export type PlanCaptureState = {
+  promptId: string | null;
+  promptGeneration: number;
+  retirementEpoch: number;
+  promptOpenSince: number | null;
+  lastActivityAt: number | null;
+  countedPlanId: string | null;
+  tokenPlanId: string | null;
+  planHash: string | null;
+  kind: PlanKind | null;
+  tokenExpiresAt: number | null;
+  authGeneration: number;
+  pendingRequest: PendingPlanRequest | null;
+  unregisteredLocalPlan: Omit<Plan, "id"> | null;
+  seenMessageIds: string[];
+};
+
+export type SessionGeneration = Pick<PlanCaptureState, "promptId" | "promptGeneration" | "authGeneration">;
+
 export type Session = {
   id: SessionID;
   parentId: SessionID | null;
@@ -73,14 +105,14 @@ export type CompiledPolicy = {
 };
 
 export type AuditStatus = "success" | "failed" | "error" | "blocked" | "held";
-
-// Spec 0002 verdict field, from the tools-core capability table.
-export type Capability = "read" | "write" | "shell" | "mcp" | "web" | "other";
+export type DecisionCode = "policy_deny" | "protected_resource" | "missing_plan" | "out_of_scope" | "token_expired" | "plan_request_failed" | "integrity" | "account" | "approval_required" | "outage" | "internal_error" | "other";
 
 export type AuditRow = {
-  // Backend CreateAuditLogDto dedupe key (UUID); armorOpenCode does not send it yet.
   client_row_id?: string;
   plan_id?: string;
+  context_plan_id?: string;
+  prompt_id?: string;
+  decision_code?: DecisionCode;
   session_id: string;
   agent_id?: string;
   user_id?: string;
@@ -105,6 +137,8 @@ export type AuditRow = {
 export type BatchAck = {
   written: number;
   failures: readonly { index: number; error: string }[];
+  results?: readonly { client_row_id: string; outcome: "accepted" | "duplicate" | "retryable" | "rejected"; error?: string }[];
+  retryAfterMs?: number;
 };
 
 export type Login = {
@@ -123,6 +157,19 @@ export type TokenUsageEntry = {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+};
+
+// One model step's token counts as the host reported them, before normalization.
+export type StepTokens = {
+  sessionId: SessionID;
+  messageId: string;
+  partId: string;
+  repo: string;
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
 };
 
 export type StepUsage = {
