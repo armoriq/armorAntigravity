@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createRegistry } from "../src/registry.ts";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { conversationKey, type Plan, type Token } from "../src/types.ts";
 import { LOGIN } from "./helpers.ts";
 
@@ -9,6 +12,45 @@ const plan: Plan = { id: "plan-1", hash: "hash", goal: "work", steps: [{ action:
 const token: Token = { status: "active", jwt: "test", expiresAt: 9e12, deniedTools: new Set(), heldTools: new Set() };
 
 describe("prompt session state", () => {
+  test("closing a parent keeps its running child attached and unable to become a root", () => {
+    const registry = createRegistry();
+    const child = { ...REF, conversationId: "child" };
+    registry.link(child, REF);
+    registry.close(KEY);
+    registry.beginPrompt(conversationKey(child), 0);
+    expect(registry.get(conversationKey(child))).toMatchObject({ parent: KEY, promptId: null });
+    expect(registry.root(conversationKey(child))).toBeNull();
+  });
+
+  test("retirements advance the epoch within a prompt and a new prompt resets it", () => {
+    const registry = createRegistry();
+    registry.syncAuth(LOGIN, "enforce");
+    registry.open(REF);
+    registry.beginPrompt(KEY, 0);
+    expect(registry.get(KEY)?.retirementEpoch).toBe(0);
+    registry.setPlan(KEY, plan, token);
+    const retired = registry.generation(KEY)!;
+    registry.clearPlan(KEY);
+    expect(registry.get(KEY)?.retirementEpoch).toBe(1);
+    expect(registry.setToken(KEY, token, retired)).toBe(false);
+    registry.syncAuth(null, "monitor");
+    registry.syncAuth(LOGIN, "enforce");
+    expect(registry.get(KEY)?.retirementEpoch).toBe(3);
+    registry.beginPrompt(KEY, 8);
+    expect(registry.get(KEY)?.retirementEpoch).toBe(0);
+  });
+
+  test("linking a possible child clears its provisional prompt and fences late results", () => {
+    const registry = createRegistry();
+    const child = { ...REF, conversationId: "child" };
+    const key = registry.open(child).key;
+    registry.beginPrompt(key, 0);
+    const generation = registry.generation(key)!;
+    expect(registry.link(child, REF)).toBe(true);
+    expect(registry.get(key)).toMatchObject({ promptId: null, promptOpenSince: null });
+    expect(registry.setPlan(key, plan, token, generation)).toBe(false);
+  });
+
   test("a new prompt clears the previous plan and its request state", () => {
     const registry = createRegistry(() => 100);
     registry.open(REF);
@@ -90,4 +132,78 @@ describe("prompt session state", () => {
     expect(registry.busy(KEY)).toBe(false);
     expect(registry.busy(other)).toBe(false);
   });
+});
+test("request state is durable before send and is retired on a restored auth change", () => {
+  const dir = mkdtempSync(join(tmpdir(), "intent-state-"));
+  const file = join(dir, "state.json");
+  try {
+    const registry = createRegistry(Date.now, file);
+    registry.syncAuth(LOGIN, "enforce");
+    registry.open(REF);
+    registry.beginPrompt(KEY, 0);
+    const request = { key: "pcc1:key", headers: { "X-ArmorIQ-Plan-Kind": "new" }, body: { plan: { goal: "g" } } };
+    registry.setPendingRequest(KEY, request, registry.generation(KEY)!);
+    expect(readFileSync(file, "utf8")).not.toContain(LOGIN.apiKey);
+    const restored = createRegistry(Date.now, file);
+    restored.syncAuth(LOGIN, "enforce");
+    expect(restored.get(KEY)?.pendingRequest).toEqual(request);
+    expect(restored.get(KEY)?.promptId).toBe(registry.get(KEY)?.promptId);
+    restored.syncAuth(null, "monitor");
+    expect(restored.get(KEY)?.pendingRequest).toBeNull();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("activity after thirty idle minutes cannot reopen the old prompt", () => {
+  let clock = 0;
+  const registry = createRegistry(() => clock);
+  registry.open(REF);
+  registry.beginPrompt(KEY, 0);
+  clock = 30 * 60_000;
+  registry.open(REF);
+  expect(registry.get(KEY)?.promptOpenSince).toBeNull();
+  registry.beginPrompt(KEY, 8);
+  expect(registry.get(KEY)?.promptOpenSince).toBe(clock);
+});
+
+for (const text of ["{broken", JSON.stringify({ v: 2, conversations: [], authIdentity: "future" }), JSON.stringify({ v: 1, conversations: [] })]) {
+  test("an invalid state file is preserved and reported before starting with empty state", () => {
+    const dir = mkdtempSync(join(tmpdir(), "intent-invalid-"));
+    const file = join(dir, "state.json");
+    const warnings: string[] = [];
+    try {
+      writeFileSync(file, text);
+      const registry = createRegistry(Date.now, file, { warn: message => { warnings.push(message); } });
+      expect([...registry.all()]).toEqual([]);
+      const backup = readdirSync(dir).find(name => name.startsWith("state.json.invalid."));
+      expect(backup).toBeDefined();
+      expect(readFileSync(join(dir, backup!), "utf8")).toBe(text);
+      expect(warnings).toHaveLength(1);
+      registry.syncAuth(LOGIN, "enforce");
+      expect(createRegistry(Date.now, file).open(REF).plan).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("the retirement epoch survives a restart and older state starts at zero", () => {
+  const dir = mkdtempSync(join(tmpdir(), "intent-epoch-"));
+  const file = join(dir, "state.json");
+  try {
+    const registry = createRegistry(Date.now, file);
+    registry.syncAuth(LOGIN, "enforce");
+    registry.open(REF);
+    registry.beginPrompt(KEY, 0);
+    registry.setPlan(KEY, plan, token);
+    registry.clearPlan(KEY);
+    expect(createRegistry(Date.now, file).get(KEY)?.retirementEpoch).toBe(1);
+    const old = JSON.parse(readFileSync(file, "utf8"));
+    delete old.conversations[0].conversation.retirementEpoch;
+    writeFileSync(file, JSON.stringify(old));
+    expect(createRegistry(Date.now, file).get(KEY)?.retirementEpoch).toBe(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

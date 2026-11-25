@@ -1,5 +1,19 @@
 {
   "version": 1,
+  "headers": {
+    "kind": "X-ArmorIQ-Plan-Kind",
+    "parentPlanId": "X-ArmorIQ-Parent-Plan-Id",
+    "promptId": "X-ArmorIQ-Prompt-Id",
+    "idempotencyKey": "Idempotency-Key"
+  },
+  "kinds": {
+    "wire": [
+      "new",
+      "revision",
+      "refresh"
+    ],
+    "storedWithoutKind": "unknown"
+  },
   "identity": [
     {
       "plugin": "ArmorClaude",

@@ -113,6 +113,19 @@ test("a socket path longer than sun_path is bound in full, from its directory", 
   expect(await hook("PreToolUse", toolPayload("conv-long"))).toEqual({ decision: "allow" });
 });
 
+test("MCP outcome requests pass a 45 second wait to the handler", async () => {
+  const d = await start([{
+    name: "outcome",
+    setup: () => ({ mcpOutcome: async (_tool, _args, waitMs) => String(waitMs) }),
+  }]);
+  for (const tool of ["register_intent_plan", "trust_reanchor"]) {
+    for (const waitMs of [1_000, 45_000, 60_000]) {
+      const reply = await send(d.paths.socket, JSON.stringify({ v: 1, id: "outcome", kind: "mcp_outcome", tool, args: {}, waitMs }));
+      expect(reply).toEqual({ v: 1, id: "outcome", text: String(Math.min(waitMs, 45_000)) });
+    }
+  }
+});
+
 test("PreInvocation opens a turn and Stop closes it and kicks the pumps", async () => {
   const rec = recorder();
   await start([rec.plugin]);

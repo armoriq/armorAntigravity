@@ -11,6 +11,7 @@ export const IDLE_AFTER_STOP_MS = 30 * 60_000;
 const FORGET_AFTER_MS = 24 * 60 * 60_000;
 const RETRY_MAX_MS = 5 * 60_000;
 const PROMPT_IDLE_MS = 30 * 60_000;
+const PRE_TOOL_REFRESH_WAIT_MS = 3500;
 // Long enough for one revoke: two attempts of 5 s each.
 const STOP_WAIT_MS = 11_000;
 
@@ -24,7 +25,7 @@ export interface TokenPump {
   stop(): Promise<void>;
 }
 
-// Refresh open prompts with backoff. The tool guard joins a refresh already in flight.
+// Refresh open prompts with backoff. The tool guard joins a refresh already in flight for up to 3.5 seconds.
 export function createTokenPump(deps: {
   registry: Registry;
   backend: IntentBackend;
@@ -40,7 +41,7 @@ export function createTokenPump(deps: {
 }): TokenPump {
   const { registry, backend, login, log } = deps;
   const now = deps.now ?? Date.now;
-  const validity = intentValiditySeconds(process.env, deps.validitySeconds ?? 3600);
+  const validity = deps.validitySeconds ?? intentValiditySeconds(process.env);
   const refreshBeforeMs = Math.min(120, validity / 3) * 1000;
   const idleMs = deps.idleAfterStopMs ?? IDLE_AFTER_STOP_MS;
   const inflight = new Set<Promise<void>>();
@@ -90,14 +91,14 @@ export function createTokenPump(deps: {
     for (const c of [...registry.all()]) {
       if (stopped) return;
       if (now() - (activity.get(c.key) ?? c.lastActivityAt) >= FORGET_AFTER_MS) {
-        if (auth && live(c)) revokePlan(auth, c.key, c.plan.id, "antigravity conversation expired");
+        if (auth && live(c)) revokePlan(auth, c.key, c.tokenPlanId ?? c.plan.id, "antigravity conversation expired");
         registry.close(c.key);
         stoppedAt.delete(c.key);
         continue;
       }
       if (idle(c)) {
         stoppedAt.delete(c.key);
-        if (auth && live(c)) revokePlan(auth, c.key, c.plan.id, "antigravity conversation idle");
+        if (auth && live(c)) revokePlan(auth, c.key, c.tokenPlanId ?? c.plan.id, "antigravity conversation idle");
         registry.clearPlan(c.key);
         continue;
       }
@@ -124,7 +125,7 @@ export function createTokenPump(deps: {
         registry.syncAuth(login(), deps.mode?.() ?? "enforce");
         return stopped || !registry.isCurrent(c.key, generation) || !promptOpen(c);
       };
-      const result = await backend.mint(auth, unminted, c.ref.conversationId, descriptor, { cancelled });
+      const result = await backend.mint(auth, unminted, c.ref.conversationId, descriptor, { cancelled, now });
       registry.syncAuth(login(), deps.mode?.() ?? "enforce");
       if (!result.ok) {
         if (registry.isCurrent(c.key, generation)) {
@@ -208,9 +209,16 @@ export function createTokenPump(deps: {
       const c = registry.root(key);
       if (!c || c.token?.status !== "active" || c.token.expiresAt > now()) return;
       const active = refreshing.get(c.key);
-      if (active) return active;
       const auth = login();
-      if (auth && due(c) && c.plan) await refreshOnce(auth, c, c.plan);
+      const work = active ?? (auth && due(c) && c.plan ? refreshOnce(auth, c, c.plan) : null);
+      if (!work) return;
+      // The hook has a ten second budget. The normal decision can report an expired token while refresh continues.
+      let wait: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([work, new Promise<void>(resolve => { wait = setTimeout(resolve, PRE_TOOL_REFRESH_WAIT_MS); })]);
+      } finally {
+        clearTimeout(wait);
+      }
     },
 
     noteStop(key) {
@@ -223,7 +231,7 @@ export function createTokenPump(deps: {
       const c = registry.get(key);
       const auth = login();
       if (!c || !auth || !live(c)) return;
-      revokePlan(auth, key, c.plan.id, reason);
+      revokePlan(auth, key, c.tokenPlanId ?? c.plan.id, reason);
       registry.clearPlan(key);
     },
 
@@ -233,7 +241,7 @@ export function createTokenPump(deps: {
       if (timer) clearInterval(timer);
       timer = null;
       const auth = login();
-      if (auth) for (const c of registry.all()) if (live(c)) revokePlan(auth, c.key, c.plan.id, "armoriq-agd shutting down");
+      if (auth) for (const c of registry.all()) if (live(c)) revokePlan(auth, c.key, c.tokenPlanId ?? c.plan.id, "armoriq-agd shutting down");
       if (inflight.size === 0) return;
       let wait: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([Promise.allSettled([...inflight]), new Promise((r) => (wait = setTimeout(r, STOP_WAIT_MS)))]);
