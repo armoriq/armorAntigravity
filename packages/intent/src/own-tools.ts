@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { isPlainObject, mcpPart, parsePlan } from "./plan.ts";
-import type { Conversation, Registry } from "./registry.ts";
+import type { Conversation, Generation, Registry } from "./registry.ts";
 import { AGENT_ID, CLIENT_ID, conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PolicyView, type Token } from "./types.ts";
 
 export const OWN_TOOLS = ["register_intent_plan", "trust_reanchor", "trust_revoke", "trust_delegate", "policy_read"] as const;
@@ -106,7 +106,6 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 export function createOwnTools(deps: OwnToolDeps): OwnTools {
   const { registry, backend, log } = deps;
   const now = deps.now ?? Date.now;
-  const registering = new Set<ConversationKey>();
   const background = new Set<Promise<void>>();
   const outcomes = new Map<string, { text: string; conversation: ConversationKey; at: number }[]>();
   const waiters = new Map<string, ((text: string | null) => void)[]>();
@@ -144,7 +143,7 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     if (conv.parent !== null) {
       return "This is a subagent conversation. It inherits the plan registered by its parent and cannot register its own. Continue within the parent plan.";
     }
-    if (registering.has(conv.key)) return "A plan registration is already in progress for this conversation. Wait for it to finish.";
+    if (registry.busy(conv.key)) return "A plan registration is already in progress for this conversation. Wait for it to finish.";
     const previous = conv.plan;
     // A plan recorded while logged out was never minted, so replacing it is a first registration.
     const revising = previous !== null && previous.id !== "" ? previous : null;
@@ -153,7 +152,7 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       return `Plan revision rejected: at most ${MAX_REVISIONS_PER_TURN} revisions are allowed per user message. Continue with the current plan or ask the user how to proceed.`;
     }
 
-    const parsed = parsePlan(raw, previous ? previous.revision + 1 : 1, `turn-${conv.turn}`);
+    const parsed = parsePlan(raw, previous ? previous.revision + 1 : 1, conv.promptId ?? `turn-${conv.turn}`);
     if (!parsed.ok) return `Plan rejected: ${parsed.error}`;
     const forbidden = forbiddenStep(parsed.plan);
     if (forbidden) return forbidden;
@@ -163,11 +162,13 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       registry.setPlan(conv.key, { ...parsed.plan, id: "" }, null);
       return `Intent recorded locally: ${parsed.plan.steps.length} steps. ArmorIQ is not logged in, so calls are monitored, not enforced.`;
     }
-    registering.add(conv.key);
+    const release = registry.acquire(conv.key);
+    if (!release) return "A plan registration is already in progress for this conversation. Wait for it to finish.";
+    const generation = registry.generation(conv.key)!;
     try {
-      return await mint(login, conv, parsed.plan, previous, revising, reason);
+      return await mint(login, conv, parsed.plan, previous, revising, reason, generation);
     } finally {
-      registering.delete(conv.key);
+      release();
     }
   }
 
@@ -182,8 +183,10 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     return null;
   }
 
-  async function mint(login: Login, conv: Conversation, draft: Draft, previous: Plan | null, revising: Plan | null, reason: string): Promise<string> {
+  async function mint(login: Login, conv: Conversation, draft: Draft, previous: Plan | null, revising: Plan | null, reason: string, generation: Generation): Promise<string> {
     const minted = await backend.mint(login, draft, conv.ref.conversationId);
+    registry.syncAuth(deps.login(), deps.mode());
+    if (!registry.isCurrent(conv.key, generation)) return "Plan not installed: the prompt or login state changed during registration. Register a plan for the current prompt.";
     if (!minted.ok) {
       if (minted.relogin) deps.onRelogin?.(minted.reason);
       const kept = previous ? " The previous plan is still in effect." : " No plan is active, so side-effecting calls stay blocked.";
@@ -192,16 +195,17 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     const { token, planId } = minted.value;
     if (token.status === "refused" && token.code === "account_revoked" && deps.onUnauthorized) {
       deps.onUnauthorized();
+      registry.syncAuth(deps.login(), deps.mode());
       return "Plan not registered: ArmorIQ did not accept the API key, so this session runs in local-only mode on local rules. Run `armorantigravity status` to check the login.";
     }
     if (token.status === "refused") {
-      registry.setToken(conv.key, token);
+      registry.setToken(conv.key, token, generation);
       return token.code === "account_revoked"
         ? "Plan not registered: the ArmorIQ API key was revoked (account_revoked). Tool calls are blocked until the user logs in again."
         : "Plan not registered: the ArmorIQ organization has no active subscription or is over quota (billing_blocked). Tool calls are blocked.";
     }
     const plan: Plan = { ...draft, id: planId };
-    registry.setPlan(conv.key, plan, token);
+    registry.setPlan(conv.key, plan, token, generation);
     if (revising) {
       registry.noteRevision(conv.key);
       track(recordRevision(login, conv, revising, plan, reason));
@@ -245,16 +249,24 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
 
   async function revoke(conv: Conversation, reason: string): Promise<string> {
     if (conv.parent !== null) return "This is a subagent conversation; its plan belongs to the parent conversation and cannot be revoked here.";
-    if (registering.has(conv.key)) return "A plan registration is in progress for this conversation. Revoke after it finishes.";
+    if (registry.busy(conv.key)) return "A plan registration is in progress for this conversation. Revoke after it finishes.";
     if (!conv.plan) return "No registered plan to revoke.";
     if (!reason.trim()) return 'Revoke rejected: pass a "reason".';
     const login = deps.login();
-    if (login && conv.plan.id) {
-      const r = await backend.revoke(login, conv.plan.id, reason);
-      if (!r.ok) return `Revoke failed: ${r.reason}. The plan is still registered.`;
+    const release = registry.acquire(conv.key)!;
+    const generation = registry.generation(conv.key)!;
+    try {
+      if (login && conv.plan.id) {
+        const r = await backend.revoke(login, conv.plan.id, reason);
+        registry.syncAuth(deps.login(), deps.mode());
+        if (!registry.isCurrent(conv.key, generation)) return "The previous prompt or login state was retired while revoking its plan.";
+        if (!r.ok) return `Revoke failed: ${r.reason}. The plan is still registered.`;
+      }
+      registry.clearPlan(conv.key);
+      return "Intent token revoked. Side-effecting calls are blocked until a new plan is registered.";
+    } finally {
+      release();
     }
-    registry.clearPlan(conv.key);
-    return "Intent token revoked. Side-effecting calls are blocked until a new plan is registered.";
   }
 
   async function delegate(conv: Conversation, args: Record<string, unknown>): Promise<string> {
@@ -319,16 +331,17 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
 
   return {
     handle(ref, tool, rawArgs, stepIdx) {
+      registry.syncAuth(deps.login(), deps.mode());
+      const conv = registry.open(ref);
       const cutoff = now() - OUTCOME_TTL_MS;
       for (const [k, v] of handled) if (v.at < cutoff) handled.delete(k);
       // Antigravity runs every matching hook registration, so a global and a plugin hooks.json both deliver
       // the same PreToolUse (seen twice per call in the spike capture).
-      const onceKey = stepIdx === undefined ? null : `${conversationKey(ref)}:${stepIdx}:${tool}`;
+      const onceKey = stepIdx === undefined ? null : `${conv.key}:${conv.promptId}:${conv.promptGeneration}:${conv.authGeneration}:${stepIdx}:${tool}`;
       const seen = onceKey ? handled.get(onceKey) : undefined;
       if (seen) return seen.result;
       const result = (async () => {
         const args = isPlainObject(rawArgs) ? rawArgs : {};
-        const conv = registry.open(ref);
         let text: string;
         try {
           text = await run(conv, tool, args);

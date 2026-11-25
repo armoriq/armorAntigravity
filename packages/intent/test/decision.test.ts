@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { checkIntent, denyReason, intentAuditRow, policySpanResult, type IntentVerdict } from "../src/decision.ts";
-import type { Conversation } from "../src/registry.ts";
-import { conversationKey, type Plan, type Token } from "../src/types.ts";
+import { createRegistry, type Conversation } from "../src/registry.ts";
+import type { Plan, Token } from "../src/types.ts";
 
 const NOW = 1_000_000;
 
@@ -25,7 +25,7 @@ const active = (over: Partial<Extract<Token, { status: "active" }>> = {}): Token
 
 function conv(id: string, over: Partial<Conversation> = {}): Conversation {
   const ref = { surface: "cli" as const, conversationId: id };
-  return { key: conversationKey(ref), ref, parent: null, plan, token: active(), stepCursor: 0, turn: 1, revisionsThisTurn: 0, lastActivity: NOW, ...over };
+  return { ...createRegistry(() => NOW).open(ref), plan, token: active(), turn: 1, ...over };
 }
 
 const check = (root: Conversation | null, tool: string, readOnly = false) => checkIntent({ root, tool, args: {}, readOnly, now: NOW });

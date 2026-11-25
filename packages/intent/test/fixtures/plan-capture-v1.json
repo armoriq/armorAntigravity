@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "identity": [
+    {
+      "plugin": "ArmorClaude",
+      "contextIdSource": "Claude Code session id",
+      "agentId": "claude-code",
+      "clientHeaderPattern": "armorclaude/<v> or armorclaude-dev/<v>",
+      "promptIdentity": "session id plus a hash of the prompt text within 5 s",
+      "turnEndEvent": "Stop"
+    },
+    {
+      "plugin": "ArmorCodex",
+      "contextIdSource": "Codex session id (MCP _meta.sessionId)",
+      "agentId": "codex",
+      "clientHeaderPattern": "armorcodex-dev/<v>",
+      "promptIdentity": "session id plus a hash of the prompt text within 5 s",
+      "turnEndEvent": "Stop"
+    },
+    {
+      "plugin": "ArmorOpenCode",
+      "contextIdSource": "root session id",
+      "agentId": "opencode",
+      "clientHeaderPattern": "armoropencode/<v>",
+      "promptIdentity": "user messageID",
+      "turnEndEvent": "v1 session.status idle, v2 execution end events"
+    },
+    {
+      "plugin": "ArmorAntigravity",
+      "contextIdSource": "root conversationId",
+      "agentId": "antigravity",
+      "clientHeaderPattern": "armorantigravity[-dev]/<v>",
+      "promptIdentity": "conversationId plus initialNumSteps of PreInvocation 0 (after the subagent filter)",
+      "turnEndEvent": "Stop"
+    }
+  ]
+}
