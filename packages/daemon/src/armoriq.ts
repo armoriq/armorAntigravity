@@ -53,6 +53,7 @@ type OpenCall = {
   readonly attribution: PolicyAttribution;
   readonly capability: Capability;
   readonly at: number;
+  readonly orgMonitor: boolean;
 };
 
 const BUILTIN_ATTRIBUTION: PolicyAttribution = { source: "builtin", v2: null, ruleId: null, shadow: [] };
@@ -176,7 +177,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     decision: Decision,
     attribution: PolicyAttribution,
     status: AuditStatus,
-    extra: { at: number; durationMs: number | null; error: string | null; capability: Capability },
+    extra: { at: number; durationMs: number | null; error: string | null; capability: Capability; orgMonitor: boolean },
   ) => {
     const { session, root } = sessions(surface, call.sessionId);
     const login = auth.uploadLogin();
@@ -199,10 +200,10 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
       at: record.at,
     });
     const capability = capabilityOf(record.call);
-    if (record.status !== "allowed") auditRow(surface, call, decision, record.attribution, record.status, { at: record.at, durationMs: null, error: null, capability });
+    if (record.status !== "allowed") auditRow(surface, call, decision, record.attribution, record.status, { at: record.at, durationMs: null, error: null, capability, orgMonitor: record.orgMonitor });
     // A held call the user approves still runs; its result row comes from PostToolUse.
     if (record.status !== "blocked") {
-      open.set(call.callId, { surface, call, decision, attribution: record.attribution, capability, at: record.at });
+      open.set(call.callId, { surface, call, decision, attribution: record.attribution, capability, at: record.at, orgMonitor: record.orgMonitor });
       if (open.size > MAX_OPEN_CALLS) open.delete(open.keys().next().value ?? call.callId);
     }
   };
@@ -213,7 +214,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     if (!opened) return;
     open.delete(callId);
     const status: AuditStatus = payload.error === "" ? "success" : "failed";
-    auditRow(opened.surface, opened.call, opened.decision, opened.attribution, status, { at, durationMs: Math.max(0, at - opened.at), error: payload.error || null, capability: opened.capability });
+    auditRow(opened.surface, opened.call, opened.decision, opened.attribution, status, { at, durationMs: Math.max(0, at - opened.at), error: payload.error || null, capability: opened.capability, orgMonitor: opened.orgMonitor });
   };
 
   // Spec 0002 posture. Signed in and the backend unreachable: only read calls run. Signed out by a 401
@@ -236,7 +237,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
       ruleId: null,
     };
     const response = toHookResponse(decision);
-    onDecision(surface, { conversationId: payload.conversationId, stepIdx: payload.stepIdx, at, call, decision, status: "blocked", response, attribution: BUILTIN_ATTRIBUTION });
+    onDecision(surface, { conversationId: payload.conversationId, stepIdx: payload.stepIdx, at, call, decision, status: "blocked", response, attribution: BUILTIN_ATTRIBUTION, orgMonitor: false });
     return response;
   };
 

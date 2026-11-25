@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OrgMode } from "@armorantigravity/adapter";
+import type { Log } from "./log.ts";
 import type { Env } from "./paths.ts";
 
 // The workspace's Tools mode, kept on disk so a Block workspace stays Block across a daemon restart.
@@ -21,7 +22,7 @@ function parse(value: unknown): OrgMode | null {
   return mode === "shadow" || mode === "enforce" ? { mode, notices: notices === true } : null;
 }
 
-export function createOrgModeStore(dataDir: string, env: Env): OrgModeStore {
+export function createOrgModeStore(dataDir: string, env: Env, log: Log): OrgModeStore {
   const file = path.join(dataDir, "org-mode.json");
   let cached = MONITOR;
   try {
@@ -34,12 +35,16 @@ export function createOrgModeStore(dataDir: string, env: Env): OrgModeStore {
     set(next) {
       if (next.mode === cached.mode && next.notices === cached.notices) return;
       cached = next;
+      const tmp = `${file}.${process.pid}.tmp`;
       try {
         mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-        const tmp = `${file}.${process.pid}.tmp`;
         writeFileSync(tmp, JSON.stringify({ ...next, at: new Date().toISOString() }), { mode: 0o600 });
         renameSync(tmp, file);
-      } catch {}
+      } catch (error) {
+        // Applies in memory; a daemon restart before the next pull falls back to the last saved mode.
+        rmSync(tmp, { force: true });
+        log.warn("org mode not saved", { error: String(error) });
+      }
       for (const listener of listeners) listener();
     },
     onChange(listener) {
