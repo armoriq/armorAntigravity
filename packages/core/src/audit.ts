@@ -15,6 +15,8 @@ export type AuditInput = {
   userId?: string | undefined;
   userEmail?: string | undefined;
   capability?: Capability | undefined;
+  // The call ran because the signed-in workspace is in Monitor (Quiet or Show in chat).
+  orgMonitor?: boolean | undefined;
 };
 
 export type AuditProduct = Pick<ProductConfig, "slug" | "agentId" | "childSessionKey">;
@@ -67,9 +69,10 @@ function optionalFields(input: AuditInput): Partial<AuditRow> {
   if (error) out.error_message = error;
   if (input.durationMs !== null) out.duration_ms = input.durationMs;
   if (input.capability) out.capability = input.capability;
-  // A row for a call that ran with a stop decision comes from Monitor: Block would have stopped it.
+  // A call that ran under workspace Monitor with a stop decision: Block would have stopped it. Outside
+  // Monitor a stop decision on a call that ran means it was approved, so there is no would_be.
   const d = input.decision;
-  if (d && d.kind !== "allow" && input.status !== "blocked" && input.status !== "held") {
+  if (input.orgMonitor === true && d && d.kind !== "allow" && input.status !== "blocked" && input.status !== "held") {
     out.would_be = d.kind === "hold" ? "hold" : "block";
     out.would_be_code = d.kind === "hold" ? "approval_required" : d.code;
     out.would_be_reason = clip(d.reason);
