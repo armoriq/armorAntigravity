@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { HookPayload, HookResponse, Surface } from "@armorantigravity/protocol";
-import { INTENT_DIRECTIVE } from "../src/directive.ts";
+import { INTENT_DIRECTIVE, MONITOR_INTENT_DIRECTIVE } from "../src/directive.ts";
 import { intentRegistration, withIntent, type IntentHook } from "../src/plugin.ts";
 import { createIntentRuntime } from "../src/runtime.ts";
 import { LOGIN, permitAll, recordingBackend, silentLog } from "./helpers.ts";
@@ -99,9 +99,22 @@ describe("withIntent", () => {
     expect(await hook({ ...preInvocation, initialNumSteps: 3 })).toEqual({ injectSteps: [{ type: "ephemeralMessage", text: INTENT_DIRECTIVE }] });
   });
 
-  test("monitor mode leaves the inner PreInvocation response untouched", async () => {
-    const { hook } = setup("monitor");
-    expect(await hook(preInvocation)).toBeNull();
+  test("signed in, Monitor asks for a plan, registers it and retires it at the next prompt as Enforce does", async () => {
+    const { rt, rec, hook } = setup("monitor");
+    // Monitor never blocks or holds a call, so its copy of the directive never says one would be.
+    expect(INTENT_DIRECTIVE).toContain("are blocked");
+    expect(MONITOR_INTENT_DIRECTIVE).toStartWith("ArmorIQ intent capture is active for this conversation.\n");
+    expect(MONITOR_INTENT_DIRECTIVE).toContain("call register_intent_plan once");
+    expect(MONITOR_INTENT_DIRECTIVE).not.toMatch(/block|held|hold|enforce/i);
+    const directive: HookResponse = { injectSteps: [{ type: "ephemeralMessage", text: MONITOR_INTENT_DIRECTIVE }] };
+    expect(await hook(preInvocation)).toEqual(directive);
+    expect(await hook(register)).toEqual({ decision: "allow" });
+    await rt.mcpOutcome("register_intent_plan", (register as Extract<HookPayload, { event: "PreToolUse" }>).toolCall.args, 1000);
+    expect(rec.mints).toHaveLength(1);
+    expect(rt.root({ surface: "cli", conversationId: CONV })?.plan?.id).toBe("plan-1");
+    expect(await hook({ ...preInvocation, invocationNum: 1 })).toBeNull();
+    expect(await hook({ ...preInvocation, initialNumSteps: 3 })).toEqual(directive);
+    expect(rt.root({ surface: "cli", conversationId: CONV })?.plan).toBeNull();
   });
 
   test("the same conversationId on two surfaces keeps two plans", async () => {

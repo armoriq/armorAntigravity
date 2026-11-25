@@ -31,6 +31,8 @@ Signed in, ArmorAntigravity follows the mode your workspace picks under **Tool c
 
 In Quiet and Show in chat no approval request is filed and an unreachable backend blocks nothing; the audit row of each call records what Block would have done (`would_be`, `would_be_code`, `would_be_reason`). `ARMORIQ_ORG_MODE=enforce` in the daemon's environment makes one machine block whatever the workspace says.
 
+Signed in, plans work the same in every mode: the model is asked to register a plan, the plan is sent with its kind, prompt id and request id, its token is refreshed while the prompt is open, and it is retired at the next prompt or revoked as in Block. Audit rows then carry the plan id. In Quiet and Show in chat the plan only records intent: a missing plan, a call outside the plan or a failed plan request never blocks a call, a failed request is still recorded, and the plan request and replies never say a call would be blocked or held. Signed out, a plan is recorded locally and nothing is sent.
+
 ## Updates
 
 `armoriq-agd` updates itself. Every six hours it asks GitHub for the newest release on its channel:
@@ -50,6 +52,6 @@ Only an open, active prompt refreshes its token. Pending registration requests a
 `intent-state.json` and reuse the same request id when you retry the same plan.
 
 
-Run reporting is off by default. Set `"runReportingEnabled": true` in `~/.armoriq/armorantigravity/config.json` and restart the daemon only after every serving backend revision supports prompt ids and `/iap/runs/batch` (spec 0013 rollout gate). The installer preserves this setting during upgrades. `ARMORIQ_RUN_REPORTING_ENABLED=true` or `false` in the daemon environment overrides it. Authenticated monitor runs are included. Runs started while logged out are never uploaded. Delivery uses the login fixed at prompt start, pauses while logged out or on a 404, and keeps queued reports locally. `armorantigravity status` shows pending reports, undeliverable reports (waiting for their original login or a paused endpoint), dead letters and whether delivery is paused.
+Run reporting is on by default. To turn it off, set `"runReportingEnabled": false` in `~/.armoriq/armorantigravity/config.json` or `ARMORIQ_RUN_REPORTING_ENABLED=false` in the daemon environment, and restart the daemon. The environment overrides the file. Once either is set, only the exact value `true` keeps reporting on; any other value turns it off. The installer preserves the file setting during upgrades. Authenticated monitor runs are included. Runs started while logged out are never uploaded. Delivery uses the login fixed at prompt start, pauses while logged out or on a 404, and keeps queued reports locally. `armorantigravity status` shows pending reports, undeliverable reports (waiting for their original login or a paused endpoint), dead letters and whether delivery is paused.
 
 An `org_required` response holds health and run uploads locally without discarding rows or pausing authentication. Retries wait 5, 10, 20, 40 and then 60 minutes, including after a failed probe. The schedule survives a restart, and a successful send lifts the hold.

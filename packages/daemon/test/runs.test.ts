@@ -188,6 +188,16 @@ test("forced monitor reports authenticated attempts with gated counters", () => 
   expect(h.reports()[1]).toMatchObject({ tool_calls: 1, gated_tool_calls: 1, no_plan_reason: "monitor_mode" });
 });
 
+test("a signed-in Monitor run reports the plan it registered", async () => {
+  const h = setup({ mode: "monitor" });
+  h.observe(prompt());
+  expect(await h.register()).toStartWith("Intent registered: plan plan-1 (new)");
+  h.observe(tool("run_command"));
+  h.observe(stop);
+  expect(h.reports().at(-1)).toMatchObject({ report_seq: 2, plan_ids: ["plan-1"], tool_calls: 1 });
+  expect(h.reports().at(-1)?.no_plan_reason).toBeUndefined();
+});
+
 // regression: #0013
 test.each([
   ["enforce", null, "no_tool_use", 0, 0],
@@ -217,11 +227,12 @@ test("session cleanup emits no session_end report; the next daemon recovers the 
   await recovered.stop();
 });
 
-test.each([false, true])("daemon wiring reports authenticated forced monitor runs only with the rollout switch, enabled=%p", async enabled => {
+test.each([[undefined, true], ["true", true], ["false", false]] as const)("daemon wiring reports authenticated forced monitor runs unless the switch is exactly false, ARMORIQ_RUN_REPORTING_ENABLED=%p", async (value, enabled) => {
   const tmp = tempDir();
   const previous = process.env.ARMORIQ_RUN_REPORTING_ENABLED;
   const fetch = globalThis.fetch;
-  process.env.ARMORIQ_RUN_REPORTING_ENABLED = enabled ? "true" : "false";
+  if (value === undefined) delete process.env.ARMORIQ_RUN_REPORTING_ENABLED;
+  else process.env.ARMORIQ_RUN_REPORTING_ENABLED = value;
   const paths = resolvePaths({ ARMORIQ_HOME: tmp.dir });
   const sessions = createSessionStore(paths.sessionsDir);
   let current: Login | null = null;

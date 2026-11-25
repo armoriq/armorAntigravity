@@ -6,7 +6,7 @@ import { createServer as createSocketServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HookPayload } from "@armorantigravity/protocol";
-import { createIntentRuntime, INTENT_DIRECTIVE, OWN_TOOLS, ownToolName, type IntentBackend } from "@armorantigravity/intent";
+import { createIntentRuntime, INTENT_DIRECTIVE, OWN_TOOLS, RULE_DIRECTIVE, ownToolName, type IntentBackend } from "@armorantigravity/intent";
 import { NO_OUTCOME } from "../src/server.ts";
 
 const backend: IntentBackend = {
@@ -105,6 +105,14 @@ describe("intent MCP server over stdio", () => {
   });
 });
 
-test("the rules file is the injected directive with always_on frontmatter", () => {
-  expect(readFileSync(join(import.meta.dir, "..", "rules", "armoriq.md"), "utf8")).toBe(`---\ntrigger: always_on\n---\n\n${INTENT_DIRECTIVE}\n`);
+// The rule is read in every mode, so it differs from the Enforce directive only in the two lines that must hold in Monitor too.
+test("the rules file is the rule directive with always_on frontmatter", () => {
+  expect(readFileSync(join(import.meta.dir, "..", "rules", "armoriq.md"), "utf8")).toBe(`---\ntrigger: always_on\n---\n\n${RULE_DIRECTIVE}\n`);
+  const rule = RULE_DIRECTIVE.split("\n");
+  const enforce = INTENT_DIRECTIVE.split("\n");
+  expect(rule).toHaveLength(enforce.length);
+  expect(rule.filter((line, i) => line !== enforce[i])).toEqual([
+    "ArmorIQ intent capture is active for this conversation.",
+    "When your workspace enforces, tool calls without a registered plan are blocked, and so is any tool that is not in the plan. In Monitor nothing is blocked, but plans are still recorded.",
+  ]);
 });

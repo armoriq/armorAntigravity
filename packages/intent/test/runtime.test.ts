@@ -110,7 +110,7 @@ describe("replay of the spike capture", () => {
     expect(injected[0]!.text).toBe(INTENT_DIRECTIVE);
   });
 
-  test("monitor mode injects nothing", async () => {
+  test("logged out (monitor mode) injects nothing", async () => {
     const { rt } = runtime({ mode: "monitor" });
     expect(await replay(rt)).toEqual([]);
   });

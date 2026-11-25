@@ -4,7 +4,7 @@ import { intentValiditySeconds, planRequest, requestBody } from "./plan-request.
 import { isPlainObject, mcpPart, parsePlan } from "./plan.ts";
 import { safeRunRecorder } from "./reporting.ts";
 import type { Conversation, Generation, PlanKind, PendingRequest, Registry } from "./registry.ts";
-import { conversationKey, type AuditRow, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PlanRequestHealth, type PolicyView, type RunRecorder, type Token } from "./types.ts";
+import { conversationKey, type AuditRow, type Mode, type ConversationKey, type ConversationRef, type DelegateRequest, type Draft, type IntentBackend, type Log, type Login, type Plan, type PlanRequestHealth, type PolicyView, type RunRecorder, type Token } from "./types.ts";
 
 export const OWN_TOOLS = ["register_intent_plan", "trust_reanchor", "trust_revoke", "trust_delegate", "policy_read"] as const;
 export type OwnTool = (typeof OWN_TOOLS)[number];
@@ -167,15 +167,16 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
     const forbidden = forbiddenStep(parsed.plan);
     if (forbidden) return rejected(forbidden);
 
+    // Signed in, Monitor registers exactly as Enforce does (owner decision A, 2026-11-24, reversing spec 0007 D9).
     const login = deps.login();
-    if (!login || deps.mode() === "monitor") {
+    if (!login) {
       registry.setPlan(conv.key, { ...parsed.plan, id: "" }, null);
-      return `Plan recorded locally, not registered (${login ? "monitor_mode" : "logged_out"}).`;
+      return "Plan recorded locally, not registered (logged_out).";
     }
     if (forceRevision && !revising) return rejected("no registered plan in the current prompt to reanchor");
     if (!conv.promptId) return notRegistered("no current user prompt");
     if (!forceRevision && revising && conv.planHash === parsed.plan.hash && conv.token?.status === "active" && conv.token.jwt && conv.token.expiresAt > now()) {
-      return describeRegistered(revising, conv.token, conv.kind === "revision" ? "revision" : "new", conv.countedPlanId!);
+      return describeRegistered(revising, conv.token, conv.kind === "revision" ? "revision" : "new", conv.countedPlanId!, deps.mode());
     }
     if (revising && !reason.trim()) return rejected('a plan is already registered. Pass a "reason" explaining why the plan changed');
     if (revising && conv.revisionsThisTurn >= MAX_REVISIONS_PER_TURN) return rejected(`at most ${MAX_REVISIONS_PER_TURN} revisions are allowed per user message`);
@@ -272,7 +273,7 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
       registry.noteRevision(conv.key);
       track(recordRevision(login, conv, revising, plan, reason, previousTokenPlanId!).catch(() => log.warn("reanchor failed", { conversationId: conv.ref.conversationId })));
     }
-    return describeRegistered(plan, token, minted.value.kind ?? kind, planId);
+    return describeRegistered(plan, token, minted.value.kind ?? kind, planId, deps.mode());
   }
 
   async function recordRevision(login: Login, conv: Conversation, previous: Plan, plan: Plan, reason: string, tokenPlanId: string): Promise<void> {
@@ -297,7 +298,8 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
         if (!r.ok) return `Revoke failed: ${r.reason}. The plan is still registered.`;
       }
       registry.clearPlan(conv.key);
-      return "Intent token revoked. Side-effecting calls are blocked until a new plan is registered.";
+      // Monitor never blocks a call, so its reply does not say one is blocked.
+      return deps.mode() === "enforce" ? "Intent token revoked. Side-effecting calls are blocked until a new plan is registered." : "Intent token revoked.";
     } finally {
       release();
     }
@@ -416,9 +418,11 @@ export function createOwnTools(deps: OwnToolDeps): OwnTools {
   };
 }
 
-function describeRegistered(plan: Plan, token: Token, kind: PlanKind, countedPlanId: string): string {
+// Monitor never blocks or holds a call, so it leaves out the backend's denied and held tool lines.
+function describeRegistered(plan: Plan, token: Token, kind: PlanKind, countedPlanId: string, mode: Mode): string {
   if (token.status !== "active") return notRegistered(token.code);
   const lines = [`Intent registered: plan ${countedPlanId} (${kind}), ${plan.steps.length} steps. Token valid until ${new Date(token.expiresAt).toISOString()}.`];
+  if (mode !== "enforce") return lines.join("\n");
   if (token.deniedTools.size) lines.push(`Denied by backend: ${[...token.deniedTools].join(", ")}`);
   if (token.heldTools.size) lines.push(`Held for approval by backend: ${[...token.heldTools].join(", ")}`);
   return lines.join("\n");

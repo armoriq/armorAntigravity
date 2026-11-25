@@ -8,11 +8,17 @@ notes from the matching section, so add the section, with its date, in the relea
 ## [Unreleased]
 
 ### Added
-- Workspace Monitor. Signed in, the daemon follows the mode set on the Tools Monitor page, read with the workspace policy and kept in `org-mode.json`: Quiet (the default) and Show in chat run every call, including ones the file guard, a policy, a v2 hold or the MCP gate would stop, and record on the audit row what Block would have done (`would_be`, `would_be_code`, `would_be_reason`); Block enforces as before. In Monitor no plan directive is injected, no approval request is filed and a backend outage blocks nothing. `ARMORIQ_ORG_MODE=enforce` forces Block on one machine. Requests send `X-ArmorIQ-Monitor-Aware: 1`, so the backend sends the real policy instead of the Monitor stand-in.
+- Workspace Monitor. Signed in, the daemon follows the mode set on the Tools Monitor page, read with the workspace policy and kept in `org-mode.json`: Quiet (the default) and Show in chat run every call, including ones the file guard, a policy, a v2 hold or the MCP gate would stop, and record on the audit row what Block would have done (`would_be`, `would_be_code`, `would_be_reason`); Block enforces as before. In Monitor no approval request is filed and a backend outage blocks nothing. `ARMORIQ_ORG_MODE=enforce` forces Block on one machine. Requests send `X-ArmorIQ-Monitor-Aware: 1`, so the backend sends the real policy instead of the Monitor stand-in.
 
 ### Changed
 
-- Run reporting can be enabled in `config.json`, with the daemon environment as an override.
+- Run reporting is on by default. `"runReportingEnabled": false` in `config.json` or
+  `ARMORIQ_RUN_REPORTING_ENABLED=false` in the daemon environment turns it off. The environment wins,
+  and once either is set any value other than `true` turns reporting off.
+- Signed in, Monitor asks the model for a plan and registers, refreshes, retires and revokes it
+  exactly as Block does, so Monitor audit rows carry the plan id. Monitor still never blocks or holds a
+  call, a failed plan request is recorded and never blocks, and signed out nothing is sent. In Monitor
+  the plan request and replies leave out the lines saying a call would be blocked or held.
 - Plans now belong to individual user prompts. Registration replies include the confirmed plan id,
   kind and token expiry, and local plans are explicitly marked as unregistered.
 - Pending requests and prompt state are saved in `intent-state.json` so retries reuse the original

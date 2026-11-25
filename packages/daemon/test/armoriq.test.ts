@@ -41,7 +41,7 @@ function captured(file = CAPTURE): Map<number, Capture> {
   return out;
 }
 
-type Seen = { method: string; path: string; body: unknown; accepted: boolean };
+type Seen = { method: string; path: string; body: unknown; accepted: boolean; headers: Record<string, string> };
 
 type BackendHealth = "up" | "down" | "unauthorized";
 
@@ -51,6 +51,7 @@ function stubBackend() {
   const bundle: { now: unknown } = { now: { orgId: "org-1", agents: [] } };
   // The workspace's Tools mode conmap sends with the policy; these tests run in Block unless they set it.
   const mode: { now: "shadow" | "enforce"; notices: boolean } = { now: "enforce", notices: false };
+  const token: { refuse: boolean } = { refuse: false };
   const policy = {
     schemaVersion: "armor.policy.v1",
     intentRequired: true,
@@ -63,7 +64,7 @@ function stubBackend() {
       const url = new URL(req.url);
       const text = await req.text();
       const json = (req.headers.get("content-type") ?? "").includes("json") && text ? JSON.parse(text) : null;
-      seen.push({ method: req.method, path: url.pathname, body: json, accepted: health.now === "up" });
+      seen.push({ method: req.method, path: url.pathname, body: json, accepted: health.now === "up", headers: Object.fromEntries(req.headers) });
       const route = `${req.method} ${url.pathname}`;
       if (route === "POST /iap/validate-key") {
         if (health.now === "down") await Bun.sleep(5_000);
@@ -76,6 +77,7 @@ function stubBackend() {
       if (route === "GET /mcp/servers") return Response.json({ servers: [{ mcpName: "denied-server", status: "denied" }] });
       // The fields the SDK's getIntentToken reads from conmap's /iap/sdk/token.
       if (route === "POST /iap/sdk/token") {
+        if (token.refuse) return Response.json({ statusCode: 422, error: "parent_plan_not_found", message: "parent_plan_not_found" }, { status: 422 });
         return Response.json({ success: true, plan_id: "plan-wiring-1", plan_hash: "h", token: { expires_at: Date.now() / 1000 + 3600, signature: "sig" }, jwt_token: "jwt", policy_validation: { validated: false } });
       }
       if (route === "POST /iap/audit/batch") {
@@ -87,7 +89,7 @@ function stubBackend() {
       return Response.json({ message: `Cannot ${route}`, statusCode: 404 }, { status: 404 });
     },
   });
-  return { url: `http://127.0.0.1:${server.port}`, seen, health, bundle, policy, mode, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}`, seen, health, bundle, policy, mode, token, stop: () => server.stop(true) };
 }
 
 function isRows(body: unknown): body is { rows: Record<string, unknown>[] } {
@@ -441,7 +443,17 @@ test("a 401 from the backend means signed out: local-only mode, nothing blocked 
   expect(readFileSync(daemon.paths.modeFile, "utf8").trim()).toBe("monitor");
 }, 60_000);
 
-test("a Quiet workspace: every captured call runs, nothing reaches the agent, and rows carry what Block would have done", async () => {
+// Owner decision A (2026-11-24) reverses spec 0007 D9: signed in, Monitor asks for and sends plans as Block does.
+const DIRECTIVE = { injectSteps: [{ type: "ephemeralMessage", text: expect.stringContaining("register_intent_plan") }] };
+
+// agy proxies the armoriq MCP server's tools through call_mcp_tool, as in the captured echo call.
+function registerCall(mcpCall: Capture, plan: unknown): Capture {
+  const args = mcpCall.stdin.toolCall;
+  if (typeof args !== "object" || args === null || !("args" in args) || typeof args.args !== "object" || args.args === null) throw new Error("capture has no MCP args");
+  return { ...mcpCall, stdin: { ...mcpCall.stdin, toolCall: { name: "call_mcp_tool", args: { ...args.args, ServerName: "armoriq", ToolName: "register_intent_plan", Arguments: plan } } } };
+}
+
+test("a Quiet workspace: the plan is asked for and sent, every captured call runs, and rows carry the plan and what Block would have done", async () => {
   backend.mode.now = "shadow";
   backend.bundle.now = v2Bundle("No reads", "      view_file: block\n");
   daemon = await signedInDaemon();
@@ -455,8 +467,15 @@ test("a Quiet workspace: every captured call runs, nothing reaches the agent, an
     return c;
   };
 
-  // No plan directive, and the forbidden search, the plan-less write and the v2-blocked read all run.
-  expect(await hook(at(1))).toBeNull();
+  expect(await hook(at(1))).toEqual(DIRECTIVE);
+  const plan = { goal: "Write a note", steps: [{ action: "write_to_file", description: "write the note" }] };
+  expect(await hook(registerCall(at(35), plan))).toEqual({ decision: "allow" });
+  expect(await mcpOutcome(daemon.paths.socket, "register_intent_plan", plan)).toEqual({ v: 1, id: "mcp-1", text: expect.stringMatching(/^Intent registered: plan plan-wiring-1 \(new\), 1 steps\./) });
+  const requests = backend.seen.filter((r) => r.path === "/iap/sdk/token");
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.headers).toMatchObject({ "x-armoriq-plan-kind": "new", "x-armoriq-prompt-id": expect.any(String), "idempotency-key": expect.stringMatching(/^pcc1:[0-9a-f]{64}$/) });
+
+  // The forbidden search, the write and the v2-blocked read all run.
   for (const [pre, post] of [[11, 13], [19, 21], [27, 29]] as const) {
     expect(await hook(at(pre))).toEqual({ decision: "allow" });
     expect(await hook(at(post))).toBeNull();
@@ -465,15 +484,42 @@ test("a Quiet workspace: every captured call runs, nothing reaches the agent, an
   daemon = null;
 
   const rows = backend.seen.filter((r) => r.path === "/iap/audit/batch").flatMap((r) => (isRows(r.body) ? r.body.rows : []));
-  expect(rows.map((r) => [r.tool, r.status, r.would_be ?? null, r.would_be_code ?? null])).toEqual(
+  expect(rows.map((r) => [r.tool, r.status, r.would_be ?? null, r.would_be_code ?? null, r.plan_id ?? null])).toEqual(
     expect.arrayContaining([
-      ["write_to_file", "success", null, null],
-      ["view_file", "success", "block", "policy_forbid"],
-      ["search_web", "success", "block", "policy_forbid"],
+      ["write_to_file", "success", null, null, "plan-wiring-1"],
+      ["view_file", "success", "block", "policy_forbid", "plan-wiring-1"],
+      ["search_web", "success", "block", "policy_forbid", "plan-wiring-1"],
     ]),
   );
   expect(rows.find((r) => r.tool === "search_web")?.would_be_reason).toContain("org-no-web-search");
-  expect(backend.seen.some((r) => r.path === "/iap/sdk/enforce" || r.path === "/iap/sdk/token")).toBe(false);
+  expect(backend.seen.some((r) => r.path === "/iap/sdk/enforce")).toBe(false);
+}, 60_000);
+
+test("a Quiet workspace still runs the call after a failed plan request, and records the failure", async () => {
+  backend.mode.now = "shadow";
+  backend.token.refuse = true;
+  daemon = await signedInDaemon();
+  expect(daemon.auth.mode()).toBe("monitor");
+  const r3 = captured();
+  const at = (seq: number): Capture => {
+    const c = r3.get(seq);
+    if (!c) throw new Error(`no capture ${seq}`);
+    return c;
+  };
+
+  expect(await hook(at(1))).toEqual(DIRECTIVE);
+  const plan = { goal: "Print a greeting", steps: [{ action: "run_command", description: "echo a greeting" }] };
+  expect(await hook(registerCall(at(35), plan))).toEqual({ decision: "allow" });
+  expect(await mcpOutcome(daemon.paths.socket, "register_intent_plan", plan)).toEqual({ v: 1, id: "mcp-1", text: expect.stringMatching(/^Plan not registered: /) });
+  expect(await hook(at(3))).toEqual({ decision: "allow" });
+  expect(await hook(at(5))).toBeNull();
+  await until(() => backend.seen.some((r) => r.path === "/iap/client-events" && JSON.stringify(r.body).includes('"plan_request_failed"')), 15_000);
+  await daemon.stop();
+  daemon = null;
+
+  const rows = backend.seen.filter((r) => r.path === "/iap/audit/batch").flatMap((r) => (isRows(r.body) ? r.body.rows : []));
+  expect(rows.find((r) => r.tool === "run_command")).toMatchObject({ status: "success" });
+  expect(rows.some((r) => r.status === "blocked" || r.status === "held")).toBe(false);
 }, 60_000);
 
 test("switching the workspace to Block applies at the next pull, and ARMORIQ_ORG_MODE=enforce forces it", async () => {
