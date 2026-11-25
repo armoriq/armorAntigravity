@@ -63,8 +63,9 @@ export function createTokenPump(deps: {
     c.parent === null && c.plan !== null && c.plan.id !== "" && c.token?.status === "active";
 
   const promptOpen = (c: Conversation) => c.promptId !== null && c.promptOpenSince !== null && now() - c.lastActivityAt < PROMPT_IDLE_MS;
+  // Every caller holds a login, so Monitor refreshes as Enforce does and logged out never does.
   const due = (c: Conversation) =>
-    !stopped && (deps.mode?.() ?? "enforce") === "enforce" && promptOpen(c) && c.countedPlanId !== null && live(c) && c.token?.status === "active" && c.token.expiresAt - now() <= refreshBeforeMs && now() >= (failing.get(c.key)?.retryAt ?? 0);
+    !stopped && promptOpen(c) && c.countedPlanId !== null && live(c) && c.token?.status === "active" && c.token.expiresAt - now() <= refreshBeforeMs && now() >= (failing.get(c.key)?.retryAt ?? 0);
 
   // A subagent keeps running after its parent's Stop (spike capture), so its hooks count as the root's activity.
   const activityByRoot = (): Map<ConversationKey, number> => {

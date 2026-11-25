@@ -87,11 +87,11 @@ describe("registration rules", () => {
     expect(rec.mints[0]?.request.body.expires_in).toBe(180);
   });
 
-  test.each(["logged_out", "monitor_mode"])("reanchor records a local plan in %s", async state => {
+  test("reanchor records a local plan while logged out", async () => {
     const registry = createRegistry();
     const rec = recordingBackend();
-    const tools = createOwnTools({ registry, backend: rec.backend, login: () => state === "logged_out" ? null : LOGIN, mode: () => "monitor", policy: () => permitAll, audit() {}, log: silentLog });
-    expect(await tools.handle(A, "trust_reanchor", { updatedPlan: plan("g", "run_command"), reason: "changed" })).toBe(`Plan recorded locally, not registered (${state}).`);
+    const tools = createOwnTools({ registry, backend: rec.backend, login: () => null, mode: () => "monitor", policy: () => permitAll, audit() {}, log: silentLog });
+    expect(await tools.handle(A, "trust_reanchor", { updatedPlan: plan("g", "run_command"), reason: "changed" })).toBe("Plan recorded locally, not registered (logged_out).");
     expect(registry.get(conversationKey(A))?.unregisteredLocalPlan?.goal).toBe("g");
     expect(rec.mints).toEqual([]);
   });
@@ -302,14 +302,32 @@ describe("registration rules", () => {
     expect(h.mints).toHaveLength(1);
   });
 
-  test("forced monitor while logged in records an explicit local plan and sends nothing", async () => {
+  // Owner decision A (2026-11-24) reverses spec 0007 D9: signed in, Monitor sends plans exactly as Enforce does.
+  test("Monitor sends the plan: registration, revision and revoke reach the backend as in Enforce", async () => {
     const registry = createRegistry();
     const rec = recordingBackend();
     const tools = createOwnTools({ registry, backend: rec.backend, login: () => LOGIN, mode: () => "monitor", policy: () => permitAll, audit() {}, log: silentLog });
-    expect(await tools.handle(A, "register_intent_plan", plan("g", "run_command"))).toBe("Plan recorded locally, not registered (monitor_mode).");
-    expect(rec.mints).toEqual([]);
-    expect(registry.get(conversationKey(A))?.unregisteredLocalPlan?.goal).toBe("g");
-    expect(registry.get(conversationKey(A))?.countedPlanId).toBeNull();
+    registry.syncAuth(LOGIN, "monitor");
+    registry.open(A);
+    registry.beginPrompt(conversationKey(A), 0);
+    const promptId = registry.get(conversationKey(A))!.promptId!;
+    const first = plan("g", "run_command");
+    expect(await tools.handle(A, "register_intent_plan", first)).toMatch(/^Intent registered: plan plan-1 \(new\), 1 steps\. Token valid until /);
+    const newKey = requestKey({ kind: "new", promptId, parentPlanId: null, planHash: registry.get(conversationKey(A))!.planHash! });
+    expect(rec.mints[0]?.request.headers).toEqual({ "Idempotency-Key": newKey, "X-ArmorIQ-Plan-Kind": "new", "X-ArmorIQ-Prompt-Id": promptId });
+    expect(registry.get(conversationKey(A))?.unregisteredLocalPlan).toBeNull();
+    registry.setToken(conversationKey(A), { status: "active", jwt: "jwt", expiresAt: 9e12, deniedTools: new Set(["write_to_file"]), heldTools: new Set(["run_command"]) });
+    const again = await tools.handle(A, "register_intent_plan", first);
+    expect(again).toStartWith("Intent registered: plan plan-1 (new), 1 steps.");
+    expect(again).not.toMatch(/denied|held/i);
+
+    expect(await tools.handle(A, "trust_reanchor", { updatedPlan: plan("g", "run_command", "write_to_file"), reason: "add a write" })).toStartWith("Intent registered: plan plan-2 (revision)");
+    expect(rec.mints[1]?.request.headers).toMatchObject({ "X-ArmorIQ-Plan-Kind": "revision", "X-ArmorIQ-Parent-Plan-Id": "plan-1", "X-ArmorIQ-Prompt-Id": promptId });
+    await tools.settled();
+    expect(rec.reanchors).toEqual([{ planId: "plan-1", reason: "add a write" }]);
+
+    expect(await tools.handle(A, "trust_revoke", { reason: "done" })).toBe("Intent token revoked.");
+    expect(rec.revokes).toEqual([{ planId: "plan-2", reason: "done" }]);
   });
 
   test("an uncertain request remains pending and the same plan resends its descriptor", async () => {

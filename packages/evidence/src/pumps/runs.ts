@@ -8,7 +8,9 @@ import type { HealthPump } from "./health.ts";
 import { reportingDelivery } from "../io/reporting-delivery.ts";
 import type { QueueLogin } from "@armorantigravity/core";
 
-export const runReportingEnabled = (env: Readonly<Record<string, string | undefined>>, configured = false): boolean => env.ARMORIQ_RUN_REPORTING_ENABLED === undefined ? configured : env.ARMORIQ_RUN_REPORTING_ENABLED === "true";
+// On unless switched off (owner decision B, 2026-11-24). The environment wins over config.json, and only the
+// exact value true keeps reporting on, so false or any other value turns it off.
+export const runReportingEnabled = (env: Readonly<Record<string, string | undefined>>, configured = true): boolean => env.ARMORIQ_RUN_REPORTING_ENABLED === undefined ? configured : env.ARMORIQ_RUN_REPORTING_ENABLED === "true";
 // The Antigravity rules from runs-v1.json. The contract test keeps this table in sync.
 const capabilities = [
   { matches: /^(?:register_intent_plan|trust_reanchor|trust_revoke|trust_delegate|policy_read)$/, counted: false, gated: false },

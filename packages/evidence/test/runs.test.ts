@@ -37,9 +37,10 @@ function setup(enabled = true) {
   return { open, sent, audit, dir, login: (auth: Login | null) => { current = auth; }, status: (value: number) => { status = value; }, advance: (ms: number) => { now += ms; } };
 }
 
-test("reporting defaults off and queues and sends nothing while disabled", async () => {
-  expect(runReportingEnabled({})).toBe(false);
+test("reporting defaults on, exactly false turns it off, and then it queues and sends nothing", async () => {
+  expect(runReportingEnabled({})).toBe(true);
   expect(runReportingEnabled({ ARMORIQ_RUN_REPORTING_ENABLED: "true" })).toBe(true);
+  expect(runReportingEnabled({ ARMORIQ_RUN_REPORTING_ENABLED: "false" })).toBe(false);
   const store = setup(false);
   const pump = store.open();
   pump.begin("r", "s", Date.now(), true);

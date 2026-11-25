@@ -46,7 +46,7 @@ test("MCP marks registration failures and unconfirmed outcomes as errors", async
       expect(result.isError).toBe(true);
       expect(result.content).toEqual([{ type: "text", text }]);
     }
-    for (text of ["Intent registered: plan plan-1 (new), 1 steps. Token valid until 2030-01-01T00:00:00.000Z.", "Plan recorded locally, not registered (monitor_mode).", "Plan recorded locally, not registered (logged_out)."]) {
+    for (text of ["Intent registered: plan plan-1 (new), 1 steps. Token valid until 2030-01-01T00:00:00.000Z.", "Plan recorded locally, not registered (logged_out)."]) {
       expect((await client.callTool({ name: "register_intent_plan", arguments: {} })).isError).not.toBe(true);
     }
   } finally {

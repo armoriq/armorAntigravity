@@ -121,15 +121,30 @@ describe("token pump", () => {
     expect(s.requests[1]).toBe(request);
   });
 
-  test("logged out and forced monitor never refresh or run the pre tool refresh", async () => {
-    for (const options of [{ login: () => null }, { mode: () => "monitor" as const }]) {
-      const s = setup(() => ({ ok: false, retryable: true, reason: "unused" }), undefined, options);
-      s.advance(3_600_001);
-      s.registry.open(REF);
-      await s.cycle();
-      await s.pump.beforeTool(KEY);
-      expect(s.mints).toEqual([]);
-    }
+  test("logged out never refreshes or runs the pre tool refresh", async () => {
+    const s = setup(() => ({ ok: false, retryable: true, reason: "unused" }), undefined, { login: () => null });
+    s.advance(3_600_001);
+    s.registry.open(REF);
+    await s.cycle();
+    await s.pump.beforeTool(KEY);
+    expect(s.mints).toEqual([]);
+  });
+
+  test("signed in, Monitor refreshes in the pump and before a tool exactly as Enforce does", async () => {
+    const refreshed = { ok: true as const, value: { planId: "refresh-1", token: { status: "active" as const, jwt: "j", expiresAt: 9e12, deniedTools: new Set<string>(), heldTools: new Set<string>() } } };
+    const s = setup(() => refreshed, undefined, { mode: () => "monitor" });
+    s.advance(3_600_000 - 120_000);
+    s.registry.open(REF);
+    await s.cycle();
+    expect(s.requests.map(r => r.headers["X-ArmorIQ-Plan-Kind"])).toEqual(["refresh"]);
+    expect(s.registry.get(KEY)?.tokenPlanId).toBe("refresh-1");
+
+    const guard = setup(() => refreshed, undefined, { mode: () => "monitor" });
+    guard.advance(3_600_001);
+    guard.registry.open(REF);
+    await guard.pump.beforeTool(KEY);
+    expect(guard.mints).toHaveLength(1);
+    expect(guard.registry.get(KEY)?.tokenPlanId).toBe("refresh-1");
   });
 
   test("the tool guard joins the pump's in flight refresh", async () => {

@@ -1,7 +1,7 @@
 import type { HookPayload, HookResponse, Surface, ToolDecision } from "@armorantigravity/protocol";
 import { basename, dirname } from "node:path";
 import { createSdkBackend, type ClientIdentity } from "./backend.ts";
-import { INTENT_DIRECTIVE, planningDraftNote } from "./directive.ts";
+import { INTENT_DIRECTIVE, MONITOR_INTENT_DIRECTIVE, planningDraftNote } from "./directive.ts";
 import { createOwnTools, ownToolCall, type OwnTool } from "./own-tools.ts";
 import { isPlainObject, planToolName } from "./plan.ts";
 import { createTokenPump } from "./pump.ts";
@@ -200,13 +200,15 @@ export function createIntentRuntime(opts: IntentRuntimeOptions): IntentRuntime {
 
     preInvocation(surface, payload) {
       syncAuth();
-      if (opts.mode() !== "enforce") return null;
+      // Signed in, Monitor asks for a plan as Enforce does; logged out, nothing would be sent.
+      if (opts.mode() !== "enforce" && !opts.login()) return null;
       const conv = registry.get(conversationKey(refOf(surface, payload)));
       // An unlinked subagent told to register would get a plan of its own and escape the parent's.
       if (!conv || conv.parent !== null || linker.mightBeChild(conv.ref)) return null;
       if (conv.countedPlanId !== null) return null;
       const draft = drafts.get(conv.key);
-      const text = draft ? `${INTENT_DIRECTIVE}\n\n${planningDraftNote(draft)}` : INTENT_DIRECTIVE;
+      const directive = opts.mode() === "enforce" ? INTENT_DIRECTIVE : MONITOR_INTENT_DIRECTIVE;
+      const text = draft ? `${directive}\n\n${planningDraftNote(draft)}` : directive;
       // ASSUMPTION(P0): an ephemeralMessage reaches the model for this invocation only; the rules file stays the
       // standing instruction.
       return { injectSteps: [{ type: "ephemeralMessage", text }] };

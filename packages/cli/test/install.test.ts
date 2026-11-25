@@ -193,7 +193,7 @@ describe("install", () => {
     mkdirSync(path.dirname(L().rulesFile), { recursive: true });
     writeFileSync(L().rulesFile, "my own armoriq notes\n");
     await install(opts(), deps());
-    expect(read(L().rulesFile)).toContain("ArmorIQ intent enforcement");
+    expect(read(L().rulesFile)).toContain("ArmorIQ intent capture");
     await uninstall({ home, purge: false }, deps());
     expect(read(L().rulesFile)).toBe("my own armoriq notes\n");
   });
