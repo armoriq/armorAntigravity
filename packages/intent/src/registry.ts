@@ -1,4 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { conversationKey, type ConversationKey, type ConversationRef, type Draft, type Login, type Mode, type Plan, type Token } from "./types.ts";
 
 export type PlanKind = "new" | "revision" | "refresh";
@@ -55,7 +57,8 @@ export interface Registry {
   acquire(key: ConversationKey): (() => void) | null;
   busy(key: ConversationKey): boolean;
   setPlan(key: ConversationKey, plan: Plan, token: Token | null, generation?: Generation, kind?: PlanKind): boolean;
-  setToken(key: ConversationKey, token: Token, generation?: Generation): boolean;
+  setToken(key: ConversationKey, token: Token, generation?: Generation, tokenPlanId?: string): boolean;
+  setPendingRequest(key: ConversationKey, request: PendingRequest | null, generation: Generation): boolean;
   clearPlan(key: ConversationKey): void;
   noteRevision(key: ConversationKey): void;
   advance(key: ConversationKey, stepIndex: number): void;
@@ -63,16 +66,47 @@ export interface Registry {
   all(): Iterable<Conversation>;
 }
 
-export function createRegistry(now: () => number = Date.now): Registry {
+export function createRegistry(now: () => number = Date.now, stateFile?: string): Registry {
   const conversations = new Map<ConversationKey, Mutable<Conversation>>();
   const promptIdentities = new Map<ConversationKey, Set<number>>();
   const operations = new Map<ConversationKey, symbol>();
   let authIdentity: string | undefined;
 
+  if (stateFile) {
+    try {
+      const saved = JSON.parse(readFileSync(stateFile, "utf8"));
+      if (saved.v !== 1 || !Array.isArray(saved.conversations) || typeof saved.authIdentity !== "string") throw new Error("invalid intent state");
+      authIdentity = saved.authIdentity;
+      for (const entry of saved.conversations) {
+        const c = entry.conversation as Mutable<Conversation>;
+        if (!c.ref || c.key !== conversationKey(c.ref) || !Number.isInteger(c.promptGeneration) || !Number.isInteger(c.authGeneration)) throw new Error("invalid conversation state");
+        if (c.token?.status === "active") c.token = { ...c.token, deniedTools: new Set(c.token.deniedTools), heldTools: new Set(c.token.heldTools) };
+        conversations.set(c.key, c);
+        promptIdentities.set(c.key, new Set(entry.identities));
+      }
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+    }
+  }
+
+  const persist = () => {
+    if (!stateFile) return;
+    mkdirSync(dirname(stateFile), { recursive: true, mode: 0o700 });
+    const data = { v: 1, authIdentity, conversations: [...conversations.values()].map(c => ({
+      conversation: { ...c, token: c.token?.status === "active" ? { ...c.token, deniedTools: [...c.token.deniedTools], heldTools: [...c.token.heldTools] } : c.token },
+      identities: [...(promptIdentities.get(c.key) ?? [])],
+    })) };
+    const tmp = `${stateFile}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
+    renameSync(tmp, stateFile);
+  };
+
   const touch = (c: Mutable<Conversation>) => {
-    c.lastActivityAt = now();
     const root = resolve(c.key);
+    if (root?.promptOpenSince !== null && root && now() - root.lastActivityAt >= 30 * 60_000) root.promptOpenSince = null;
+    c.lastActivityAt = now();
     if (root && root !== c) root.lastActivityAt = c.lastActivityAt;
+    persist();
   };
 
   const open = (ref: ConversationRef): Mutable<Conversation> => {
@@ -105,6 +139,7 @@ export function createRegistry(now: () => number = Date.now): Registry {
       unregisteredLocalPlan: null,
     };
     conversations.set(key, created);
+    persist();
     return created;
   };
 
@@ -116,7 +151,10 @@ export function createRegistry(now: () => number = Date.now): Registry {
 
   const update = (key: ConversationKey, apply: (c: Mutable<Conversation>) => void) => {
     const c = conversations.get(key);
-    if (c) apply(c);
+    if (c) {
+      apply(c);
+      persist();
+    }
   };
 
   const retire = (c: Mutable<Conversation>) => {
@@ -149,6 +187,7 @@ export function createRegistry(now: () => number = Date.now): Registry {
       // A conversation that already registered its own plan is a root, and a link must never form a cycle.
       if (child.key === parent.key || child.plan !== null || resolve(parent.key)?.key === child.key) return false;
       child.parent = parent.key;
+      persist();
       return true;
     },
 
@@ -162,6 +201,7 @@ export function createRegistry(now: () => number = Date.now): Registry {
         c.promptId = randomUUID();
         c.promptGeneration += 1;
         c.promptOpenSince = now();
+        c.lastActivityAt = now();
         c.turn += 1;
         c.revisionsThisTurn = 0;
         touch(c);
@@ -173,7 +213,7 @@ export function createRegistry(now: () => number = Date.now): Registry {
       }),
 
     syncAuth(login, mode) {
-      const identity = JSON.stringify([mode, login?.backend, login?.apiKey, login?.userId, login?.orgId]);
+      const identity = createHash("sha256").update(JSON.stringify([mode, login?.backend, login?.apiKey, login?.userId, login?.orgId])).digest("hex");
       if (identity === authIdentity) return;
       if (authIdentity !== undefined) for (const c of conversations.values()) {
         if (c.parent !== null) continue;
@@ -181,6 +221,7 @@ export function createRegistry(now: () => number = Date.now): Registry {
         retire(c);
       }
       authIdentity = identity;
+      persist();
     },
 
     generation(key) {
@@ -213,15 +254,25 @@ export function createRegistry(now: () => number = Date.now): Registry {
       c.tokenExpiresAt = token?.status === "active" ? token.expiresAt : null;
       c.pendingRequest = null;
       c.unregisteredLocalPlan = plan.id ? null : plan;
+      persist();
       return true;
     },
 
-    setToken(key, token, generation) {
+    setToken(key, token, generation, tokenPlanId) {
       const c = conversations.get(key);
       if (!c || generation && !isCurrent(key, generation)) return false;
       c.token = token;
-      c.tokenPlanId = token.status === "active" ? c.plan?.id || null : null;
+      c.tokenPlanId = token.status === "active" ? tokenPlanId ?? (c.plan?.id || null) : null;
       c.tokenExpiresAt = token.status === "active" ? token.expiresAt : null;
+      persist();
+      return true;
+    },
+
+    setPendingRequest(key, request, generation) {
+      const c = conversations.get(key);
+      if (!c || !isCurrent(key, generation)) return false;
+      c.pendingRequest = request;
+      persist();
       return true;
     },
 
@@ -241,6 +292,7 @@ export function createRegistry(now: () => number = Date.now): Registry {
       conversations.delete(key);
       promptIdentities.delete(key);
       for (const c of conversations.values()) if (c.parent === key) c.parent = null;
+      persist();
     },
 
     all: () => conversations.values(),

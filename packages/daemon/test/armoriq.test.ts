@@ -258,6 +258,7 @@ test("agy 1.4 file tools: ~/.armoriq stays protected inside a registered plan, a
 
   const plan = { goal: "Edit notes", steps: [{ action: "read_file" }, { action: "write_file" }, { action: "edit_file" }] };
   const conversation = agy14("read_file").stdin;
+  await hook({ event: "PreInvocation", stdin: { ...conversation, invocationNum: 0, initialNumSteps: 0 } });
   const register: Capture = { event: "PreToolUse", stdin: { ...conversation, toolCall: { name: "call_mcp_tool", args: { ServerName: "armoriq", ToolName: "register_intent_plan", Arguments: plan } } } };
   expect(await hook(register)).toEqual({ decision: "allow" });
   expect(await mcpOutcome(daemon.paths.socket, "register_intent_plan", plan)).toEqual({ v: 1, id: "mcp-1", text: expect.stringMatching(/^Intent registered/) });

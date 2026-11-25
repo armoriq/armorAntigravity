@@ -1,4 +1,5 @@
 import type { Surface } from "@armorantigravity/protocol";
+import type { PendingRequest, PlanKind } from "./registry.ts";
 
 export type Mode = "enforce" | "monitor";
 
@@ -49,11 +50,19 @@ export interface Login {
 
 export type CallResult<T> =
   | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly retryable: boolean; readonly reason: string; readonly relogin?: true };
+  | { readonly ok: false; readonly retryable: boolean; readonly reason: string; readonly relogin?: true; readonly unconfirmed?: boolean; readonly retryAfterMs?: number | undefined };
 
 export interface Minted {
   readonly planId: string;
   readonly token: Token;
+  readonly kind?: PlanKind;
+  readonly legacy?: boolean;
+}
+
+export interface RetryOptions {
+  readonly cancelled?: () => boolean;
+  readonly now?: () => number;
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 export interface DelegateRequest {
@@ -70,7 +79,7 @@ export interface Delegation {
 }
 
 export interface IntentBackend {
-  mint(login: Login, plan: Draft, contextId: string): Promise<CallResult<Minted>>;
+  mint(login: Login, plan: Draft, contextId: string, request: PendingRequest, options?: RetryOptions): Promise<CallResult<Minted>>;
   reanchor(login: Login, planId: string, plan: Draft, reason: string): Promise<CallResult<{ readonly trustId: string | null }>>;
   revoke(login: Login, planId: string, reason: string): Promise<CallResult<void>>;
   delegate(login: Login, planId: string, request: DelegateRequest): Promise<CallResult<Delegation>>;

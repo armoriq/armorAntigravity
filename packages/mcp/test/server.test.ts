@@ -92,10 +92,11 @@ describe("intent MCP server over stdio", () => {
       toolCall: { name: "mcp_armoriq_register_intent_plan", args: { ...plan, toolAction: "Registering plan", toolSummary: "Plan" } },
       stepIdx: 2,
     };
+    runtime.observe("cli", { ...hook, event: "PreInvocation", invocationNum: 0, initialNumSteps: 0 });
     runtime.observe("cli", hook);
     expect(await runtime.ownToolDecision("cli", hook)).toEqual({ decision: "allow" });
     const result = await client.callTool({ name: "register_intent_plan", arguments: plan });
-    expect(textOf(result)).toBe("Intent registered: 1 steps. Token valid until 2030-01-01T00:00:00.000Z.");
+    expect(textOf(result)).toBe("Intent registered: plan plan-1 (new), 1 steps. Token valid until 2030-01-01T00:00:00.000Z.");
     expect(runtime.root({ surface: "cli", conversationId: "conv-mcp" })?.plan?.id).toBe("plan-1");
   });
 
