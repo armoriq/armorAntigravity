@@ -18,6 +18,9 @@ export interface Paths {
   readonly configFile: string;
   readonly sessionsDir: string;
   readonly logFile: string;
+  // The agy rule the installer writes; the daemon keeps it in step with the mode. Null under ARMORIQ_HOME,
+  // a dev or test daemon, so it never rewrites the real ~/.gemini rule.
+  readonly rulesFile: string | null;
 }
 
 export function resolvePaths(env: Env): Paths {
@@ -35,5 +38,6 @@ export function resolvePaths(env: Env): Paths {
     configFile: path.join(dataDir, "config.json"),
     sessionsDir: path.join(dataDir, "sessions"),
     logFile: path.join(dataDir, "logs", "agd.log"),
+    rulesFile: env.ARMORIQ_HOME?.trim() ? null : path.join(homedir(), ".gemini", "config", "rules", "armoriq.md"),
   };
 }

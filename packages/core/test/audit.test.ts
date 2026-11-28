@@ -135,3 +135,24 @@ describe("toAuditRow", () => {
     expect([row.plan_id, row.user_id, row.user_email, row.step_index]).toEqual([undefined, undefined, undefined, -1]);
   });
 });
+
+describe("would_be", () => {
+  const deny: Decision = { kind: "deny", code: "policy_forbid", reason: "Floor blocks bash", ruleId: null };
+  const hold: Decision = { kind: "hold", reason: "needs approval", ruleId: null };
+
+  test("a call that ran under workspace Monitor says what Block would have done", () => {
+    expect(build({ decision: deny, orgMonitor: true })).toMatchObject({ would_be: "block", would_be_code: "policy_forbid", would_be_reason: "Floor blocks bash" });
+    expect(build({ decision: hold, orgMonitor: true })).toMatchObject({ would_be: "hold", would_be_code: "approval_required" });
+  });
+
+  test("a call that ran outside workspace Monitor, such as an approved hold in Block, has none", () => {
+    const row = build({ decision: hold });
+    expect(row.would_be).toBeUndefined();
+    expect(row.would_be_code).toBeUndefined();
+    expect(row.would_be_reason).toBeUndefined();
+  });
+
+  test("a stopped call has none, even in workspace Monitor", () => {
+    expect(build({ decision: deny, status: "blocked", orgMonitor: true }).would_be).toBeUndefined();
+  });
+});

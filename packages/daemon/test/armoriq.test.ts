@@ -422,10 +422,41 @@ test("a Quiet workspace: every captured call runs, nothing reaches the agent, an
   expect(backend.seen.some((r) => r.path === "/iap/sdk/enforce" || r.path === "/iap/sdk/token")).toBe(false);
 }, 60_000);
 
+test("a Block workspace: an MCP call the user approves at the prompt runs, and its row has no would_be", async () => {
+  backend.mode.now = "enforce";
+  daemon = await signedInDaemon();
+  expect(daemon.auth.mode()).toBe("enforce");
+  const r3 = captured();
+  const mcp = r3.get(35)!;
+  const mcpResult = r3.get(37)!;
+  const plan = { goal: "Echo", steps: [{ action: "mcp_agspike_global_echo" }] };
+  const register: Capture = { event: "PreToolUse", stdin: { ...mcp.stdin, toolCall: { name: "call_mcp_tool", args: { ServerName: "armoriq", ToolName: "register_intent_plan", Arguments: plan } } } };
+  expect(await hook(register)).toEqual({ decision: "allow" });
+  expect(await mcpOutcome(daemon.paths.socket, "register_intent_plan", plan)).toEqual({ v: 1, id: "mcp-1", text: expect.stringMatching(/^Intent registered/) });
+  expect(await hook(mcp)).toMatchObject({ decision: "ask" });
+  // The user approved at agy's prompt, so the call ran.
+  expect(await hook(mcpResult)).toBeNull();
+  await daemon.stop();
+  daemon = null;
+
+  const rows = backend.seen.filter((r) => r.path === "/iap/audit/batch").flatMap((r) => (isRows(r.body) ? r.body.rows : []));
+  const echo = rows.filter((r) => r.tool === "mcp_agspike_global_echo");
+  expect(echo.map((r) => [r.status, r.would_be ?? null])).toEqual([
+    ["held", null],
+    ["success", null],
+  ]);
+}, 60_000);
+
 test("switching the workspace to Block applies at the next pull, and ARMORIQ_ORG_MODE=enforce forces it", async () => {
+  // The installed agy rule follows the mode: no plan instruction outside Block.
+  const shippedRule = readFileSync(path.join(import.meta.dir, "..", "..", "mcp", "rules", "armoriq.md"), "utf8");
+  const ruleFile = path.join(sandbox.home, ".gemini", "config", "rules", "armoriq.md");
+  mkdirSync(path.dirname(ruleFile), { recursive: true });
+  writeFileSync(ruleFile, shippedRule);
   backend.mode.now = "shadow";
   daemon = await signedInDaemon();
   expect(daemon.auth.mode()).toBe("monitor");
+  expect(readFileSync(ruleFile, "utf8")).not.toContain("register_intent_plan once");
   const search = captured().get(27)!;
   expect(await hook(search)).toEqual({ decision: "allow" });
   await daemon.stop();
@@ -433,6 +464,7 @@ test("switching the workspace to Block applies at the next pull, and ARMORIQ_ORG
   backend.mode.now = "enforce";
   daemon = await signedInDaemon();
   expect(daemon.auth.mode()).toBe("enforce");
+  expect(readFileSync(ruleFile, "utf8")).toBe(shippedRule);
   // Kept on disk, so a restart before the next pull stays in Block.
   expect(readFileSync(path.join(sandbox.home, ".armoriq", "armorantigravity", "org-mode.json"), "utf8")).toContain('"mode":"enforce"');
   expect(await hook(search)).toEqual({ decision: "deny", reason: expect.stringContaining("[policy_forbid]") });

@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OrgMode } from "@armorantigravity/adapter";
+import type { Log } from "./log.ts";
 import type { Env } from "./paths.ts";
 
 export interface OrgModeStore {
@@ -21,7 +22,7 @@ function parse(value: unknown): Confirmed | null {
   return mode === "shadow" || mode === "enforce" ? { mode: { mode, notices: notices === true }, binding } : null;
 }
 
-export function createOrgModeStore(dataDir: string, env: Env, binding: () => string | null): OrgModeStore {
+export function createOrgModeStore(dataDir: string, env: Env, log: Log, binding: () => string | null): OrgModeStore {
   const file = path.join(dataDir, "org-mode.json");
   let cached: Confirmed | null = null;
   try {
@@ -38,12 +39,16 @@ export function createOrgModeStore(dataDir: string, env: Env, binding: () => str
       const before = current();
       if (cached?.binding === owner && next.mode === before?.mode && next.notices === before.notices) return;
       cached = { mode: next, binding: owner };
+      const tmp = `${file}.${process.pid}.tmp`;
       try {
         mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-        const tmp = `${file}.${process.pid}.tmp`;
         writeFileSync(tmp, JSON.stringify({ ...next, binding: owner, at: new Date().toISOString() }), { mode: 0o600 });
         renameSync(tmp, file);
-      } catch {}
+      } catch (error) {
+        // Applies in memory; a daemon restart before the next pull falls back to the last saved mode.
+        rmSync(tmp, { force: true });
+        log.warn("org mode not saved", { error: String(error) });
+      }
       for (const listener of listeners) listener();
     },
     onChange(listener) {

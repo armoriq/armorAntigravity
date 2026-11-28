@@ -110,7 +110,7 @@ export const loginBinding = (login: Login) => createHash("sha256").update(`${log
 // Reads credentials at startup and on directory change; state() never touches disk.
 export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: string; pollMs?: number; orgMode?: OrgModeStore }): Auth {
   const { env, config, dataDir } = opts;
-  const orgMode = opts.orgMode ?? createOrgModeStore(dataDir, env, () => ("login" in state ? loginBinding(state.login) : null));
+  const orgMode = opts.orgMode ?? createOrgModeStore(dataDir, env, log, () => ("login" in state ? loginBinding(state.login) : null));
   const orgMonitor = () => "login" in state && state.kind !== "local_only" && orgMode.monitoring();
   const armoriqDir = path.dirname(getCredentialsPath());
   const client = clientIdentity(config.channel);
