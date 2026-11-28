@@ -9,7 +9,7 @@ test("a mode that cannot be saved is logged, leaves no temp file, and still appl
   // A directory where the file should be makes the rename fail.
   mkdirSync(path.join(dataDir, "org-mode.json", "blocker"), { recursive: true });
   const warnings: string[] = [];
-  const store = createOrgModeStore(dataDir, {}, { info() {}, warn: (m) => void warnings.push(m), error() {} });
+  const store = createOrgModeStore(dataDir, {}, { info() {}, warn: (m) => void warnings.push(m), error() {} }, () => "login-test");
 
   store.set({ mode: "enforce", notices: false });
 

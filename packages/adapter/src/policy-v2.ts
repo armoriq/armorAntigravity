@@ -18,7 +18,7 @@ export type V2Policy = {
   readonly status: "active" | "shadow";
 };
 
-type V2Tool = { readonly name: string; readonly qualifiedName?: string; readonly server?: string; readonly schemaHash: string | null; readonly capabilities: readonly string[] };
+type V2Tool = { readonly name: string; readonly qualifiedName?: string; readonly server?: string; readonly reviewRequired?: boolean; readonly schemaHash: string | null; readonly capabilities: readonly string[] };
 type V2Member = { readonly membershipId: string; readonly email: string };
 
 export type V2Agent = {
@@ -74,6 +74,7 @@ function parseTool(raw: unknown): V2Tool | null {
     name,
     ...(qualifiedName ? { qualifiedName } : {}),
     ...(server ? { server } : {}),
+    ...(raw.reviewRequired === true ? { reviewRequired: true } : {}),
     schemaHash: str(raw.schemaHash),
     capabilities: Array.isArray(raw.capabilities) ? raw.capabilities.filter((c): c is string => typeof c === "string") : [],
   };
@@ -241,11 +242,22 @@ export function decideV2(agent: V2Agent | null, call: V2Call): V2Outcome {
   if (org || own) enforced = verdictOf(evaluateCall(agent, call, bound(org, own)), [org, own]);
   else if (agent.inactive) enforced = { verdict: "block", policy: null, rule: "agent_inactive" };
 
+  const reviewRequired = call.mcpServer !== undefined && agent.tools.some(
+    (tool) => tool.reviewRequired === true && tool.server === call.mcpServer &&
+      call.names.some((name) => name === tool.name || name === tool.qualifiedName),
+  );
+  if (reviewRequired && enforced?.verdict !== "block") {
+    enforced = { verdict: "hold", policy: enforced?.verdict === "hold" ? enforced.policy : null, rule: "mcp_server.review_required" };
+  }
+
   const shadow = agent.policies
     .filter((p) => p.status === "shadow")
     .map((p) => {
       const layers = p.targetType === "org" ? [p, own] : [org, p];
-      return { ...verdictOf(evaluateCall(agent, call, bound(layers[0], layers[1])), layers), policy: p };
+      const result = verdictOf(evaluateCall(agent, call, bound(layers[0], layers[1])), layers);
+      if (reviewRequired && result.verdict === "allow")
+        return { verdict: "hold" as const, rule: "mcp_server.review_required", policy: p };
+      return { ...result, policy: p };
     });
   return { enforced, shadow };
 }

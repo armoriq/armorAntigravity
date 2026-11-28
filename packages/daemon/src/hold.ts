@@ -99,6 +99,9 @@ export function createHoldResolver(opts: HoldResolverOptions): HoldResolver {
     const verdict = record(enforced.data);
     const shape = createHash("sha256").update(JSON.stringify([plan.planId, scope.mcp, scope.tool, scope.args])).digest("hex");
     if (verdict.allowed === true) {
+      if (held.ruleId?.endsWith(":mcp_server.review_required") && verdict.reason !== "approved_delegation" && verdict.reason !== "approved_delegation_conversation") {
+        return hold(held, "approval not confirmed", "The backend did not confirm workspace approval; retry later");
+      }
       // The backend spent the approval; the same call held again needs a new request.
       filed.delete(shape);
       log.info("held call allowed by the backend", { tool: held.call.name, reason: text(verdict.reason) ?? "allowed" });

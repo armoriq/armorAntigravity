@@ -35,6 +35,16 @@ describe("parseBundleAgent", () => {
 });
 
 describe("decideV2", () => {
+  test("a registered MCP tool under review requires approval, scoped to its server", () => {
+    const tools = [{ name: "read_note", qualifiedName: "mcp__team_notes__read_note", server: "team_notes", schemaHash: null, capabilities: [], reviewRequired: true }];
+    const call = (ServerName: string) => v2CallOf(mapToolCall({ name: "call_mcp_tool", args: { ServerName, ToolName: "read_note", Arguments: {} } }), home, NOW, undefined);
+    const agent = agentOf([], { tools });
+    expect(decideV2(agent, call("team_notes")).enforced).toMatchObject({ verdict: "hold", rule: "mcp_server.review_required" });
+    expect(decideV2(agent, call("other")).enforced).toBeNull();
+    const blocked = agentOf([entry("Workspace", "org", "active", doc("block", ORG, "      read_note: block\n"))], { tools });
+    expect(decideV2(blocked, call("team_notes")).enforced).toMatchObject({ verdict: "block" });
+  });
+
   test("no active document leaves the call to v1 and the local file", () => {
     expect(decideV2(agentOf([]), run("ls")).enforced).toBeNull();
   });
