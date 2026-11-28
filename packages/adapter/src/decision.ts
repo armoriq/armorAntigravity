@@ -5,6 +5,7 @@ import { checkGuard } from "./guard.ts";
 import type { McpGate } from "./mcp-gate.ts";
 import type { PolicyOrigin, PolicySource } from "./policy-source.ts";
 import { decideV2, type PolicyBundle, type V2Call, type V2Outcome, type V2Verdict } from "./policy-v2.ts";
+import { expandHome, parseShell } from "./shell.ts";
 import { segmentedPolicy } from "./shell-policy.ts";
 import { BUILTIN_MCP_SERVERS, mapToolCall, mcpPart, mcpToolName, nameReadings, type MapOptions, type MappedCall } from "./tools.ts";
 
@@ -148,6 +149,41 @@ function homeRelative(p: string, home: string): string {
   return p === home ? "~" : p.startsWith(home + "/") ? `~${p.slice(home.length)}` : p;
 }
 
+function fileFacts(file: string, home: string, workspace: string | null): Record<string, unknown> {
+  const derived: Record<string, unknown> = { path: homeRelative(file, home) };
+  if (workspace !== null && path.isAbsolute(file)) {
+    const relative = path.relative(workspace, file);
+    derived.withinWorkspace = relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  }
+  return derived;
+}
+
+function fileReadings(file: string, home: string, workspace: string | null): Record<string, unknown>[] {
+  const primary = fileFacts(file, home, workspace);
+  const readings = [primary];
+  if (primary.path !== file) readings.push({ ...primary, path: file });
+  if (workspace !== null && primary.withinWorkspace === true) {
+    const relative = path.relative(workspace, file);
+    if (relative) readings.push({ ...primary, path: relative });
+  }
+  return readings;
+}
+
+function shellFileFacts(command: string, cwd: string | null, home: string, workspace: string | null): Record<string, unknown>[] {
+  const parsed = parseShell(command, { cwd: cwd && workspace ? path.resolve(workspace, cwd) : cwd, home });
+  if (!parsed.ok) return [];
+  const files = new Set<string>();
+  for (const segment of parsed.segments) {
+    for (const word of [...segment.argv.slice(1), ...segment.redirects]) {
+      if (!word.includes("/") || word.startsWith("-") || word.includes("://")) continue;
+      const expanded = expandHome(word, home);
+      const file = path.isAbsolute(expanded) ? path.normalize(expanded) : segment.cwd ? path.resolve(segment.cwd, expanded) : path.normalize(expanded);
+      files.add(file);
+    }
+  }
+  return [...files].flatMap((file) => fileReadings(file, home, workspace));
+}
+
 export function v2CallOf(call: MappedCall, home: string, at: number, userEmail: string | undefined, workspace: string | null = null): V2Call {
   const text = (k: string) => (typeof call.args[k] === "string" ? (call.args[k] as string) : undefined);
   const names = call.category === "mcp" ? [call.mcp.tool, call.tool, call.name] : [...nameReadings(call.tool), call.name];
@@ -157,13 +193,8 @@ export function v2CallOf(call: MappedCall, home: string, at: number, userEmail: 
   const file = text("filePath") ?? text("path");
   const url = text("url");
   if (call.category === "shell" && command !== undefined) derived.command = command;
-  if (file !== undefined) {
-    derived.path = homeRelative(file, home);
-    if (workspace !== null && path.isAbsolute(file)) {
-      const rel = path.relative(workspace, path.resolve(file));
-      derived.withinWorkspace = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-    }
-  }
+  const directReadings = file === undefined ? [] : fileReadings(file, home, workspace);
+  if (directReadings[0]) Object.assign(derived, directReadings[0]);
   if (url !== undefined) {
     derived.url = url;
     // A browser navigation reaches a host too, so network rules apply to it.
@@ -178,6 +209,9 @@ export function v2CallOf(call: MappedCall, home: string, at: number, userEmail: 
     args: call.args,
     capabilities,
     derived,
+    fileOperands: call.category === "shell" && command !== undefined
+      ? shellFileFacts(command, text("workdir") ?? workspace, home, workspace)
+      : directReadings.slice(1),
     ...(userEmail ? { userEmail } : {}),
     at,
   };

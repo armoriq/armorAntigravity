@@ -169,6 +169,7 @@ export type V2Call = {
   // From the tool's category; the inventory's tags for the tool are added to these.
   readonly capabilities: readonly string[];
   readonly derived: Readonly<Record<string, unknown>>;
+  readonly fileOperands?: readonly Readonly<Record<string, unknown>>[];
   readonly userEmail?: string;
   readonly at: number;
 };
@@ -219,7 +220,14 @@ const strictest = (all: readonly Evaluation[]): Evaluation => all.reduce((best, 
 // default is only read for the primary name: an allow-list must not block run_command because
 // nothing in it names `Bash`.
 function evaluateCall(agent: V2Agent, call: V2Call, docs: Bound): Evaluation {
-  const byName = call.names.map((name) => strictest(inputsFor(agent, call, name).map((input) => evaluate(input, docs))));
+  const byName = call.names.map((name) => strictest(inputsFor(agent, call, name).flatMap((input) => [
+    evaluate(input, docs),
+    ...(call.fileOperands ?? []).map((facts) => evaluate({
+      ...input,
+      capabilities: [...new Set([...(input.capabilities ?? []), "files"])],
+      derived: { ...input.derived, ...facts },
+    }, docs)),
+  ])));
   const matched = byName.filter((e) => e.provenance.statementId !== null);
   return matched.length ? strictest(matched) : (byName[0] ?? strictest([]));
 }
