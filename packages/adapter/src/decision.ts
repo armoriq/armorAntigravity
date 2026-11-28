@@ -23,6 +23,7 @@ export type DecideFn = (input: { call: CoreToolCall; policy: CompiledPolicy; mod
 export type AdapterDecision =
   | Decision
   | { kind: "deny"; code: "mcp_server_denied"; reason: string; ruleId: string | null }
+  | { kind: "deny"; code: "login_rejected" | "org_mode_unknown" | "policy_bundle_unusable"; reason: string; ruleId: null }
   | { kind: "ask"; code: "mcp_server_unapproved"; reason: string; server: string };
 
 export type AuditStatus = "blocked" | "held" | "allowed";
@@ -296,13 +297,13 @@ export function createDecisionHandler(options: DecisionHandlerOptions): (hook: H
     const { decision, attribution } = judged;
     const resolveHold = options.resolveHold;
     // A Monitor call has already run by the time anyone could approve it, and an enforce spends approvals.
-    if (monitoring || decision.kind !== "hold" || attribution.source !== "v2" || !attribution.v2 || !resolveHold) return finish(decision);
+    if (monitoring || decision.kind !== "hold" || attribution.source !== "v2" || (!attribution.v2 && decision.ruleId !== "v2:mcp_server.review_required") || !resolveHold) return finish(decision);
     const held: HeldCall = {
       conversationId: payload.conversationId,
       stepIdx: payload.stepIdx,
       call,
       rawArgs: isRecord(payload.toolCall.args) ? payload.toolCall.args : {},
-      policyName: attribution.v2.policyName,
+      policyName: attribution.v2?.policyName ?? "MCP server review",
       ruleId: decision.ruleId,
       reason: decision.reason,
     };

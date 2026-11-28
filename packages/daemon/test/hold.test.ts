@@ -130,3 +130,19 @@ test("an MCP call is scoped to its server and inner arguments", async () => {
   expect(calls[0]?.body).toMatchObject({ tool: "create_issue", mcp: "github", arguments: { title: "x" } });
   expect(calls[2]?.body).toMatchObject({ tool: "create_issue", domain: "github", arguments: { title: "x" } });
 });
+
+test("MCP server review keeps holding until the backend confirms a workspace approval", async () => {
+  let reason = "allowed";
+  const { resolve, calls } = setup({
+    "/iap/sdk/enforce": () => [200, { allowed: true, enforcementAction: "allow", reason }],
+  });
+  const target = {
+    ...held({ ServerName: "team_notes", ToolName: "read_note", Arguments: {} }, "call_mcp_tool"),
+    ruleId: "v2:mcp_server.review_required",
+    policyName: "MCP server review",
+  };
+  expect(await resolve(target)).toMatchObject({ kind: "hold" });
+  expect(calls[0]?.body).toMatchObject({ tool: "read_note", mcp: "team_notes" });
+  reason = "approved_delegation";
+  expect(await resolve(target)).toMatchObject({ kind: "allow" });
+});

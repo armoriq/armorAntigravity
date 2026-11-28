@@ -1,6 +1,6 @@
 import { removeProfile, saveLoginProfile } from "@armoriq/sdk-dev/dist/credentials.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createAuth, loginBinding, readLogin, resolveBackend, type Auth, type AuthState } from "../src/auth.ts";
 import { DEFAULT_CONFIG, type Config } from "../src/config.ts";
@@ -128,14 +128,15 @@ test("403 relogin_required writes the marker, pauses uploads, and survives a res
   expect(restarted.uploadLogin()?.apiKey).toBe("ak_2");
 });
 
-test("a 401 on mint or probe means local-only until the key checks out; uploads never change state", () => {
+test("a 401 on mint or probe blocks non-read calls until the key checks out; uploads never change state", () => {
   save(STAGING, "armorantigravity", "ak_1");
   const a = start();
   a.reportStatus(401, {}, "upload");
   expect(a.state().kind).toBe("active");
   a.reportStatus(401, {}, "probe");
   expect(a.state().kind).toBe("local_only");
-  expect(a.mode()).toBe("monitor");
+  expect(a.mode()).toBe("enforce");
+  expect(a.failClosed()).toMatchObject({ code: "login_rejected", reason: expect.stringContaining("login") });
   expect(a.uploadLogin()).toBeNull();
   a.reportStatus(200, {}, "probe");
   expect(a.state().kind).toBe("active");
@@ -161,4 +162,46 @@ test("402 on mint refuses until a mint succeeds", () => {
 test("config mode monitor keeps a logged-in user in monitor", () => {
   save(STAGING, "armorantigravity", "ak_1");
   expect(start({ forceMonitor: true }).mode()).toBe("monitor");
+});
+
+test("a signed-in workspace whose mode was never confirmed fails closed instead of monitoring", () => {
+  save(STAGING, "armorantigravity", "ak_1");
+  const a = start({}, { ARMORIQ_ORG_MODE: "" });
+  expect(a.orgMode.current()).toBeNull();
+  expect(a.orgMonitor()).toBe(false);
+  expect(a.mode()).toBe("enforce");
+  expect(a.failClosed()).toMatchObject({ code: "org_mode_unknown" });
+  a.orgMode.set({ mode: "shadow", notices: false });
+  expect(a.mode()).toBe("monitor");
+  expect(a.failClosed()).toBeNull();
+});
+
+test("a corrupt mode file is unknown, and the last confirmed mode is kept across a restart", () => {
+  save(STAGING, "armorantigravity", "ak_1");
+  mkdirSync(dataDir(), { recursive: true });
+  writeFileSync(path.join(dataDir(), "org-mode.json"), "{not json");
+  const a = start({}, { ARMORIQ_ORG_MODE: "" });
+  expect(a.failClosed()).toMatchObject({ code: "org_mode_unknown" });
+  a.orgMode.set({ mode: "enforce", notices: false });
+  a.stop();
+  const restarted = start({}, { ARMORIQ_ORG_MODE: "" });
+  expect(restarted.orgMode.current()).toEqual({ mode: "enforce", notices: false });
+  expect(restarted.failClosed()).toBeNull();
+});
+
+test("a mode confirmed under another login is not taken as confirmed for this one", () => {
+  save(STAGING, "armorantigravity", "ak_1");
+  const a = start({}, { ARMORIQ_ORG_MODE: "" });
+  a.orgMode.set({ mode: "shadow", notices: false });
+  expect(a.mode()).toBe("monitor");
+  a.stop();
+  save(STAGING, "armorantigravity", "ak_2");
+  const other = start({}, { ARMORIQ_ORG_MODE: "" });
+  expect(other.orgMode.current()).toBeNull();
+  expect(other.mode()).toBe("enforce");
+  expect(other.failClosed()).toMatchObject({ code: "org_mode_unknown" });
+});
+
+test("signed out has nothing to fail closed on", () => {
+  expect(start({}, { ARMORIQ_ORG_MODE: "" }).failClosed()).toBeNull();
 });

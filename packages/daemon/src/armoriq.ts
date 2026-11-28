@@ -18,6 +18,7 @@ import {
   type MappedCall,
   type PolicyAttribution,
   type SessionPair,
+  V2_AGENT,
 } from "@armorantigravity/adapter";
 import { DEFAULT_POLICY_SOURCE, toAuditRow, type AuditStatus, type Capability, type CompiledPolicy, type Decision, type Session as CoreSession, type SessionID, type ToolCall as CoreToolCall } from "@armorantigravity/core";
 import { callIdOf, createAgySource, evidencePlugin, type EvidenceRecorder } from "@armorantigravity/evidence";
@@ -37,12 +38,13 @@ import type { HookPayload, HookResponse, Surface } from "@armorantigravity/proto
 import { homedir } from "node:os";
 import path from "node:path";
 import type { DaemonContext, DaemonPlugin, HookContext, PluginRegistration } from "./plugin.ts";
-import { loginBinding } from "./auth.ts";
+import { loginBinding, type AuthState, type FailClosed } from "./auth.ts";
 import { createHoldResolver, type SignedPlan } from "./hold.ts";
 import { createReachability, type Reachability } from "./reachability.ts";
 import { APP_DATA_DIRS } from "./surface.ts";
 
 const MAX_OPEN_CALLS = 10_000;
+const ORG_MODE_WAIT_MS = 3_000;
 
 type PostToolUse = Extract<HookPayload, { event: "PostToolUse" }>;
 type PreToolUse = Extract<HookPayload, { event: "PreToolUse" }>;
@@ -217,28 +219,32 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     auditRow(opened.surface, opened.call, opened.decision, opened.attribution, status, { at, durationMs: Math.max(0, at - opened.at), error: payload.error || null, capability: opened.capability, orgMonitor: opened.orgMonitor });
   };
 
-  // Spec 0002 posture. Signed in and the backend unreachable: only read calls run. Signed out by a 401
-  // (local_only), calls never wait on a probe, but one runs in the background so a working key comes back.
-  const unreachable = async (surface: Surface, payload: PreToolUse, at: number): Promise<HookResponse | null> => {
+  const posture = async (surface: Surface, payload: PreToolUse, at: number): Promise<HookResponse | null> => {
     const state = auth.state();
-    if (state.kind === "local_only") {
-      void reachability.check(state.login);
-      return null;
-    }
-    if ((state.kind !== "active" && state.kind !== "refused") || auth.mode() === "monitor") return null;
+    if (state.kind === "local_only") void reachability.check(state.login);
     const call: MappedCall = mapToolCall(payload.toolCall);
     if (capabilityOf(call) === "read") return null;
+    if (auth.failClosed()?.code === "org_mode_unknown") await withinMs(policy.refresh(), ORG_MODE_WAIT_MS);
+    const decision = closedFor(auth.failClosed()) ?? (await unusable(state)) ?? closedFor(auth.failClosed());
+    if (!decision) return null;
+    const response = toHookResponse(decision);
+    onDecision(surface, { conversationId: payload.conversationId, stepIdx: payload.stepIdx, at, call, decision, status: "blocked", response, attribution: BUILTIN_ATTRIBUTION, orgMonitor: false });
+    return response;
+  };
+
+  const unusable = async (state: AuthState): Promise<AdapterDecision | null> => {
+    if ((state.kind !== "active" && state.kind !== "refused") || auth.mode() === "monitor") return null;
+    if (bundle.agentMissing()) {
+      return { kind: "deny", code: "policy_bundle_unusable", reason: `the ArmorIQ policy bundle does not list the ${V2_AGENT} agent; only read calls run until it does. Run \`${DOCTOR_COMMAND}\` to check.`, ruleId: null };
+    }
     const reach = await reachability.check(state.login);
     if (reach.kind !== "unreachable") return null;
-    const decision: AdapterDecision = {
+    return {
       kind: "deny",
       code: "backend_unreachable",
       reason: `the ArmorIQ backend at ${state.login.backend} is unreachable (${reach.reason}); only read calls run until it answers. Run \`${DOCTOR_COMMAND}\` to check.`,
       ruleId: null,
     };
-    const response = toHookResponse(decision);
-    onDecision(surface, { conversationId: payload.conversationId, stepIdx: payload.stepIdx, at, call, decision, status: "blocked", response, attribution: BUILTIN_ATTRIBUTION, orgMonitor: false });
-    return response;
   };
 
   const builtin = { armoriqDir: ctx.paths.armoriqDir, ownTools: new Set<string>(OWN_TOOLS), shadowedTools: new Set<string>() };
@@ -280,7 +286,7 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
     decide: withIntent(runtime, async (hook: HookContext) => {
       const surface = hook.session.surface;
       if (hook.payload.event !== "PreToolUse") return handlerFor(surface)(hook);
-      const blocked = await unreachable(surface, hook.payload, hook.receivedAt);
+      const blocked = await posture(surface, hook.payload, hook.receivedAt);
       // A probe can turn a 401 into local-only mode; decide with the mode it left behind.
       return blocked ?? handlerFor(surface)({ payload: hook.payload, mode: auth.mode(), receivedAt: hook.receivedAt });
     }),
@@ -306,6 +312,16 @@ function guardRegistration(ctx: DaemonContext, recorder: EvidenceRecorder, reach
       return own ? runtime.mcpOutcome(own, args, waitMs) : null;
     },
   };
+}
+
+function closedFor(closed: FailClosed | null): AdapterDecision | null {
+  return closed ? { kind: "deny", code: closed.code, reason: closed.reason, ruleId: null } : null;
+}
+
+async function withinMs(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([work.catch(() => undefined), new Promise((resolve) => (timer = setTimeout(resolve, ms)))]);
+  clearTimeout(timer);
 }
 
 function isSessionId(id: string): id is SessionID {
@@ -343,8 +359,17 @@ function policyView(compiled: CompiledPolicy): PolicyView {
 // Core's Decision has no MCP gate verdicts: an unapproved server is a hold and a denied one a forbid.
 function toCoreDecision(decision: AdapterDecision): Decision {
   if (decision.kind === "ask") return { kind: "hold", ruleId: null, reason: decision.reason };
-  if (decision.kind === "deny" && decision.code === "mcp_server_denied") return { kind: "deny", code: "policy_forbid", reason: decision.reason, ruleId: decision.ruleId };
-  return decision;
+  if (decision.kind !== "deny") return decision;
+  switch (decision.code) {
+    case "mcp_server_denied":
+      return { kind: "deny", code: "policy_forbid", reason: decision.reason, ruleId: decision.ruleId };
+    case "login_rejected":
+    case "org_mode_unknown":
+    case "policy_bundle_unusable":
+      return { kind: "deny", code: "backend_unreachable", reason: `${decision.code}: ${decision.reason}`, ruleId: null };
+    default:
+      return { kind: "deny", code: decision.code, reason: decision.reason, ruleId: decision.ruleId };
+  }
 }
 
 function surfaceOf(runtime: IntentRuntime, conversationId: string): Surface {

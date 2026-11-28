@@ -32,5 +32,5 @@ export const agentOf = (policies: Entry[], extra: Record<string, unknown> = {}):
 
 export const fixedBundle = (policies: Entry[]): PolicyBundle => {
   const agent = agentOf(policies);
-  return { current: () => agent, refresh: async () => ({ kind: "unchanged" }), stop() {} };
+  return { current: () => agent, agentMissing: () => false, refresh: async () => ({ kind: "unchanged" }), stop() {} };
 };

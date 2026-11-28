@@ -27,11 +27,12 @@ export interface Login {
 
 export type Refusal = "billing_blocked";
 
+export type FailClosed = { readonly code: "login_rejected" | "org_mode_unknown"; readonly reason: string };
+
 export type AuthState =
   | { readonly kind: "logged_out" }
   | { readonly kind: "active"; readonly login: Login }
   | { readonly kind: "relogin_required"; readonly login: Login }
-  // The backend answered 401: run on local rules alone, as if signed out, until a probe succeeds or the key changes.
   | { readonly kind: "local_only"; readonly login: Login }
   | { readonly kind: "refused"; readonly login: Login; readonly code: Refusal };
 
@@ -41,13 +42,13 @@ export interface Auth {
   readonly headers: Readonly<Record<string, string>>;
   state(): AuthState;
   mode(): Mode;
+  failClosed(): FailClosed | null;
   readonly orgMode: OrgModeStore;
   // Signed in and the workspace is in Monitor (Quiet or Show in chat): nothing is blocked, verdicts are recorded.
   orgMonitor(): boolean;
   // Null while logged out or after relogin_required: audit, usage and trace pumps must stay idle.
   uploadLogin(): Login | null;
-  // Call with every backend response a mint, upload or reachability probe gets; it applies the PRD 4a error
-  // rules, except that a 401 means signed out (spec 0002 posture).
+  // Call with every backend response a mint, upload or reachability probe gets; it applies the PRD 4a error rules.
   reportStatus(status: number, body: unknown, source: "mint" | "upload" | "probe"): void;
   onChange(listener: (state: AuthState) => void): () => void;
   stop(): void;
@@ -109,7 +110,7 @@ export const loginBinding = (login: Login) => createHash("sha256").update(`${log
 // Reads credentials at startup and on directory change; state() never touches disk.
 export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: string; pollMs?: number; orgMode?: OrgModeStore }): Auth {
   const { env, config, dataDir } = opts;
-  const orgMode = opts.orgMode ?? createOrgModeStore(dataDir, env, log);
+  const orgMode = opts.orgMode ?? createOrgModeStore(dataDir, env, log, () => ("login" in state ? loginBinding(state.login) : null));
   const orgMonitor = () => "login" in state && state.kind !== "local_only" && orgMode.monitoring();
   const armoriqDir = path.dirname(getCredentialsPath());
   const client = clientIdentity(config.channel);
@@ -196,16 +197,19 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
     poll.unref?.();
   }
 
+  function loginCommand(login: Login): string {
+    const cli = path.join(dataDir, "bin", "armorantigravity");
+    const backendArg = `'${login.backend.replaceAll("'", "'\\''")}'`;
+    return existsSync(cli)
+      ? `'${cli.replaceAll("'", "'\\''")}' login --backend ${backendArg} --force`
+      : `armoriq login --product ${PRODUCT} --backend ${backendArg} --force`;
+  }
+
   function markRelogin(login: Login): void {
     const binding = loginBinding(login);
     if (!warned.has(binding)) {
       warned.add(binding);
-      const cli = path.join(dataDir, "bin", "armorantigravity");
-      const backendArg = `'${login.backend.replaceAll("'", "'\\''")}'`;
-      const command = existsSync(cli)
-        ? `'${cli.replaceAll("'", "'\\''")}' login --backend ${backendArg} --force`
-        : `armoriq login --product ${PRODUCT} --backend ${backendArg} --force`;
-      log.warn(`ArmorIQ login expired; run \`${command}\``);
+      log.warn(`ArmorIQ login expired; run \`${loginCommand(login)}\``);
     }
     try {
       mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -222,7 +226,16 @@ export function createAuth(log: Log, opts: { env: Env; config: Config; dataDir: 
     client,
     headers,
     state: () => state,
-    mode: () => (state.kind === "logged_out" || state.kind === "local_only" || config.forceMonitor || orgMonitor() ? "monitor" : "enforce"),
+    mode: () => (state.kind === "logged_out" || config.forceMonitor || orgMonitor() ? "monitor" : "enforce"),
+    failClosed() {
+      if (state.kind === "local_only") {
+        return { code: "login_rejected", reason: `the ArmorIQ backend rejected this device's key (HTTP 401); only read calls run until you sign in again with \`${loginCommand(state.login)}\`` };
+      }
+      if ((state.kind === "active" || state.kind === "refused") && !config.forceMonitor && !orgMode.known()) {
+        return { code: "org_mode_unknown", reason: "the ArmorIQ backend has not confirmed this workspace's Tools mode yet; only read calls run until it answers" };
+      }
+      return null;
+    },
     orgMode,
     orgMonitor,
     uploadLogin: () => (state.kind === "active" || state.kind === "refused" ? state.login : null),
