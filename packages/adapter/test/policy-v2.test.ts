@@ -9,8 +9,8 @@ import { AGENT, APPROVAL, agentOf, bundleOf, doc, entry, ORG } from "./support/v
 const home = "/Users/dev";
 const NOW = 1_760_000_000_000;
 
-const run = (CommandLine: string) => v2CallOf(mapToolCall({ name: "run_command", args: { CommandLine, Cwd: "/Users/dev/ws" } }), home, NOW, "dev@example.com");
-const view = (AbsolutePath: string) => v2CallOf(mapToolCall({ name: "view_file", args: { AbsolutePath } }), home, NOW, "dev@example.com");
+const run = (CommandLine: string) => v2CallOf(mapToolCall({ name: "run_command", args: { CommandLine, Cwd: "/Users/dev/ws" } }), home, NOW, "dev@example.com", "/Users/dev/ws");
+const view = (AbsolutePath: string) => v2CallOf(mapToolCall({ name: "view_file", args: { AbsolutePath } }), home, NOW, "dev@example.com", "/Users/dev/ws");
 const fetchUrl = (Url: string) => v2CallOf(mapToolCall({ name: "read_url_content", args: { Url } }), home, NOW, undefined);
 
 describe("parseBundleAgent", () => {
@@ -82,6 +82,13 @@ describe("decideV2", () => {
     const agent = agentOf([entry("No ssh", "org", "active", doc("files", ORG, "      run_command: allow\n", "allow", '  files:\n    deny: ["~/.ssh/**"]\n'))]);
     expect(decideV2(agent, view("/Users/dev/.ssh/id_rsa")).enforced?.verdict).toBe("block");
     expect(decideV2(agent, view("/Users/dev/ws/readme.md")).enforced?.verdict).toBe("allow");
+  });
+
+  test("files deny applies to both a direct read and shell file operands", () => {
+    const agent = agentOf([entry("Folder rule", "org", "active", doc("files", ORG, "      run_command: allow\n", "allow", '  files:\n    deny: ["private fixtures/**"]\n'))]);
+    expect(decideV2(agent, view("/Users/dev/ws/private fixtures/note.txt")).enforced?.verdict).toBe("block");
+    expect(decideV2(agent, run('cat readme.md "private fixtures/note.txt"')).enforced?.verdict).toBe("block");
+    expect(decideV2(agent, run("cat public/note.txt")).enforced?.verdict).toBe("allow");
   });
 
   test("allowOutsideWorkspace: false blocks a file outside the workspace only", () => {

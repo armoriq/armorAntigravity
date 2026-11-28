@@ -198,8 +198,8 @@ test("captured agy hooks get policy, plan and drift decisions, and every decisio
 }, 60_000);
 
 // One agent-targeted v2 policy as conmap's bundle serves it, compiled by policy-ir like conmap compiles it.
-function v2Bundle(name: string, rules: string) {
-  const yaml = `apiVersion: armor.io/v2\nkind: Policy\nmetadata:\n  name: ${name}\n  orgId: 11111111-1111-4111-8111-111111111111\ntarget:\n  agent: armorantigravity\nspec:\n  tools:\n    default: allow\n    rules:\n${rules}`;
+function v2Bundle(name: string, rules: string, sections = "") {
+  const yaml = `apiVersion: armor.io/v2\nkind: Policy\nmetadata:\n  name: ${name}\n  orgId: 11111111-1111-4111-8111-111111111111\ntarget:\n  agent: armorantigravity\nspec:\n  tools:\n    default: allow\n    rules:\n${rules}${sections}`;
   const parsed = parseYaml(yaml);
   const document = parsed.source ? compile(parsed.source, [], { policyId: `id-${name}` }).document : null;
   if (!document) throw new Error(`policy ${name} did not compile`);
@@ -231,6 +231,31 @@ test("a v2 policy blocks through agd-hook with its name, v1 still applies where 
     output: { matchedPolicy: { policyId: "id-No shell", name: "No shell", policyVersion: "sha256:No shell" } },
   });
   expect(rows.find((r) => r.tool === "search_web")).toMatchObject({ status: "blocked", input: { armoriq_policy: { source: "v1_org", rule_id: "org-no-web-search" } } });
+}, 60_000);
+
+test("native hook applies a v2 folder rule to direct reads and shell operands", async () => {
+  backend.bundle.now = v2Bundle(
+    "Private fixtures", "      run_command: allow\n",
+    '  files:\n    deny: ["**/private fixtures/**"]\n',
+  );
+  daemon = await signedInDaemon();
+  await until(() => backend.seen.some((r) => r.path === "/policy/bundles/current"));
+  const captures = captured();
+  const shell = captures.get(3);
+  const mcp = captures.get(35);
+  if (!shell || !mcp) throw new Error("missing hook capture");
+  const plan = { goal: "Read a public fixture", steps: [{ action: "run_command", description: "read public fixture" }] };
+  const toolCall = { name: "call_mcp_tool", args: { ServerName: "armoriq", ToolName: "register_intent_plan", Arguments: plan } };
+  expect(await hook({ ...mcp, stdin: { ...mcp.stdin, toolCall } })).toEqual({ decision: "allow" });
+  expect(await mcpOutcome(daemon.paths.socket, "register_intent_plan", plan)).toMatchObject({ text: expect.stringMatching(/^Intent registered/) });
+  const run = (CommandLine: string) => hook({
+    ...shell,
+    stdin: { ...shell.stdin, toolCall: { name: "run_command", args: { CommandLine, Cwd: sandbox.home } } },
+  });
+  const reason = expect.stringContaining('ArmorIQ policy "Private fixtures"');
+  expect(await hook(agy14("read_file", { Path: path.join(sandbox.home, "private fixtures", "note.txt") }))).toMatchObject({ decision: "deny", reason });
+  expect(await run('cat "private fixtures/note.txt"')).toMatchObject({ decision: "deny", reason });
+  expect(await run("cat public/note.txt")).toEqual({ decision: "allow" });
 }, 60_000);
 
 const AGY_14 = path.join(import.meta.dir, "../../adapter/test/fixtures/captured");
